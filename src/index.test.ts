@@ -106,7 +106,45 @@ describe("citrx CLI", () => {
     expect(report.topPaths).toEqual(
       expect.arrayContaining([{ value: "/products", count: 2 }])
     );
+    expect(report.incidents).toEqual([]);
     expect(stderr.output()).toBe("");
+  });
+
+  it("reports local security incidents", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "attack.log");
+    await writeFile(
+      logFile,
+      [
+        '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /search?q=1%20UNION%20SELECT%20password%20FROM%20information_schema HTTP/1.1" 200 123 "-" "Mozilla/5.0"',
+        '203.0.113.11 - - [25/May/2026:03:12:50 +0200] "GET /.env?token=secret HTTP/1.1" 404 12 "-" "Mozilla/5.0"'
+      ].join("\n")
+    );
+    const stdout = memoryStream();
+
+    const code = await runCli(
+      ["node", "citrx", "analyze", logFile, "--json", "--no-session"],
+      {
+        stdout: stdout.stream,
+        stderr: memoryStream().stream,
+        stdinIsTTY: true
+      }
+    );
+
+    expect(code).toBe(0);
+    const report = JSON.parse(stdout.output()) as {
+      incidents: Array<{ id: string; samples: string[] }>;
+    };
+
+    expect(report.incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "sqli:/search" }),
+        expect.objectContaining({ id: "recon_sensitive_file:/.env" })
+      ])
+    );
+    expect(report.incidents.flatMap((incident) => incident.samples).join("\n")).toContain(
+      "token=%5BREDACTED%5D"
+    );
   });
 
   it("persists analysis sessions by default", async () => {

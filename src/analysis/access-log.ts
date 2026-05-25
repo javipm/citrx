@@ -8,8 +8,15 @@ import {
   resolveParser,
   validateParserOnSample
 } from "../parser/access-log.js";
-import type { AccessLogParser, FormatChoice } from "../parser/access-log.js";
-import type { AnalyzeInputSource, AnalyzeReport, TopItem } from "./types.js";
+import type { AccessLogEntry, AccessLogParser, FormatChoice } from "../parser/access-log.js";
+import {
+  buildAggregateIncidents,
+  detectRequestHits,
+  mergeRuleHit,
+  querySignature
+} from "../rules/local.js";
+import type { PathStats } from "../rules/local.js";
+import type { AnalyzeInputSource, AnalyzeReport, Incident, TopItem } from "./types.js";
 
 interface AnalyzeOptions {
   top: number;
@@ -40,6 +47,8 @@ interface Counters {
   paths: Map<string, number>;
   methods: Map<string, number>;
   statuses: Map<string, number>;
+  pathStats: Map<string, PathStats>;
+  ruleIncidents: Map<string, Incident>;
 }
 
 const SAMPLE_BYTES = 64 * 1024;
@@ -76,7 +85,9 @@ export async function analyzeAccessLogSources(
     ips: new Map(),
     paths: new Map(),
     methods: new Map(),
-    statuses: new Map()
+    statuses: new Map(),
+    pathStats: new Map(),
+    ruleIncidents: new Map()
   };
   const inputFormats: AnalyzeReport["inputFormats"] = [];
 
@@ -137,7 +148,11 @@ export async function analyzeAccessLogSources(
     topIps: topItems(counters.ips, options.top),
     topPaths: topItems(counters.paths, options.top),
     topMethods: topItems(counters.methods, options.top),
-    topStatuses: topItems(counters.statuses, options.top)
+    topStatuses: topItems(counters.statuses, options.top),
+    incidents: sortIncidents([
+      ...counters.ruleIncidents.values(),
+      ...buildAggregateIncidents(counters.pathStats.values())
+    ])
   };
 }
 
@@ -307,6 +322,11 @@ function analyzeLine(
   increment(counters.paths, entry.path);
   increment(counters.methods, entry.method);
   increment(counters.statuses, String(entry.status));
+  updatePathStats(counters.pathStats, entry);
+
+  for (const hit of detectRequestHits(entry)) {
+    mergeRuleHit(counters.ruleIncidents, hit, entry.path);
+  }
 }
 
 function fallbackParser(): AccessLogParser {
@@ -326,6 +346,55 @@ function topItems(map: Map<string, number>, limit: number): TopItem[] {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, limit)
     .map(([value, count]) => ({ value, count }));
+}
+
+function updatePathStats(
+  statsByPath: Map<string, PathStats>,
+  entry: AccessLogEntry
+): void {
+  let stats = statsByPath.get(entry.path);
+
+  if (!stats) {
+    stats = {
+      path: entry.path,
+      count: 0,
+      bytes: 0,
+      ips: new Set(),
+      queryVariants: new Set(),
+      postCount: 0
+    };
+    statsByPath.set(entry.path, stats);
+  }
+
+  stats.count += 1;
+  stats.bytes += entry.bytes ?? 0;
+  stats.ips.add(entry.ip);
+
+  const signature = querySignature(entry.target);
+  if (signature) {
+    stats.queryVariants.add(signature);
+  }
+
+  if (entry.method === "POST") {
+    stats.postCount += 1;
+  }
+}
+
+function sortIncidents(incidents: Incident[]): Incident[] {
+  const severityWeight: Record<Incident["severity"], number> = {
+    critical: 5,
+    high: 4,
+    medium: 3,
+    low: 2,
+    info: 1
+  };
+
+  return incidents.sort(
+    (a, b) =>
+      severityWeight[b.severity] - severityWeight[a.severity] ||
+      b.score - a.score ||
+      a.id.localeCompare(b.id)
+  );
 }
 
 async function* iteratorToAsyncIterable(

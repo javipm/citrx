@@ -2,9 +2,9 @@
 
 `citrx` is an open source CLI for local-first Apache/Nginx access log analysis.
 
-It is being built in small verified phases. The current scaffold provides the
-package, CLI entrypoint, tests, project metadata, and Phase 1 local access-log
-analysis for plain text files.
+It is being built in small verified phases. The current CLI supports local
+access-log parsing, sessions, stdin, date filters, and deterministic security
+incident detection for plain text files.
 
 ## Goals
 
@@ -66,6 +66,7 @@ Current report data:
 - top paths
 - top methods
 - top statuses
+- local security incidents
 
 Built-in formats:
 
@@ -99,8 +100,26 @@ Custom format configs are JSON:
 }
 ```
 
-Compressed files, stdin, sessions, GeoIP, AI follow-up, Markdown, and HTML
-reports are planned in later phases.
+Compressed files, GeoIP, AI follow-up, Markdown, and HTML reports are planned in
+later phases.
+
+## Local Detection
+
+`citrx` always runs local deterministic checks first. Current detections include:
+
+- SQL injection payloads
+- XSS payloads
+- LFI/RFI and path traversal probes
+- SSRF indicators
+- command injection indicators
+- sensitive file probes such as `.env`, `.git`, backups, and dumps
+- uncommon HTTP methods
+- aggregate high-volume path crawling
+- query explosion on a single path
+- POST hotspots
+
+Sensitive query values such as tokens, passwords, session ids, auth keys, and
+secrets are redacted from incident samples.
 
 ## Sessions
 

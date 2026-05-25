@@ -33,7 +33,8 @@ function reportFixture(): AnalyzeReport {
     topIps: [{ value: "203.0.113.10", count: 1 }],
     topPaths: [{ value: "/", count: 1 }],
     topMethods: [{ value: "GET", count: 1 }],
-    topStatuses: [{ value: "200", count: 1 }]
+    topStatuses: [{ value: "200", count: 1 }],
+    incidents: []
   };
 }
 

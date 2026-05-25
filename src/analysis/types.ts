@@ -3,6 +3,24 @@ export interface TopItem {
   count: number;
 }
 
+export type IncidentSeverity = "info" | "low" | "medium" | "high" | "critical";
+
+export interface IncidentEvidence {
+  key: string;
+  value: string | number;
+}
+
+export interface Incident {
+  id: string;
+  category: string;
+  severity: IncidentSeverity;
+  score: number;
+  title: string;
+  description: string;
+  evidence: IncidentEvidence[];
+  samples: string[];
+}
+
 export interface AnalyzeSummary {
   files: number;
   totalLines: number;
@@ -44,4 +62,5 @@ export interface AnalyzeReport {
   topPaths: TopItem[];
   topMethods: TopItem[];
   topStatuses: TopItem[];
+  incidents: Incident[];
 }
