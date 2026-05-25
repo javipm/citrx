@@ -91,7 +91,7 @@ export interface AnalyzeReport {
   topPaths: TopItem[];
   topMethods: TopItem[];
   topStatuses: TopItem[];
-  accessLog?: StoredAccessLogLines;
+  accessLog: StoredAccessLogLines;
   incidents: Incident[];
   incidentMatches: IncidentMatchSet[];
 }

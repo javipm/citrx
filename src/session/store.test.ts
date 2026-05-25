@@ -34,6 +34,12 @@ function reportFixture(): AnalyzeReport {
     topPaths: [{ value: "/", count: 1 }],
     topMethods: [{ value: "GET", count: 1 }],
     topStatuses: [{ value: "200", count: 1 }],
+    accessLog: {
+      totalLines: 1,
+      storedLines: 0,
+      truncated: false,
+      lines: []
+    },
     incidentMatches: [],
     incidents: []
   };

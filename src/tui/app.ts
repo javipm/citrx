@@ -103,7 +103,7 @@ function CitrxExplorer({
   const incidents = session.report.incidents;
   const incident = incidents[incidentIndex];
   const allStoredLines = useMemo(
-    () => accessLogLines(session.report),
+    () => session.report.accessLog.lines,
     [session.report]
   );
   const globalLines = useMemo(
@@ -577,7 +577,7 @@ function SummaryPanel({ report }: { report: AnalyzeReport }) {
       `lines: ${report.summary.parsedLines}/${report.summary.totalLines} parsed | invalid: ${report.summary.invalidLines}`
     ),
     React.createElement(Text, null, `bytes: ${formatBytes(report.summary.totalBytes)}`),
-    React.createElement(Text, null, `access lines: ${accessLogLines(report).length}`),
+    React.createElement(Text, null, `access lines: ${report.accessLog.storedLines}`),
     React.createElement(Text, { color: "gray" }, "press t for global top values")
   );
 }
@@ -703,7 +703,7 @@ function TopValuesScreen({
   columns: number;
 }) {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
-  const sourceLines = scope === "summary" ? accessLogLines(report) : matchSet?.lines ?? [];
+  const sourceLines = scope === "summary" ? report.accessLog.lines : matchSet?.lines ?? [];
   const insights = incidentInsights(sourceLines);
   const panelWidth = Math.max(30, Math.floor((columns - 7) / 2));
   const headerWidth = Math.max(40, columns - 10);
@@ -942,22 +942,6 @@ function Footer({
 
 function incidentLines(report: AnalyzeReport, incidentId: string | undefined): IncidentLogLine[] {
   return report.incidentMatches.find((item) => item.incidentId === incidentId)?.lines ?? [];
-}
-
-function accessLogLines(report: AnalyzeReport): IncidentLogLine[] {
-  if (report.accessLog) {
-    return report.accessLog.lines;
-  }
-
-  const lines = new Map<string, IncidentLogLine>();
-
-  for (const matchSet of report.incidentMatches) {
-    for (const line of matchSet.lines) {
-      lines.set(lineKey(line), line);
-    }
-  }
-
-  return [...lines.values()];
 }
 
 function visibleLines(

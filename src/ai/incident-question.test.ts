@@ -38,6 +38,12 @@ const report: AnalyzeReport = {
   topPaths: [{ value: "/search", count: 2 }],
   topMethods: [{ value: "GET", count: 2 }],
   topStatuses: [{ value: "200", count: 2 }],
+  accessLog: {
+    totalLines: 2,
+    storedLines: 0,
+    truncated: false,
+    lines: []
+  },
   incidents: [incident],
   incidentMatches: []
 };
