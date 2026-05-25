@@ -109,7 +109,7 @@ function CitrxExplorer({
     () => lines.filter((line) => selectedLineKeys.has(lineKey(line))),
     [lines, selectedLineKeys]
   );
-  const pageSize = screen === "incident" ? Math.max(8, rows - 10) : Math.max(6, rows - 14);
+  const pageSize = screen === "incident" ? Math.max(8, rows - 13) : Math.max(6, rows - 14);
   const detailRows = Math.max(6, rows - 6);
   const detailWidth = Math.max(40, columns - 10);
   const detailLines = useMemo(
@@ -669,14 +669,20 @@ function LineTable({
   columns: number;
 }) {
   const tableColumns = accessTableColumns(columns);
+  const visibleStart = pageLines.length > 0 ? pageStart + 1 : 0;
+  const visibleEnd = pageStart + pageLines.length;
+  const filterLabel = filter ? ` | filter: ${filter}` : " | filter: none";
 
   return React.createElement(
     Box,
     { flexDirection: "column", borderStyle: "single", paddingX: 1, flexGrow: 1 },
     React.createElement(
       Text,
-      { bold: true, wrap: "truncate" },
-      `Accesses ${lines.length} | sort=${sortKey}:${sortDirection}${filter ? ` | filter=${filter}` : ""}`
+      { bold: true, color: "cyan", wrap: "truncate" },
+      fitText(
+        `Accesses: ${lines.length} | showing: ${visibleStart}-${visibleEnd} | sort: ${sortKey} ${sortDirection}${filterLabel}`,
+        columns - 10
+      )
     ),
     React.createElement(
       Text,
@@ -927,7 +933,7 @@ function topMapItems(map: Map<string, number>, limit: number): TopItem[] {
 function accessTableColumns(columns: number): AccessTableColumns {
   const tableWidth = Math.max(60, columns - 14);
   const fixed = {
-    sel: 1,
+    sel: 3,
     line: 6,
     time: 8,
     ip: 15,
@@ -958,7 +964,7 @@ function accessTableColumns(columns: number): AccessTableColumns {
 function accessTableHeader(columns: AccessTableColumns): string {
   return tableCells(
     [
-      ["s", columns.sel],
+      ["sel", columns.sel],
       ["line", columns.line, "right"],
       ["time", columns.time],
       ["ip", columns.ip],
@@ -978,7 +984,7 @@ function accessTableRow(
 ): string {
   return tableCells(
     [
-      [selected ? "*" : " ", columns.sel],
+      [selected ? "*" : "", columns.sel],
       [String(line.lineNumber), columns.line, "right"],
       [compactTime(line.timestamp), columns.time],
       [line.ip, columns.ip],
