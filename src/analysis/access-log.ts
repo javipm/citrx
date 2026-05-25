@@ -1,7 +1,6 @@
-import { createReadStream } from "node:fs";
-import { open } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 
+import { openTextInputStreams } from "../input/compressed.js";
 import {
   detectParser,
   loadCustomParsers,
@@ -51,7 +50,6 @@ interface Counters {
   ruleIncidents: Map<string, Incident>;
 }
 
-const SAMPLE_BYTES = 64 * 1024;
 const MIN_SAMPLE_LINES = 1;
 const MIN_PARSE_RATIO = 0.8;
 const MAX_SAMPLE_LINES = 200;
@@ -76,7 +74,7 @@ export async function analyzeAccessLogSources(
 
   const customParsers = await loadCustomParsers(options.formatConfig);
   const counters: Counters = {
-    files: sources.length,
+    files: 0,
     totalLines: 0,
     parsedLines: 0,
     filteredLines: 0,
@@ -92,41 +90,22 @@ export async function analyzeAccessLogSources(
   const inputFormats: AnalyzeReport["inputFormats"] = [];
 
   for (const source of sources) {
-    const selection =
-      source.kind === "file"
-        ? await selectParserForFile(source.path, options.format, customParsers)
-        : await selectParserForStream(source, options.format, customParsers);
-
-    if (
-      selection.sampledLines < MIN_SAMPLE_LINES ||
-      selection.parseRatio < MIN_PARSE_RATIO
-    ) {
-      throw new Error(
-        `Input does not look like an Apache/Nginx access log: ${selection.label} ` +
-          `(${selection.parsedLines}/${selection.sampledLines} sampled lines parsed). ` +
-          "If this is a custom access-log format, pass --format custom:<name> " +
-          "and --format-config <path>."
-      );
-    }
-
-    inputFormats.push({
-      file: selection.label,
-      format: selection.parser.id,
-      sampledLines: selection.sampledLines,
-      parsedSampleLines: selection.parsedLines,
-      sampleParseRatio: selection.parseRatio
-    });
-
     if (source.kind === "file") {
-      await analyzeFile(source.path, selection.parser, counters, options);
+      for await (const textSource of openTextInputStreams(source.path)) {
+        await analyzeTextSource(
+          {
+            kind: "stream",
+            label: textSource.label,
+            stream: textSource.stream
+          },
+          customParsers,
+          counters,
+          inputFormats,
+          options
+        );
+      }
     } else {
-      await analyzeLines(
-        selection.remainingLines ?? emptyAsyncIterable(),
-        selection.parser,
-        counters,
-        options,
-        selection.sampleLines ?? []
-      );
+      await analyzeTextSource(source, customParsers, counters, inputFormats, options);
     }
   }
 
@@ -153,23 +132,6 @@ export async function analyzeAccessLogSources(
       ...counters.ruleIncidents.values(),
       ...buildAggregateIncidents(counters.pathStats.values())
     ])
-  };
-}
-
-async function selectParserForFile(
-  file: string,
-  format: FormatChoice,
-  customParsers: AccessLogParser[]
-): Promise<SourceParserSelection> {
-  const sampleLines = await readSampleLines(file);
-  const detection = detectOrValidate(format, customParsers, sampleLines);
-
-  return {
-    label: file,
-    parser: detection?.parser ?? fallbackParser(),
-    sampledLines: detection?.sampledLines ?? sampleLines.length,
-    parsedLines: detection?.parsedLines ?? 0,
-    parseRatio: detection?.parseRatio ?? 0
   };
 }
 
@@ -229,51 +191,43 @@ function detectOrValidate(
     : detectParser(sampleLines, customParsers);
 }
 
-async function readSampleLines(file: string): Promise<string[]> {
-  const handle = await open(file, "r");
-
-  try {
-    const buffer = Buffer.alloc(SAMPLE_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, SAMPLE_BYTES, 0);
-
-    if (bytesRead === 0) {
-      return [];
-    }
-
-    const sampleBuffer = buffer.subarray(0, bytesRead);
-
-    if (sampleBuffer.includes(0)) {
-      return [];
-    }
-
-    const text = sampleBuffer.toString("utf8");
-    const lines = text
-      .split(/\r?\n/)
-      .slice(0, MAX_SAMPLE_LINES)
-      .filter((line) => line.trim().length > 0);
-
-    return bytesRead === SAMPLE_BYTES ? lines.slice(0, -1) : lines;
-  } finally {
-    await handle.close();
-  }
-}
-
-async function analyzeFile(
-  file: string,
-  parser: AccessLogParser,
+async function analyzeTextSource(
+  source: Extract<AnalyzeInputSource, { kind: "stream" }>,
+  customParsers: AccessLogParser[],
   counters: Counters,
+  inputFormats: AnalyzeReport["inputFormats"],
   options: AnalyzeOptions
 ): Promise<void> {
-  const stream = createReadStream(file, {
-    encoding: "utf8",
-    highWaterMark: 64 * 1024
-  });
-  const lines = createInterface({
-    input: stream,
-    crlfDelay: Infinity
+  const selection = await selectParserForStream(source, options.format, customParsers);
+
+  if (
+    selection.sampledLines < MIN_SAMPLE_LINES ||
+    selection.parseRatio < MIN_PARSE_RATIO
+  ) {
+    throw new Error(
+      `Input does not look like an Apache/Nginx access log: ${selection.label} ` +
+        `(${selection.parsedLines}/${selection.sampledLines} sampled lines parsed). ` +
+        "If this is a custom access-log format, pass --format custom:<name> " +
+        "and --format-config <path>."
+    );
+  }
+
+  counters.files += 1;
+  inputFormats.push({
+    file: selection.label,
+    format: selection.parser.id,
+    sampledLines: selection.sampledLines,
+    parsedSampleLines: selection.parsedLines,
+    sampleParseRatio: selection.parseRatio
   });
 
-  await analyzeLines(lines, parser, counters, options);
+  await analyzeLines(
+    selection.remainingLines ?? emptyAsyncIterable(),
+    selection.parser,
+    counters,
+    options,
+    selection.sampleLines ?? []
+  );
 }
 
 async function analyzeLines(

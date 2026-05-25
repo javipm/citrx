@@ -2,6 +2,8 @@ import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
+import { brotliCompressSync, crc32, gzipSync } from "node:zlib";
+import * as tar from "tar-stream";
 import { describe, expect, it } from "vitest";
 
 import { runCli } from "./index.js";
@@ -20,6 +22,66 @@ function memoryStream() {
     stream,
     output: () => output
   };
+}
+
+async function streamToBuffer(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  return Buffer.concat(chunks);
+}
+
+function createStoredZip(entryName: string, content: Buffer): Buffer {
+  const name = Buffer.from(entryName);
+  const checksum = crc32(content) >>> 0;
+  const local = Buffer.alloc(30 + name.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(0, 6);
+  local.writeUInt16LE(0, 8);
+  local.writeUInt16LE(0, 10);
+  local.writeUInt16LE(0, 12);
+  local.writeUInt32LE(checksum, 14);
+  local.writeUInt32LE(content.length, 18);
+  local.writeUInt32LE(content.length, 22);
+  local.writeUInt16LE(name.length, 26);
+  local.writeUInt16LE(0, 28);
+  name.copy(local, 30);
+
+  const central = Buffer.alloc(46 + name.length);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt16LE(0, 8);
+  central.writeUInt16LE(0, 10);
+  central.writeUInt16LE(0, 12);
+  central.writeUInt16LE(0, 14);
+  central.writeUInt32LE(checksum, 16);
+  central.writeUInt32LE(content.length, 20);
+  central.writeUInt32LE(content.length, 24);
+  central.writeUInt16LE(name.length, 28);
+  central.writeUInt16LE(0, 30);
+  central.writeUInt16LE(0, 32);
+  central.writeUInt16LE(0, 34);
+  central.writeUInt16LE(0, 36);
+  central.writeUInt32LE(0, 38);
+  central.writeUInt32LE(0, 42);
+  name.copy(central, 46);
+
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length, 12);
+  end.writeUInt32LE(local.length + content.length, 16);
+  end.writeUInt16LE(0, 20);
+
+  return Buffer.concat([local, content, central, end]);
 }
 
 describe("citrx CLI", () => {
@@ -330,6 +392,49 @@ describe("citrx CLI", () => {
         totalBytes: 30
       }
     });
+  });
+
+  it("analyzes compressed access logs", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-compressed-"));
+    const content = Buffer.from(
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /compressed HTTP/1.1" 200 123 "-" "Mozilla/5.0"\n'
+    );
+    const tarPack = tar.pack();
+    tarPack.entry({ name: "access.log" }, content);
+    tarPack.finalize();
+
+    const cases = [
+      ["access.log.gz", gzipSync(content)],
+      ["access.log.br", brotliCompressSync(content)],
+      ["access.zip", createStoredZip("access.log", content)],
+      ["access.tar.gz", gzipSync(await streamToBuffer(tarPack))]
+    ] as const;
+
+    for (const [name, data] of cases) {
+      const logFile = join(directory, name);
+      await writeFile(logFile, data);
+      const stdout = memoryStream();
+
+      const code = await runCli(
+        ["node", "citrx", "analyze", logFile, "--json", "--no-session"],
+        {
+          stdout: stdout.stream,
+          stderr: memoryStream().stream,
+          stdinIsTTY: true
+        }
+      );
+
+      expect(code, name).toBe(0);
+      expect(JSON.parse(stdout.output()), name).toMatchObject({
+        summary: {
+          files: 1,
+          totalLines: 1,
+          parsedLines: 1,
+          totalBytes: 123
+        },
+        topPaths: [{ value: "/compressed", count: 1 }]
+      });
+    }
   });
 
   it("skips session persistence with --no-session", async () => {

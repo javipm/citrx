@@ -4,7 +4,7 @@
 
 It is being built in small verified phases. The current CLI supports local
 access-log parsing, sessions, stdin, date filters, and deterministic security
-incident detection for plain text files.
+incident detection for plain text and compressed files.
 
 ## Goals
 
@@ -41,6 +41,8 @@ After building:
 node dist/cli.js --help
 node dist/cli.js --version
 node dist/cli.js analyze /path/to/access.log --json
+node dist/cli.js analyze /path/to/access.log.gz --json
+node dist/cli.js analyze /path/to/archive.zip --json
 cat /path/to/access.log | node dist/cli.js analyze - --json
 cat /path/to/access.log | node dist/cli.js analyze --json
 node dist/cli.js analyze /path/to/access.log --format apache_combined
@@ -100,8 +102,21 @@ Custom format configs are JSON:
 }
 ```
 
-Compressed files, GeoIP, AI follow-up, Markdown, and HTML reports are planned in
-later phases.
+GeoIP, AI follow-up, Markdown, and HTML reports are planned in later phases.
+
+## Compressed Logs
+
+`citrx` streams compressed inputs where possible and does not inflate them into
+memory first. Supported inputs:
+
+- `.gz`
+- `.br`
+- `.zip`
+- `.tar.gz`
+- `.tgz`
+
+ZIP and TAR archives are scanned for candidate log entries such as `access.log`,
+plain extensionless logs, `.log`, `.txt`, `.gz`, and `.br` files.
 
 ## Local Detection
 
