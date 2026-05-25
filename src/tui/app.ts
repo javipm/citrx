@@ -36,6 +36,18 @@ interface IncidentInsights {
   params: TopItem[];
 }
 
+interface AccessTableColumns {
+  sel: number;
+  line: number;
+  time: number;
+  ip: number;
+  method: number;
+  status: number;
+  bytes: number;
+  path: number;
+  ua: number;
+}
+
 export async function openSessionTui(
   session: CitrxSession,
   runtime: TuiRuntime
@@ -91,9 +103,9 @@ function CitrxExplorer({
     () => lines.filter((line) => selectedLineKeys.has(lineKey(line))),
     [lines, selectedLineKeys]
   );
-  const pageSize = screen === "incident" ? Math.max(4, rows - 26) : Math.max(6, rows - 14);
+  const pageSize = screen === "incident" ? Math.max(4, rows - 19) : Math.max(6, rows - 14);
   const detailRows = Math.max(6, rows - 6);
-  const detailWidth = Math.max(40, columns - 8);
+  const detailWidth = Math.max(40, columns - 10);
   const detailLines = useMemo(
     () => (detailLine ? requestDetailLines(detailLine, detailWidth) : []),
     [detailLine, detailWidth]
@@ -280,7 +292,7 @@ function CitrxExplorer({
   return React.createElement(
     Box,
     { flexDirection: "column", paddingX: 1, width: columns, height: rows },
-    React.createElement(Header, { session }),
+    React.createElement(Header, { session, columns }),
     React.createElement(
       Box,
       { flexDirection: "column", flexGrow: 1 },
@@ -313,17 +325,21 @@ function CitrxExplorer({
       detailOpen: Boolean(detailLine),
       busy,
       message,
-      selected: selectedLineKeys.size
+      selected: selectedLineKeys.size,
+      columns
     })
   );
 }
 
-function Header({ session }: { session: CitrxSession }) {
+function Header({ session, columns }: { session: CitrxSession; columns: number }) {
   const report = session.report;
   return React.createElement(
     Text,
-    { bold: true, color: "cyan" },
-    `citrx ${session.id} | files=${report.summary.files} parsed=${report.summary.parsedLines} incidents=${report.incidents.length}`
+    { bold: true, color: "cyan", wrap: "truncate" },
+    fitText(
+      `citrx ${session.id} | files=${report.summary.files} parsed=${report.summary.parsedLines} incidents=${report.incidents.length}`,
+      columns - 2
+    )
   );
 }
 
@@ -449,20 +465,28 @@ function IncidentScreen({
     return React.createElement(Text, null, "No incident selected");
   }
 
+  const headerWidth = Math.max(40, columns - 10);
+
   return React.createElement(
     Box,
     { flexDirection: "column", flexGrow: 1 },
     React.createElement(
       Box,
       { flexDirection: "column", borderStyle: "single", paddingX: 1 },
-      React.createElement(Text, { bold: true, color: severityColor(incident.severity) }, incident.title),
-      React.createElement(Text, null, `${incident.id} | ${incident.category} | ${incident.severity} | score=${incident.score}`),
-      React.createElement(Text, null, incident.description),
-      React.createElement(Text, { color: "gray" }, incident.evidence.map((item) => `${item.key}=${item.value}`).join(" | ")),
       React.createElement(
         Text,
-        { color: matchSet?.truncated ? "yellow" : "gray" },
-        `matches=${matchSet?.totalMatches ?? 0} stored=${matchSet?.storedLines ?? 0}${matchSet?.truncated ? " truncated: increase --incident-lines for more rows" : ""}`
+        { bold: true, color: severityColor(incident.severity), wrap: "truncate" },
+        fitText(`${incident.severity.toUpperCase()} ${incident.score} | ${incident.title}`, headerWidth)
+      ),
+      React.createElement(Text, { wrap: "truncate" }, fitText(`${incident.id} | ${incident.category}`, headerWidth)),
+      React.createElement(Text, { color: "gray", wrap: "truncate" }, fitText(incident.evidence.map((item) => `${item.key}=${item.value}`).join(" | "), headerWidth)),
+      React.createElement(
+        Text,
+        { color: matchSet?.truncated ? "yellow" : "gray", wrap: "truncate" },
+        fitText(
+          `matches=${matchSet?.totalMatches ?? 0} stored=${matchSet?.storedLines ?? 0}${matchSet?.truncated ? " truncated: increase --incident-lines for more rows" : ""}`,
+          headerWidth
+        )
       )
     ),
     React.createElement(IncidentInsightsPanel, {
@@ -493,51 +517,16 @@ function IncidentInsightsPanel({
   truncated: boolean;
   columns: number;
 }) {
-  const panelWidth = Math.max(28, Math.floor((columns - 8) / 3));
+  const width = Math.max(40, columns - 10);
+  const prefix = truncated ? "stored sample" : "stored lines";
 
   return React.createElement(
     Box,
-    { flexDirection: "row", gap: 1 },
-    React.createElement(TopListPanel, {
-      title: `Top IPs${truncated ? " (stored)" : ""}`,
-      items: insights.ips,
-      width: panelWidth
-    }),
-    React.createElement(TopListPanel, {
-      title: `Top UA${truncated ? " (stored)" : ""}`,
-      items: insights.userAgents,
-      width: panelWidth
-    }),
-    React.createElement(TopListPanel, {
-      title: `Top params${truncated ? " (stored)" : ""}`,
-      items: insights.params,
-      width: panelWidth
-    })
-  );
-}
-
-function TopListPanel({
-  title,
-  items,
-  width
-}: {
-  title: string;
-  items: TopItem[];
-  width: number;
-}) {
-  return React.createElement(
-    Box,
-    { flexDirection: "column", borderStyle: "single", paddingX: 1, width },
-    React.createElement(Text, { bold: true }, title),
-    ...(items.length > 0
-      ? items.slice(0, 10).map((item) =>
-          React.createElement(
-            Text,
-            { key: item.value },
-            `${String(item.count).padStart(5)} ${truncate(item.value, width - 9)}`
-          )
-        )
-      : [React.createElement(Text, { key: "empty", color: "gray" }, "none")])
+    { flexDirection: "column", borderStyle: "single", paddingX: 1 },
+    React.createElement(Text, { bold: true, wrap: "truncate" }, fitText(`Signals (${prefix})`, width)),
+    React.createElement(Text, { wrap: "truncate" }, fitText(`IPs    ${inlineTopItems(insights.ips, 10)}`, width)),
+    React.createElement(Text, { wrap: "truncate" }, fitText(`UA     ${inlineTopItems(insights.userAgents, 10)}`, width)),
+    React.createElement(Text, { wrap: "truncate" }, fitText(`Params ${inlineTopItems(insights.params, 10)}`, width))
   );
 }
 
@@ -562,21 +551,20 @@ function LineTable({
   selectedLineKeys: Set<string>;
   columns: number;
 }) {
-  const uaWidth = 34;
-  const pathWidth = Math.max(28, columns - 100 - uaWidth);
+  const tableColumns = accessTableColumns(columns);
 
   return React.createElement(
     Box,
     { flexDirection: "column", borderStyle: "single", paddingX: 1, flexGrow: 1 },
     React.createElement(
       Text,
-      { bold: true },
+      { bold: true, wrap: "truncate" },
       `Accesses ${lines.length} | sort=${sortKey}:${sortDirection}${filter ? ` | filter=${filter}` : ""}`
     ),
     React.createElement(
       Text,
-      { color: "gray" },
-      `sel line   time     ip              mth status bytes    ${"path".padEnd(pathWidth)} ua`
+      { color: "gray", wrap: "truncate" },
+      accessTableHeader(tableColumns)
     ),
     ...(pageLines.length > 0
       ? pageLines.map((line, offset) => {
@@ -588,9 +576,10 @@ function LineTable({
             {
               key: lineKey(line),
               color: active ? "black" : undefined,
-              backgroundColor: active ? "white" : undefined
+              backgroundColor: active ? "white" : undefined,
+              wrap: "truncate"
             },
-            `${selected ? "*" : " "} ${String(line.lineNumber).padStart(6)} ${compactTime(line.timestamp).padEnd(8)} ${truncate(line.ip, 15).padEnd(15)} ${line.method.padEnd(6)} ${String(line.status).padEnd(6)} ${String(line.bytes ?? "-").padEnd(8)} ${truncate(line.path, pathWidth).padEnd(pathWidth)} ${truncate(userAgentLabel(line.userAgent), uaWidth)}`
+            accessTableRow(line, selected, tableColumns)
           );
         })
       : [React.createElement(Text, { key: "empty", color: "yellow" }, "No stored lines for this incident")])
@@ -613,11 +602,11 @@ function RequestDetailScreen({
     { flexDirection: "column", borderStyle: "double", paddingX: 1, flexGrow: 1 },
     React.createElement(
       Text,
-      { bold: true, color: "cyan" },
+      { bold: true, color: "cyan", wrap: "truncate" },
       `Request detail | line=${line.lineNumber} | ${scroll + 1}-${Math.min(scroll + visibleLines.length, totalLines)}/${totalLines}`
     ),
     ...visibleLines.map((value, index) =>
-      React.createElement(Text, { key: `${scroll + index}:${value}`, color: value.startsWith("raw") || value.startsWith("        ") ? "gray" : undefined }, value)
+      React.createElement(Text, { key: `${scroll + index}:${value}`, color: value.startsWith("raw") || value.startsWith("        ") ? "gray" : undefined, wrap: "truncate" }, value)
     )
   );
 }
@@ -633,8 +622,8 @@ function PromptBar({ prompt }: { prompt: PromptState }) {
   return React.createElement(
     Box,
     { borderStyle: "single", paddingX: 1 },
-    React.createElement(Text, { color: "cyan" }, `${label}: `),
-    React.createElement(Text, null, prompt.value),
+    React.createElement(Text, { color: "cyan", wrap: "truncate" }, `${label}: `),
+    React.createElement(Text, { wrap: "truncate" }, prompt.value),
     React.createElement(Text, { inverse: true }, " ")
   );
 }
@@ -644,23 +633,28 @@ function Footer({
   detailOpen,
   busy,
   message,
-  selected
+  selected,
+  columns
 }: {
   screen: Screen;
   detailOpen: boolean;
   busy: boolean;
   message: string;
   selected: number;
+  columns: number;
 }) {
   const shortcuts = detailOpen
     ? "↑/↓ scroll | d/b/Esc close | q quit"
     : screen === "summary"
       ? "↑/↓ incidents | Enter detail | a ask global | q quit"
       : "↑/↓ rows | d detail | Space select | A select visible | f filter | s sort | Tab dir | a ask | e export | b back | q quit";
+  const status = `${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
+
   return React.createElement(
-    Text,
-    { color: busy ? "yellow" : "cyan" },
-    `${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""} | ${shortcuts}`
+    Box,
+    { flexDirection: "column" },
+    React.createElement(Text, { color: busy ? "yellow" : "cyan", wrap: "truncate" }, fitText(status, columns - 2)),
+    React.createElement(Text, { color: "cyan", wrap: "truncate" }, fitText(shortcuts, columns - 2))
   );
 }
 
@@ -737,6 +731,95 @@ function topMapItems(map: Map<string, number>, limit: number): TopItem[] {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, limit)
     .map(([value, count]) => ({ value, count }));
+}
+
+function inlineTopItems(items: TopItem[], limit: number): string {
+  if (items.length === 0) {
+    return "none";
+  }
+
+  return items
+    .slice(0, limit)
+    .map((item) => `${item.count} ${item.value}`)
+    .join(" | ");
+}
+
+function accessTableColumns(columns: number): AccessTableColumns {
+  const tableWidth = Math.max(60, columns - 14);
+  const fixed = {
+    sel: 1,
+    line: 6,
+    time: 8,
+    ip: 15,
+    method: 4,
+    status: 3,
+    bytes: 7
+  };
+  const fixedTotal =
+    fixed.sel +
+    fixed.line +
+    fixed.time +
+    fixed.ip +
+    fixed.method +
+    fixed.status +
+    fixed.bytes;
+  const spaces = 8;
+  const variableTotal = Math.max(16, tableWidth - fixedTotal - spaces);
+  const ua = Math.min(36, Math.max(10, Math.floor(variableTotal * 0.35)));
+  const path = Math.max(6, variableTotal - ua);
+
+  return {
+    ...fixed,
+    path,
+    ua
+  };
+}
+
+function accessTableHeader(columns: AccessTableColumns): string {
+  return tableCells(
+    [
+      ["s", columns.sel],
+      ["line", columns.line, "right"],
+      ["time", columns.time],
+      ["ip", columns.ip],
+      ["meth", columns.method],
+      ["st", columns.status, "right"],
+      ["bytes", columns.bytes, "right"],
+      ["path", columns.path],
+      ["ua", columns.ua]
+    ]
+  );
+}
+
+function accessTableRow(
+  line: IncidentLogLine,
+  selected: boolean,
+  columns: AccessTableColumns
+): string {
+  return tableCells(
+    [
+      [selected ? "*" : " ", columns.sel],
+      [String(line.lineNumber), columns.line, "right"],
+      [compactTime(line.timestamp), columns.time],
+      [line.ip, columns.ip],
+      [line.method, columns.method],
+      [String(line.status), columns.status, "right"],
+      [String(line.bytes ?? "-"), columns.bytes, "right"],
+      [line.path, columns.path],
+      [userAgentLabel(line.userAgent), columns.ua]
+    ]
+  );
+}
+
+function tableCells(cells: Array<[string, number] | [string, number, "right"]>): string {
+  return cells
+    .map(([value, width, align]) => padCell(value, width, align))
+    .join(" ");
+}
+
+function padCell(value: string, width: number, align?: "right"): string {
+  const text = fitText(value, width);
+  return align === "right" ? text.padStart(width) : text.padEnd(width);
 }
 
 function compareLine(
@@ -959,10 +1042,26 @@ function userAgentLabel(userAgent: string | null): string {
     return "-";
   }
 
-  return userAgent
-    .replace(/^Mozilla\/5\.0\s*/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const normalized = userAgent.replace(/\s+/g, " ").trim();
+  const bot = normalized.match(
+    /(Googlebot\/[^\s;)]+|Claude-SearchBot\/[^\s;)]+|MJ12bot\/[^\s;)]+|bingbot\/[^\s;)]+|AhrefsBot\/[^\s;)]+|SemrushBot\/[^\s;)]+)/i
+  );
+
+  if (bot) {
+    return bot[1] ?? normalized;
+  }
+
+  const browser =
+    normalized.match(/(?:Chrome|Firefox|Version|OPR|Edg)\/[^\s;)]+/)?.[0] ??
+    normalized.match(/Safari\/[^\s;)]+/)?.[0] ??
+    "UA";
+  const os =
+    normalized.match(/Android [^;)]+/)?.[0] ??
+    normalized.match(/Windows NT [^;)]+/)?.[0] ??
+    normalized.match(/Mac OS X [^;)]+/)?.[0] ??
+    normalized.match(/Linux [^;)]+/)?.[0];
+
+  return os ? `${browser} ${os}` : browser;
 }
 
 function joinTop(items: TopItem[], limit: number): string {
@@ -1009,4 +1108,22 @@ function severityColor(severity: Incident["severity"]): string {
 
 function truncate(value: string, length: number): string {
   return value.length <= length ? value : `${value.slice(0, length - 1)}…`;
+}
+
+function fitText(value: string, width: number): string {
+  if (width <= 0) {
+    return "";
+  }
+
+  const text = value.replace(/\s+/g, " ").trim();
+
+  if (text.length <= width) {
+    return text;
+  }
+
+  if (width <= 3) {
+    return text.slice(0, width);
+  }
+
+  return `${text.slice(0, width - 3)}...`;
 }
