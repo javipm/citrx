@@ -103,7 +103,7 @@ function CitrxExplorer({
   const incidents = session.report.incidents;
   const incident = incidents[incidentIndex];
   const allStoredLines = useMemo(
-    () => storedIncidentLines(session.report),
+    () => accessLogLines(session.report),
     [session.report]
   );
   const globalLines = useMemo(
@@ -356,6 +356,10 @@ function CitrxExplorer({
     }
 
     if (key.tab) {
+      return;
+    }
+
+    if (inputValue === "S") {
       setSortDirection((value) => (value === "desc" ? "asc" : "desc"));
       setLineIndex(0);
       return;
@@ -554,7 +558,7 @@ function SummaryScreen({
       selectedLineKeys,
       columns,
       active: focus === "accesses",
-      label: "Stored accesses",
+      label: "Access log",
       emptyMessage: "No stored access lines. Increase --incident-lines or open an incident."
     })
   );
@@ -573,7 +577,7 @@ function SummaryPanel({ report }: { report: AnalyzeReport }) {
       `lines: ${report.summary.parsedLines}/${report.summary.totalLines} parsed | invalid: ${report.summary.invalidLines}`
     ),
     React.createElement(Text, null, `bytes: ${formatBytes(report.summary.totalBytes)}`),
-    React.createElement(Text, null, `stored incident lines: ${storedIncidentLines(report).length}`),
+    React.createElement(Text, null, `access lines: ${accessLogLines(report).length}`),
     React.createElement(Text, { color: "gray" }, "press t for global top values")
   );
 }
@@ -699,7 +703,7 @@ function TopValuesScreen({
   columns: number;
 }) {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
-  const sourceLines = scope === "summary" ? storedIncidentLines(report) : matchSet?.lines ?? [];
+  const sourceLines = scope === "summary" ? accessLogLines(report) : matchSet?.lines ?? [];
   const insights = incidentInsights(sourceLines);
   const panelWidth = Math.max(30, Math.floor((columns - 7) / 2));
   const headerWidth = Math.max(40, columns - 10);
@@ -925,7 +929,7 @@ function Footer({
       ? `Tab focus(${summaryFocus}) | ↑/↓ navigate | Enter/d open | f filter | s sort | S dir | t tops | a ask | q quit`
       : screen === "tops"
         ? "t/b/Esc back | a ask about view | q quit"
-        : "↑/↓ rows | d detail | t tops | Space select | A select visible | f filter | s sort | Tab dir | a ask | e export | b back | q quit";
+        : "↑/↓ rows | d detail | t tops | Space select | A select visible | f filter | s sort | S dir | a ask | e export | b back | q quit";
   const status = `${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
 
   return React.createElement(
@@ -940,7 +944,11 @@ function incidentLines(report: AnalyzeReport, incidentId: string | undefined): I
   return report.incidentMatches.find((item) => item.incidentId === incidentId)?.lines ?? [];
 }
 
-function storedIncidentLines(report: AnalyzeReport): IncidentLogLine[] {
+function accessLogLines(report: AnalyzeReport): IncidentLogLine[] {
+  if (report.accessLog) {
+    return report.accessLog.lines;
+  }
+
   const lines = new Map<string, IncidentLogLine>();
 
   for (const matchSet of report.incidentMatches) {

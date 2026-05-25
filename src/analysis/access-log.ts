@@ -61,6 +61,7 @@ interface Counters {
   pathMatches: Map<string, MutableIncidentMatches>;
   lineNumbers: Map<string, number>;
   incidentLineLimit: number;
+  accessLines: IncidentLogLine[];
 }
 
 interface MutableIncidentMatches {
@@ -108,7 +109,8 @@ export async function analyzeAccessLogSources(
     ruleMatches: new Map(),
     pathMatches: new Map(),
     lineNumbers: new Map(),
-    incidentLineLimit: options.incidentLines ?? 500
+    incidentLineLimit: options.incidentLines ?? 500,
+    accessLines: []
   };
   const inputFormats: AnalyzeReport["inputFormats"] = [];
 
@@ -151,6 +153,12 @@ export async function analyzeAccessLogSources(
     topPaths: topItems(counters.paths, options.top),
     topMethods: topItems(counters.methods, options.top),
     topStatuses: topItems(counters.statuses, options.top),
+    accessLog: {
+      totalLines: counters.parsedLines,
+      storedLines: counters.accessLines.length,
+      truncated: false,
+      lines: counters.accessLines
+    },
     incidents: sortIncidents([
       ...counters.ruleIncidents.values(),
       ...buildAggregateIncidents(counters.pathStats.values())
@@ -300,12 +308,7 @@ function analyzeLine(
 
   counters.parsedLines += 1;
   counters.totalBytes += entry.bytes ?? 0;
-  increment(counters.ips, entry.ip);
-  increment(counters.paths, entry.path);
-  increment(counters.methods, entry.method);
-  increment(counters.statuses, String(entry.status));
-  updatePathStats(counters.pathStats, entry);
-  addIncidentLine(counters.pathMatches, entry.path, counters.incidentLineLimit, {
+  const storedLine = {
     source: sourceLabel,
     lineNumber,
     raw: redactRawLine(line),
@@ -317,23 +320,19 @@ function analyzeLine(
     status: entry.status,
     bytes: entry.bytes,
     userAgent: entry.userAgent
-  });
+  };
+
+  counters.accessLines.push(storedLine);
+  increment(counters.ips, entry.ip);
+  increment(counters.paths, entry.path);
+  increment(counters.methods, entry.method);
+  increment(counters.statuses, String(entry.status));
+  updatePathStats(counters.pathStats, entry);
+  addIncidentLine(counters.pathMatches, entry.path, counters.incidentLineLimit, storedLine);
 
   for (const hit of detectRequestHits(entry)) {
     const incidentId = mergeRuleHit(counters.ruleIncidents, hit, entry.path);
-    addIncidentLine(counters.ruleMatches, incidentId, counters.incidentLineLimit, {
-      source: sourceLabel,
-      lineNumber,
-      raw: redactRawLine(line),
-      ip: entry.ip,
-      timestamp: entry.timestamp,
-      method: entry.method,
-      path: entry.path,
-      target: redactTarget(entry.target),
-      status: entry.status,
-      bytes: entry.bytes,
-      userAgent: entry.userAgent
-    });
+    addIncidentLine(counters.ruleMatches, incidentId, counters.incidentLineLimit, storedLine);
   }
 }
 

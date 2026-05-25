@@ -120,13 +120,13 @@ By default, `citrx <paths...>` analyzes locally, stores a session, and opens an
 interactive terminal console.
 
 - Summary screen: global metrics, a navigable incident list, and a filterable
-  table of stored matching access-log lines. Press `Tab` to move focus between
-  incidents and the table.
+  table of parsed access-log lines. Press `Tab` to move focus between incidents
+  and the table.
 - Incident screen: detailed evidence and a table of related access-log lines.
 - Navigation: `Enter` opens an incident, `b` goes back, `/` filters, `s` changes
-  sort column, `Tab` flips sort direction inside an incident, `Space` selects a
-  row, `A` selects visible rows, `t` opens top-value panels, `a` asks OpenAI,
-  `e` exports the current context, and `q` quits.
+  sort column, `S` flips sort direction, `Space` selects a row, `A` selects
+  visible rows, `t` opens top-value panels, `a` asks OpenAI, `e` exports the
+  current context, and `q` quits.
 
 Incident filters support text search plus a small query syntax. Terms are joined
 with `AND` by default, `OR`/`|` and parentheses are supported, and `!` negates a

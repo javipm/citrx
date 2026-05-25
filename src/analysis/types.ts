@@ -43,6 +43,13 @@ export interface IncidentMatchSet {
   lines: IncidentLogLine[];
 }
 
+export interface StoredAccessLogLines {
+  totalLines: number;
+  storedLines: number;
+  truncated: boolean;
+  lines: IncidentLogLine[];
+}
+
 export interface AnalyzeSummary {
   files: number;
   totalLines: number;
@@ -84,6 +91,7 @@ export interface AnalyzeReport {
   topPaths: TopItem[];
   topMethods: TopItem[];
   topStatuses: TopItem[];
+  accessLog?: StoredAccessLogLines;
   incidents: Incident[];
   incidentMatches: IncidentMatchSet[];
 }

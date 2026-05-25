@@ -208,6 +208,12 @@ describe("citrx CLI", () => {
 
     expect(code).toBe(0);
     const report = JSON.parse(stdout.output()) as {
+      accessLog: {
+        totalLines: number;
+        storedLines: number;
+        truncated: boolean;
+        lines: Array<{ raw: string; path: string; lineNumber: number }>;
+      };
       incidents: Array<{ id: string; samples: string[] }>;
       incidentMatches: Array<{
         incidentId: string;
@@ -226,6 +232,23 @@ describe("citrx CLI", () => {
     );
     expect(report.incidents.flatMap((incident) => incident.samples).join("\n")).toContain(
       "token=%5BREDACTED%5D"
+    );
+    expect(report.accessLog).toEqual(
+      expect.objectContaining({
+        totalLines: 2,
+        storedLines: 2,
+        truncated: false,
+        lines: [
+          expect.objectContaining({
+            path: "/search",
+            raw: expect.stringContaining("UNION")
+          }),
+          expect.objectContaining({
+            path: "/.env",
+            raw: expect.stringContaining("token=[REDACTED]")
+          })
+        ]
+      })
     );
     expect(report.incidentMatches).toEqual(
       expect.arrayContaining([
