@@ -22,8 +22,6 @@ type Screen = "summary" | "incident";
 type SortKey = "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
 type SortDirection = "asc" | "desc";
 
-const PAGE_SIZE = 14;
-
 export async function openSessionTui(
   session: CitrxSession,
   runtime: TuiRuntime
@@ -76,8 +74,12 @@ function CitrxExplorer({
     () => lines.filter((line) => selectedLineKeys.has(lineKey(line))),
     [lines, selectedLineKeys]
   );
-  const pageStart = Math.max(0, Math.min(lineIndex - Math.floor(PAGE_SIZE / 2), Math.max(0, lines.length - PAGE_SIZE)));
-  const pageLines = lines.slice(pageStart, pageStart + PAGE_SIZE);
+  const pageSize = screen === "incident" ? Math.max(6, rows - 13) : Math.max(6, rows - 14);
+  const pageStart = Math.max(
+    0,
+    Math.min(lineIndex - Math.floor(pageSize / 2), Math.max(0, lines.length - pageSize))
+  );
+  const pageLines = lines.slice(pageStart, pageStart + pageSize);
 
   useInput((inputValue, key) => {
     if (inputValue === "q" || (screen === "summary" && key.escape)) {
@@ -204,20 +206,24 @@ function CitrxExplorer({
     Box,
     { flexDirection: "column", paddingX: 1, width: columns, height: rows },
     React.createElement(Header, { session }),
-    screen === "summary"
-      ? React.createElement(SummaryScreen, { report: session.report, incidents, incidentIndex })
-      : React.createElement(IncidentScreen, {
-          report: session.report,
-          incident,
-          lines,
-          pageLines,
-          pageStart,
-          lineIndex,
-          filter,
-          sortKey,
-          sortDirection,
-          selectedLineKeys
-        }),
+    React.createElement(
+      Box,
+      { flexDirection: "column", flexGrow: 1 },
+      screen === "summary"
+        ? React.createElement(SummaryScreen, { report: session.report, incidents, incidentIndex, pageSize })
+        : React.createElement(IncidentScreen, {
+            report: session.report,
+            incident,
+            lines,
+            pageLines,
+            pageStart,
+            lineIndex,
+            filter,
+            sortKey,
+            sortDirection,
+            selectedLineKeys
+          })
+    ),
     React.createElement(Footer, {
       screen,
       busy,
@@ -239,22 +245,24 @@ function Header({ session }: { session: CitrxSession }) {
 function SummaryScreen({
   report,
   incidents,
-  incidentIndex
+  incidentIndex,
+  pageSize
 }: {
   report: AnalyzeReport;
   incidents: Incident[];
   incidentIndex: number;
+  pageSize: number;
 }) {
   return React.createElement(
     Box,
-    { flexDirection: "column" },
+    { flexDirection: "column", flexGrow: 1 },
     React.createElement(
       Box,
       { flexDirection: "row", gap: 1 },
       React.createElement(SummaryPanel, { report }),
       React.createElement(WatchlistPanel, { report })
     ),
-    React.createElement(IncidentList, { incidents, incidentIndex })
+    React.createElement(IncidentList, { incidents, incidentIndex, pageSize })
   );
 }
 
@@ -297,17 +305,19 @@ function WatchlistPanel({ report }: { report: AnalyzeReport }) {
 
 function IncidentList({
   incidents,
-  incidentIndex
+  incidentIndex,
+  pageSize
 }: {
   incidents: Incident[];
   incidentIndex: number;
+  pageSize: number;
 }) {
   return React.createElement(
     Box,
-    { flexDirection: "column", borderStyle: "single", paddingX: 1 },
+    { flexDirection: "column", borderStyle: "single", paddingX: 1, flexGrow: 1 },
     React.createElement(Text, { bold: true }, "Incidents"),
     ...(incidents.length > 0
-      ? incidents.slice(0, 18).map((incident, index) =>
+      ? incidents.slice(0, pageSize).map((incident, index) =>
           React.createElement(
             Text,
             {
@@ -353,7 +363,7 @@ function IncidentScreen({
 
   return React.createElement(
     Box,
-    { flexDirection: "column" },
+    { flexDirection: "column", flexGrow: 1 },
     React.createElement(
       Box,
       { flexDirection: "column", borderStyle: "single", paddingX: 1 },
@@ -401,7 +411,7 @@ function LineTable({
 }) {
   return React.createElement(
     Box,
-    { flexDirection: "column", borderStyle: "single", paddingX: 1 },
+    { flexDirection: "column", borderStyle: "single", paddingX: 1, flexGrow: 1 },
     React.createElement(
       Text,
       { bold: true },
