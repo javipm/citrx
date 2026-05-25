@@ -7,6 +7,9 @@ export function renderTerminalReport(report: AnalyzeReport): string {
 
   lines.push(`${pc.bold("citrx")} ${pc.green("access log analysis")}`);
   lines.push("");
+  if (report.sessionId) {
+    lines.push(`Session: ${report.sessionId}`);
+  }
   lines.push(`Files: ${report.summary.files}`);
   lines.push(`Lines: ${report.summary.parsedLines}/${report.summary.totalLines}`);
   lines.push(`Invalid: ${report.summary.invalidLines}`);

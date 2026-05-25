@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -68,11 +68,14 @@ describe("citrx CLI", () => {
     const stdout = memoryStream();
     const stderr = memoryStream();
 
-    const code = await runCli(["node", "citrx", "analyze", logFile, "--json"], {
-      stdout: stdout.stream,
-      stderr: stderr.stream,
-      stdinIsTTY: true
-    });
+    const code = await runCli(
+      ["node", "citrx", "analyze", logFile, "--json", "--no-session"],
+      {
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        stdinIsTTY: true
+      }
+    );
 
     expect(code).toBe(0);
     const report = JSON.parse(stdout.output()) as Record<string, unknown>;
@@ -103,6 +106,95 @@ describe("citrx CLI", () => {
       expect.arrayContaining([{ value: "/products", count: 2 }])
     );
     expect(stderr.output()).toBe("");
+  });
+
+  it("persists analysis sessions by default", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const sessionDir = join(directory, "sessions");
+    const logFile = join(directory, "access.log");
+    await writeFile(
+      logFile,
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET / HTTP/1.1" 200 123 "-" "Mozilla/5.0"\n'
+    );
+    const stdout = memoryStream();
+    const stderr = memoryStream();
+
+    const analyzeCode = await runCli(["node", "citrx", "analyze", logFile, "--json"], {
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      stdinIsTTY: true,
+      env: { CITRX_SESSION_DIR: sessionDir }
+    });
+
+    expect(analyzeCode).toBe(0);
+    const report = JSON.parse(stdout.output()) as { sessionId: string };
+    expect(report.sessionId).toMatch(/^[a-f0-9-]+$/);
+    await expect(readdir(sessionDir)).resolves.toEqual([`${report.sessionId}.json`]);
+
+    const listOut = memoryStream();
+    const listCode = await runCli(["node", "citrx", "session", "list", "--json"], {
+      stdout: listOut.stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true,
+      env: { CITRX_SESSION_DIR: sessionDir }
+    });
+
+    expect(listCode).toBe(0);
+    expect(JSON.parse(listOut.output())).toMatchObject({
+      sessions: [expect.objectContaining({ id: report.sessionId, parsedLines: 1 })]
+    });
+
+    const showOut = memoryStream();
+    const showCode = await runCli(
+      ["node", "citrx", "session", "show", report.sessionId, "--json"],
+      {
+        stdout: showOut.stream,
+        stderr: memoryStream().stream,
+        stdinIsTTY: true,
+        env: { CITRX_SESSION_DIR: sessionDir }
+      }
+    );
+
+    expect(showCode).toBe(0);
+    expect(JSON.parse(showOut.output())).toMatchObject({
+      id: report.sessionId,
+      report: { sessionId: report.sessionId }
+    });
+
+    const deleteCode = await runCli(["node", "citrx", "session", "delete", report.sessionId], {
+      stdout: memoryStream().stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true,
+      env: { CITRX_SESSION_DIR: sessionDir }
+    });
+
+    expect(deleteCode).toBe(0);
+    await expect(readdir(sessionDir)).resolves.toEqual([]);
+  });
+
+  it("skips session persistence with --no-session", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const sessionDir = join(directory, "sessions");
+    const logFile = join(directory, "access.log");
+    await writeFile(
+      logFile,
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET / HTTP/1.1" 200 123 "-" "Mozilla/5.0"\n'
+    );
+    const stdout = memoryStream();
+
+    const code = await runCli(
+      ["node", "citrx", "analyze", logFile, "--json", "--no-session"],
+      {
+        stdout: stdout.stream,
+        stderr: memoryStream().stream,
+        stdinIsTTY: true,
+        env: { CITRX_SESSION_DIR: sessionDir }
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.output())).not.toHaveProperty("sessionId");
+    await expect(readdir(sessionDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects files that are not access logs", async () => {
@@ -176,7 +268,8 @@ describe("citrx CLI", () => {
         "custom:pipe",
         "--format-config",
         configFile,
-        "--json"
+        "--json",
+        "--no-session"
       ],
       {
         stdout: stdout.stream,

@@ -7,6 +7,12 @@ import { discoverInputFiles } from "./input/files.js";
 import { isAccessLogFormatId } from "./parser/access-log.js";
 import type { FormatChoice } from "./parser/access-log.js";
 import { renderTerminalReport } from "./report/terminal.js";
+import {
+  deleteSession,
+  listSessions,
+  readSession,
+  saveSession
+} from "./session/store.js";
 import { APP_NAME, VERSION } from "./version.js";
 
 export interface CliRuntime {
@@ -14,6 +20,7 @@ export interface CliRuntime {
   stderr: Writable;
   stdin: Readable;
   stdinIsTTY: boolean;
+  env: NodeJS.ProcessEnv;
 }
 
 export function createProgram(runtime: CliRuntime): Command {
@@ -39,6 +46,7 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--markdown", "Write Markdown output.")
     .option("--html", "Write a self-contained HTML report.")
     .option("--out <path>", "Write report output to a file.")
+    .option("--no-session", "Do not persist this analysis session.")
     .option(
       "--format <format>",
       "Access-log format: auto, apache_common, apache_combined, nginx_combined, or custom:<name>.",
@@ -64,12 +72,19 @@ export function createProgram(runtime: CliRuntime): Command {
       const top = parseTopOption(options.top);
       const format = parseFormatOption(options.format);
       const files = await discoverInputFiles(paths);
-      const report = await analyzeAccessLogs(files, {
+      let report = await analyzeAccessLogs(files, {
         top,
         format,
         formatConfig:
           typeof options.formatConfig === "string" ? options.formatConfig : undefined
       });
+      const sessionDir = runtime.env.CITRX_SESSION_DIR;
+
+      if (options.session !== false) {
+        const session = await saveSession(report, files, sessionDir);
+        report = session.report;
+      }
+
       const output = options.json
         ? `${JSON.stringify(report, null, 2)}\n`
         : renderTerminalReport(report);
@@ -80,6 +95,79 @@ export function createProgram(runtime: CliRuntime): Command {
       }
 
       runtime.stdout.write(output);
+    });
+
+  const session = program
+    .command("session")
+    .description("Manage saved citrx analysis sessions.");
+
+  session
+    .command("list")
+    .description("List saved sessions.")
+    .option("--json", "Write machine-readable JSON output.")
+    .action(async (options: Record<string, unknown>) => {
+      const sessions = await listSessions(runtime.env.CITRX_SESSION_DIR);
+
+      if (options.json) {
+        runtime.stdout.write(`${JSON.stringify({ sessions }, null, 2)}\n`);
+        return;
+      }
+
+      if (sessions.length === 0) {
+        runtime.stdout.write("No sessions found.\n");
+        return;
+      }
+
+      for (const item of sessions) {
+        runtime.stdout.write(
+          `${item.id}  ${item.createdAt}  files=${item.files} parsed=${item.parsedLines} formats=${item.formats.join(",")}\n`
+        );
+      }
+    });
+
+  session
+    .command("show")
+    .description("Show a saved session report.")
+    .argument("<id>", "Session id.")
+    .option("--json", "Write machine-readable JSON output.")
+    .action(async (id: string, options: Record<string, unknown>) => {
+      const saved = await readSession(id, runtime.env.CITRX_SESSION_DIR);
+
+      if (options.json) {
+        runtime.stdout.write(`${JSON.stringify(saved, null, 2)}\n`);
+        return;
+      }
+
+      runtime.stdout.write(renderTerminalReport(saved.report));
+    });
+
+  session
+    .command("export")
+    .description("Export a saved session report.")
+    .argument("<id>", "Session id.")
+    .option("--json", "Write machine-readable JSON output.")
+    .option("--out <path>", "Write export output to a file.")
+    .action(async (id: string, options: Record<string, unknown>) => {
+      const saved = await readSession(id, runtime.env.CITRX_SESSION_DIR);
+      const output = options.json
+        ? `${JSON.stringify(saved.report, null, 2)}\n`
+        : renderTerminalReport(saved.report);
+
+      if (typeof options.out === "string") {
+        await writeFile(options.out, output, "utf8");
+        return;
+      }
+
+      runtime.stdout.write(output);
+    });
+
+  session
+    .command("delete")
+    .description("Delete a saved session.")
+    .argument("<id>", "Session id.")
+    .action(async (id: string) => {
+      await deleteSession(id, runtime.env.CITRX_SESSION_DIR);
+      runtime.stdout.write(`Deleted session ${id}\n`);
     });
 
   return program;
@@ -115,7 +203,8 @@ export async function runCli(
     stdout: runtime.stdout ?? process.stdout,
     stderr: runtime.stderr ?? process.stderr,
     stdin: runtime.stdin ?? process.stdin,
-    stdinIsTTY: runtime.stdinIsTTY ?? Boolean(process.stdin.isTTY)
+    stdinIsTTY: runtime.stdinIsTTY ?? Boolean(process.stdin.isTTY),
+    env: runtime.env ?? process.env
   };
 
   try {

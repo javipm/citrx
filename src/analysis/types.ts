@@ -24,6 +24,7 @@ export interface AnalyzeReport {
   phase: 1;
   status: "ok";
   generatedAt: string;
+  sessionId?: string;
   inputs: string[];
   inputFormats: InputFormatSummary[];
   summary: AnalyzeSummary;

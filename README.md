@@ -43,6 +43,8 @@ node dist/cli.js --version
 node dist/cli.js analyze /path/to/access.log --json
 node dist/cli.js analyze /path/to/access.log --format apache_combined
 node dist/cli.js analyze /path/to/access.log --format custom:my_format --format-config ./formats.json
+node dist/cli.js session list
+node dist/cli.js session show <session-id>
 ```
 
 ## Phase 1.1
@@ -95,6 +97,23 @@ Custom format configs are JSON:
 
 Compressed files, stdin, sessions, GeoIP, AI follow-up, Markdown, and HTML
 reports are planned in later phases.
+
+## Sessions
+
+Every analysis creates a lightweight session by default. Sessions store the
+redacted report model, source paths, timestamps, and summary data. They do not
+copy raw log files.
+
+```bash
+citrx analyze /path/to/access.log
+citrx session list
+citrx session show <session-id>
+citrx session export <session-id> --json --out report.json
+citrx session delete <session-id>
+```
+
+Use `--no-session` for one-off runs. Set `CITRX_SESSION_DIR` to override the
+session storage directory.
 
 ## Privacy
 
