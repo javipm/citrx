@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { AnalyzeReport, Incident } from "../analysis/types.js";
-import { OpenAiIncidentQuestionClient, parseMaxLines } from "./incident-question.js";
+import {
+  OpenAiIncidentQuestionClient,
+  buildAiContext,
+  parseMaxChars,
+  parseMaxLines
+} from "./incident-question.js";
 
 const incident: Incident = {
   id: "sqli:/search",
@@ -105,17 +110,82 @@ describe("OpenAI incident questions", () => {
     expect(result).toEqual({
       answer: "Likely SQLi scan. Consider blocking the payload pattern.",
       model: "gpt-5-mini",
-      sentLines: 1
+      sentLines: 1,
+      sentChars: expect.any(Number)
     });
     expect(JSON.parse(payload)).toMatchObject({
       question: "What WAF rule should I use?",
-      lines: [{ lineNumber: 1 }]
+      lines: [expect.stringContaining("1|")]
     });
+    expect(payload).not.toContain("raw");
   });
 
   it("defaults invalid max lines to 200", () => {
     expect(parseMaxLines("-1")).toBe(200);
     expect(parseMaxLines("nope")).toBe(200);
     expect(parseMaxLines("25")).toBe(25);
+  });
+
+  it("builds compact summary context without raw log lines", () => {
+    const context = buildAiContext(
+      {
+        report,
+        lines: [],
+        question: "What should I check?",
+        env: {},
+        scope: "summary"
+      },
+      200,
+      60000
+    );
+    const payload = JSON.parse(context.payload);
+
+    expect(payload).toMatchObject({
+      scope: "summary",
+      question: "What should I check?",
+      top: {
+        ips: ["203.0.113.10:2"]
+      }
+    });
+    expect(context.sentLines).toBe(0);
+  });
+
+  it("deduplicates user agents and honors max char budget", () => {
+    const context = buildAiContext(
+      {
+        report,
+        incident,
+        lines: Array.from({ length: 10 }, (_, index) => ({
+          source: "/tmp/access.log",
+          lineNumber: index + 1,
+          raw: `raw line ${index + 1}`,
+          ip: "203.0.113.10",
+          timestamp: "25/May/2026:03:12:49 +0200",
+          method: "GET",
+          path: "/search",
+          target: `/search?q=${index}`,
+          status: 200,
+          bytes: 10,
+          userAgent: "Mozilla/5.0 Very Long Shared UA"
+        })),
+        question: "What WAF rule should I use?",
+        env: {},
+        scope: "incident"
+      },
+      10,
+      1200
+    );
+    const payload = JSON.parse(context.payload);
+
+    expect(context.payload.length).toBeLessThanOrEqual(1200);
+    expect(payload.userAgents).toEqual({ ua1: "Mozilla/5.0 Very Long Shared UA" });
+    expect(payload.lines.every((line: string) => line.endsWith("|ua1"))).toBe(true);
+    expect(context.payload).not.toContain("raw line");
+  });
+
+  it("defaults invalid max chars to 60000", () => {
+    expect(parseMaxChars("999")).toBe(60000);
+    expect(parseMaxChars("nope")).toBe(60000);
+    expect(parseMaxChars("5000")).toBe(5000);
   });
 });

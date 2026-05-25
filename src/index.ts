@@ -45,24 +45,14 @@ export function createProgram(runtime: CliRuntime): Command {
 
   program
     .name(APP_NAME)
+    .usage("[options] <paths...>")
     .description("Local-first Apache/Nginx access log analysis CLI.")
-    .version(VERSION, "-v, --version", "Display the current version.")
-    .configureOutput({
-      writeOut: (message) => runtime.stdout.write(message),
-      writeErr: (message) => runtime.stderr.write(message)
-    })
-    .exitOverride();
-
-  program
-    .command("analyze")
-    .description("Analyze access logs from files, folders, or stdin.")
-    .argument("[paths...]", "Log files, folders, or '-' for stdin.")
-    .option("--ai", "Offer OpenAI deep analysis after local analysis.")
-    .option("-i, --interactive", "Open the interactive incident explorer after analysis.")
+    .allowExcessArguments(true)
     .option("--json", "Write machine-readable JSON output.")
     .option("--markdown", "Write Markdown output.")
     .option("--html", "Write a self-contained HTML report.")
     .option("--out <path>", "Write report output to a file.")
+    .option("--no-interactive", "Print the terminal report instead of opening the TUI.")
     .option("--no-session", "Do not persist this analysis session.")
     .option(
       "--format <format>",
@@ -78,61 +68,12 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--exclude <glob>", "Exclude paths matching this glob.")
     .option("--no-color", "Disable colored terminal output.")
     .option("--debug", "Print debug details on failure.")
-    .action(async (paths: string[], options: Record<string, unknown>, command: Command) => {
-      let top = parseTopOption(options.top);
-      const incidentLines = parseIncidentLinesOption(options.incidentLines);
-      let outputFormat = parseOutputFormat(options);
-
-      if (paths.length === 0) {
-        if (runtime.stdinIsTTY) {
-          if (!shouldRunAnalyzeWizard(command)) {
-            throw new Error("No input paths provided.");
-          }
-
-          const answers = await promptAnalyzeOptions(runtime);
-          paths = answers.paths;
-          top = answers.top;
-          outputFormat = answers.outputFormat;
-          options.session = answers.session;
-        } else {
-          paths = ["-"];
-        }
-      }
-
-      const format = parseFormatOption(options.format);
-      const sources = await buildInputSources(paths, runtime);
-      let report = await analyzeAccessLogSources(sources, {
-        top,
-        format,
-        formatConfig:
-          typeof options.formatConfig === "string" ? options.formatConfig : undefined,
-        since: parseDateOption(options.since, "--since"),
-        until: parseDateOption(options.until, "--until"),
-        incidentLines
-      });
-      const sessionDir = runtime.env.CITRX_SESSION_DIR;
-      let session: CitrxSession | undefined;
-
-      if (options.session !== false) {
-        session = await saveSession(report, report.inputs, sessionDir);
-        report = session.report;
-      }
-
-      if (options.interactive) {
-        session ??= await saveSession(report, report.inputs, sessionDir);
-        await openInteractiveSession(session, runtime);
-        return;
-      }
-
-      const output = renderReport(report, outputFormat, options, runtime);
-
-      if (typeof options.out === "string") {
-        await writeFile(options.out, output, "utf8");
-        return;
-      }
-
-      runtime.stdout.write(output);
-    });
+    .version(VERSION, "-v, --version", "Display the current version.")
+    .configureOutput({
+      writeOut: (message) => runtime.stdout.write(message),
+      writeErr: (message) => runtime.stderr.write(message)
+    })
+    .exitOverride();
 
   const session = program
     .command("session")
@@ -145,7 +86,7 @@ export function createProgram(runtime: CliRuntime): Command {
     .action(async (options: Record<string, unknown>) => {
       const sessions = await listSessions(runtime.env.CITRX_SESSION_DIR);
 
-      if (options.json) {
+      if (options.json || program.opts().json) {
         runtime.stdout.write(`${JSON.stringify({ sessions }, null, 2)}\n`);
         return;
       }
@@ -170,7 +111,7 @@ export function createProgram(runtime: CliRuntime): Command {
     .action(async (id: string, options: Record<string, unknown>) => {
       const saved = await readSession(id, runtime.env.CITRX_SESSION_DIR);
 
-      if (options.json) {
+      if (options.json || program.opts().json) {
         runtime.stdout.write(`${JSON.stringify(saved, null, 2)}\n`);
         return;
       }
@@ -197,7 +138,12 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--out <path>", "Write export output to a file.")
     .action(async (id: string, options: Record<string, unknown>) => {
       const saved = await readSession(id, runtime.env.CITRX_SESSION_DIR);
-      const output = renderReport(saved.report, parseOutputFormat(options), options, runtime);
+      const output = renderReport(
+        saved.report,
+        parseOutputFormat({ ...program.opts(), ...options }),
+        { ...program.opts(), ...options },
+        runtime
+      );
 
       if (typeof options.out === "string") {
         await writeFile(options.out, output, "utf8");
@@ -216,7 +162,77 @@ export function createProgram(runtime: CliRuntime): Command {
       runtime.stdout.write(`Deleted session ${id}\n`);
     });
 
+  program.action(async (options: Record<string, unknown>, command: Command) => {
+    await runRootAnalysis(command.args, options, command, runtime);
+  });
+
   return program;
+}
+
+async function runRootAnalysis(
+  initialPaths: string[],
+  options: Record<string, unknown>,
+  command: Command,
+  runtime: CliRuntime
+): Promise<void> {
+  let paths = initialPaths;
+  let top = parseTopOption(options.top);
+  const incidentLines = parseIncidentLinesOption(options.incidentLines);
+  let outputFormat = parseOutputFormat(options);
+
+  if (paths[0] === "analyze") {
+    throw new Error("The analyze subcommand was removed. Use `citrx <paths...>` instead.");
+  }
+
+  if (paths.length === 0) {
+    if (runtime.stdinIsTTY) {
+      if (!shouldRunAnalyzeWizard(command)) {
+        throw new Error("No input paths provided.");
+      }
+
+      const answers = await promptAnalyzeOptions(runtime);
+      paths = answers.paths;
+      top = answers.top;
+      outputFormat = answers.outputFormat;
+      options.session = answers.session;
+    } else {
+      paths = ["-"];
+    }
+  }
+
+  const format = parseFormatOption(options.format);
+  const sources = await buildInputSources(paths, runtime);
+  let report = await analyzeAccessLogSources(sources, {
+    top,
+    format,
+    formatConfig:
+      typeof options.formatConfig === "string" ? options.formatConfig : undefined,
+    since: parseDateOption(options.since, "--since"),
+    until: parseDateOption(options.until, "--until"),
+    incidentLines
+  });
+  const sessionDir = runtime.env.CITRX_SESSION_DIR;
+  let session: CitrxSession | undefined;
+
+  if (options.session !== false) {
+    session = await saveSession(report, report.inputs, sessionDir);
+    report = session.report;
+  }
+
+  if (shouldOpenTui(options, outputFormat, runtime)) {
+    session ??= await saveSession(report, report.inputs, sessionDir);
+    await openInteractiveSession(session, runtime);
+    return;
+  }
+
+  const output = renderReport(report, outputFormat, options, runtime);
+
+  if (typeof options.out === "string") {
+    await writeFile(options.out, output, "utf8");
+    return;
+  }
+
+  runtime.stdout.write(output);
 }
 
 async function buildInputSources(
@@ -312,7 +328,6 @@ function parseOutputFormat(options: Record<string, unknown>): OutputFormat {
 
 function shouldRunAnalyzeWizard(command: Command): boolean {
   const optionNames = [
-    "ai",
     "interactive",
     "json",
     "markdown",
@@ -335,6 +350,19 @@ function shouldRunAnalyzeWizard(command: Command): boolean {
     const source = command.getOptionValueSource(name);
     return source === undefined || source === "default";
   });
+}
+
+function shouldOpenTui(
+  options: Record<string, unknown>,
+  outputFormat: OutputFormat,
+  runtime: CliRuntime
+): boolean {
+  return (
+    runtime.stdinIsTTY &&
+    options.interactive !== false &&
+    outputFormat === "terminal" &&
+    typeof options.out !== "string"
+  );
 }
 
 async function openInteractiveSession(

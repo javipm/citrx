@@ -27,7 +27,7 @@
     "cli",
     "forensics",
     "openai",
-    "asn"
+    "tui"
   ],
   "license": "MIT",
   "engines": {

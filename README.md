@@ -4,7 +4,8 @@
 
 It is being built in small verified phases. The current CLI supports local
 access-log parsing, sessions, stdin, date filters, and deterministic security
-incident detection for plain text and compressed files.
+incident detection and an interactive terminal console for plain text and
+compressed files.
 
 ## Goals
 
@@ -12,7 +13,8 @@ incident detection for plain text and compressed files.
   high-cost URLs, and malformed requests.
 - Run useful local analysis before any optional AI step.
 - Keep OpenAI analysis explicit, redacted, and post-analysis.
-- Produce terminal, JSON, Markdown, and self-contained HTML reports.
+- Open an interactive terminal UI by default, with report exports available
+  when needed.
 
 ## Requirements
 
@@ -32,7 +34,8 @@ Run the CLI from source:
 
 ```bash
 pnpm run dev -- --help
-pnpm run dev -- analyze examples/access_ssl_log --json
+pnpm run dev -- examples/access_ssl_log
+pnpm run dev -- examples/access_ssl_log --json
 ```
 
 After building:
@@ -40,29 +43,30 @@ After building:
 ```bash
 node dist/cli.js --help
 node dist/cli.js --version
-node dist/cli.js analyze /path/to/access.log --json
-node dist/cli.js analyze /path/to/access.log --interactive
-node dist/cli.js analyze /path/to/access.log --incident-lines 1000
-node dist/cli.js analyze /path/to/access.log --markdown --out report.md
-node dist/cli.js analyze /path/to/access.log --html --out report.html
-node dist/cli.js analyze /path/to/access.log.gz --json
-node dist/cli.js analyze /path/to/archive.zip --json
-cat /path/to/access.log | node dist/cli.js analyze - --json
-cat /path/to/access.log | node dist/cli.js analyze --json
-node dist/cli.js analyze /path/to/access.log --format apache_combined
-node dist/cli.js analyze /path/to/access.log --since 2026-05-25T00:00:00Z --until 2026-05-25T23:59:59Z
-node dist/cli.js analyze /path/to/access.log --format custom:my_format --format-config ./formats.json
+node dist/cli.js /path/to/access.log
+node dist/cli.js /path/to/access.log --no-interactive
+node dist/cli.js /path/to/access.log --json
+node dist/cli.js /path/to/access.log --incident-lines 1000
+node dist/cli.js /path/to/access.log --markdown --out report.md
+node dist/cli.js /path/to/access.log --html --out report.html
+node dist/cli.js /path/to/access.log.gz --json
+node dist/cli.js /path/to/archive.zip --json
+cat /path/to/access.log | node dist/cli.js - --json
+cat /path/to/access.log | node dist/cli.js --json
+node dist/cli.js /path/to/access.log --format apache_combined
+node dist/cli.js /path/to/access.log --since 2026-05-25T00:00:00Z --until 2026-05-25T23:59:59Z
+node dist/cli.js /path/to/access.log --format custom:my_format --format-config ./formats.json
 node dist/cli.js session list
 node dist/cli.js session show <session-id>
 ```
 
-Running `citrx analyze` with no paths, no flags, and an interactive terminal
-starts a guided wizard for paths, output format, top-list size, and session
-persistence. Piped stdin still works without prompts.
+Running `citrx` with no paths, no flags, and an interactive terminal starts a
+guided wizard for paths, output format, top-list size, and session persistence.
+Piped stdin still works without prompts.
 
 ## Phase 1.1
 
-`citrx analyze` currently supports plain text Apache/Nginx-style access logs.
+`citrx` currently supports plain text Apache/Nginx-style access logs.
 It validates that inputs look like access logs before full analysis, then
 streams files line by line to keep memory bounded for large logs.
 
@@ -111,7 +115,21 @@ Custom format configs are JSON:
 }
 ```
 
-Interactive OpenAI follow-up is available from the terminal incident explorer.
+## Terminal UI
+
+By default, `citrx <paths...>` analyzes locally, stores a session, and opens an
+interactive terminal console.
+
+- Summary screen: global metrics, top IPs/paths/statuses, watchlist, and
+  prioritized incidents.
+- Incident screen: detailed evidence and a table of related access-log lines.
+- Navigation: `Enter` opens an incident, `b` goes back, `/` filters, `s` changes
+  sort column, `Tab` flips sort direction, `Space` selects a row, `A` selects
+  visible rows, `a` asks OpenAI, `e` exports the current context, and `q` quits.
+
+OpenAI follow-up is scoped to the current screen. From the summary it receives a
+compact global analysis. From an incident it receives only selected rows, or the
+currently visible filtered rows when nothing is selected.
 
 ## Compressed Logs
 
@@ -165,7 +183,7 @@ redacted report model, source paths, timestamps, and summary data. They do not
 copy raw log files.
 
 ```bash
-citrx analyze /path/to/access.log
+citrx /path/to/access.log
 citrx session list
 citrx session show <session-id>
 citrx session open <session-id>
