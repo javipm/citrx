@@ -30,6 +30,12 @@ type PromptState =
       lines: IncidentLogLine[];
     };
 
+interface IncidentInsights {
+  ips: TopItem[];
+  userAgents: TopItem[];
+  params: TopItem[];
+}
+
 export async function openSessionTui(
   session: CitrxSession,
   runtime: TuiRuntime
@@ -85,7 +91,7 @@ function CitrxExplorer({
     () => lines.filter((line) => selectedLineKeys.has(lineKey(line))),
     [lines, selectedLineKeys]
   );
-  const pageSize = screen === "incident" ? Math.max(6, rows - 13) : Math.max(6, rows - 14);
+  const pageSize = screen === "incident" ? Math.max(4, rows - 26) : Math.max(6, rows - 14);
   const detailRows = Math.max(6, rows - 6);
   const detailWidth = Math.max(40, columns - 8);
   const detailLines = useMemo(
@@ -437,6 +443,7 @@ function IncidentScreen({
   columns: number;
 }) {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
+  const insights = incidentInsights(matchSet?.lines ?? []);
 
   if (!incident) {
     return React.createElement(Text, null, "No incident selected");
@@ -458,6 +465,11 @@ function IncidentScreen({
         `matches=${matchSet?.totalMatches ?? 0} stored=${matchSet?.storedLines ?? 0}${matchSet?.truncated ? " truncated: increase --incident-lines for more rows" : ""}`
       )
     ),
+    React.createElement(IncidentInsightsPanel, {
+      insights,
+      truncated: Boolean(matchSet?.truncated),
+      columns
+    }),
     React.createElement(LineTable, {
       lines,
       pageLines,
@@ -469,6 +481,63 @@ function IncidentScreen({
       selectedLineKeys,
       columns
     })
+  );
+}
+
+function IncidentInsightsPanel({
+  insights,
+  truncated,
+  columns
+}: {
+  insights: IncidentInsights;
+  truncated: boolean;
+  columns: number;
+}) {
+  const panelWidth = Math.max(28, Math.floor((columns - 8) / 3));
+
+  return React.createElement(
+    Box,
+    { flexDirection: "row", gap: 1 },
+    React.createElement(TopListPanel, {
+      title: `Top IPs${truncated ? " (stored)" : ""}`,
+      items: insights.ips,
+      width: panelWidth
+    }),
+    React.createElement(TopListPanel, {
+      title: `Top UA${truncated ? " (stored)" : ""}`,
+      items: insights.userAgents,
+      width: panelWidth
+    }),
+    React.createElement(TopListPanel, {
+      title: `Top params${truncated ? " (stored)" : ""}`,
+      items: insights.params,
+      width: panelWidth
+    })
+  );
+}
+
+function TopListPanel({
+  title,
+  items,
+  width
+}: {
+  title: string;
+  items: TopItem[];
+  width: number;
+}) {
+  return React.createElement(
+    Box,
+    { flexDirection: "column", borderStyle: "single", paddingX: 1, width },
+    React.createElement(Text, { bold: true }, title),
+    ...(items.length > 0
+      ? items.slice(0, 10).map((item) =>
+          React.createElement(
+            Text,
+            { key: item.value },
+            `${String(item.count).padStart(5)} ${truncate(item.value, width - 9)}`
+          )
+        )
+      : [React.createElement(Text, { key: "empty", color: "gray" }, "none")])
   );
 }
 
@@ -609,6 +678,65 @@ function visibleLines(
   return lines
     .filter((line) => (needle ? searchableLine(line).includes(needle) : true))
     .sort((a, b) => compareLine(a, b, sortKey, sortDirection));
+}
+
+function incidentInsights(lines: IncidentLogLine[]): IncidentInsights {
+  const ips = new Map<string, number>();
+  const userAgents = new Map<string, number>();
+  const params = new Map<string, number>();
+
+  for (const line of lines) {
+    incrementMap(ips, line.ip);
+    incrementMap(userAgents, userAgentLabel(line.userAgent));
+
+    for (const param of requestParamNames(line.target)) {
+      incrementMap(params, param);
+    }
+  }
+
+  return {
+    ips: topMapItems(ips, 10),
+    userAgents: topMapItems(userAgents, 10),
+    params: topMapItems(params, 10)
+  };
+}
+
+function requestParamNames(target: string): string[] {
+  try {
+    const url = new URL(target, "http://citrx.local");
+    return [...new Set([...url.searchParams.keys()])];
+  } catch {
+    const queryStart = target.indexOf("?");
+
+    if (queryStart === -1) {
+      return [];
+    }
+
+    return [
+      ...new Set(
+        target
+          .slice(queryStart + 1)
+          .split("&")
+          .map((part) => part.split("=")[0]?.trim())
+          .filter((part): part is string => Boolean(part))
+      )
+    ];
+  }
+}
+
+function incrementMap(map: Map<string, number>, key: string): void {
+  if (!key || key === "-") {
+    return;
+  }
+
+  map.set(key, (map.get(key) ?? 0) + 1);
+}
+
+function topMapItems(map: Map<string, number>, limit: number): TopItem[] {
+  return [...map.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([value, count]) => ({ value, count }));
 }
 
 function compareLine(
