@@ -41,6 +41,8 @@ After building:
 node dist/cli.js --help
 node dist/cli.js --version
 node dist/cli.js analyze /path/to/access.log --json
+node dist/cli.js analyze /path/to/access.log --markdown --out report.md
+node dist/cli.js analyze /path/to/access.log --html --out report.html
 node dist/cli.js analyze /path/to/access.log.gz --json
 node dist/cli.js analyze /path/to/archive.zip --json
 cat /path/to/access.log | node dist/cli.js analyze - --json
@@ -102,7 +104,7 @@ Custom format configs are JSON:
 }
 ```
 
-GeoIP, AI follow-up, Markdown, and HTML reports are planned in later phases.
+GeoIP and AI follow-up are planned in later phases.
 
 ## Compressed Logs
 
@@ -117,6 +119,19 @@ memory first. Supported inputs:
 
 ZIP and TAR archives are scanned for candidate log entries such as `access.log`,
 plain extensionless logs, `.log`, `.txt`, `.gz`, and `.br` files.
+
+## Reports
+
+Supported report outputs:
+
+- terminal output with colors by default
+- `--json`
+- `--markdown`
+- `--html`
+
+Use `--out <path>` to write a report to disk. HTML reports are self-contained
+and do not load external assets. Use `--no-color` or `NO_COLOR=1` to disable
+terminal colors.
 
 ## Local Detection
 

@@ -2,10 +2,18 @@ import pc from "picocolors";
 
 import type { AnalyzeReport, Incident, TopItem } from "../analysis/types.js";
 
-export function renderTerminalReport(report: AnalyzeReport): string {
+export interface TerminalReportOptions {
+  color?: boolean;
+}
+
+export function renderTerminalReport(
+  report: AnalyzeReport,
+  options: TerminalReportOptions = {}
+): string {
+  const colors = pc.createColors(options.color ?? pc.isColorSupported);
   const lines: string[] = [];
 
-  lines.push(`${pc.bold("citrx")} ${pc.green("access log analysis")}`);
+  lines.push(`${colors.bold("citrx")} ${colors.green("access log analysis")}`);
   lines.push("");
   if (report.sessionId) {
     lines.push(`Session: ${report.sessionId}`);
@@ -21,17 +29,21 @@ export function renderTerminalReport(report: AnalyzeReport): string {
     `Formats: ${[...new Set(report.inputFormats.map((input) => input.format))].join(", ")}`
   );
   lines.push("");
-  lines.push(section("Top IPs", report.topIps));
-  lines.push(section("Top paths", report.topPaths));
-  lines.push(section("Methods", report.topMethods));
-  lines.push(section("Statuses", report.topStatuses));
-  lines.push(incidentSection(report.incidents));
+  lines.push(section("Top IPs", report.topIps, colors));
+  lines.push(section("Top paths", report.topPaths, colors));
+  lines.push(section("Methods", report.topMethods, colors));
+  lines.push(section("Statuses", report.topStatuses, colors));
+  lines.push(incidentSection(report.incidents, colors));
 
   return `${lines.join("\n")}\n`;
 }
 
-function section(title: string, items: TopItem[]): string {
-  const lines = [pc.bold(title)];
+function section(
+  title: string,
+  items: TopItem[],
+  colors: ReturnType<typeof pc.createColors>
+): string {
+  const lines = [colors.bold(title)];
 
   if (items.length === 0) {
     lines.push("  none");
@@ -45,8 +57,11 @@ function section(title: string, items: TopItem[]): string {
   return lines.join("\n");
 }
 
-function incidentSection(incidents: Incident[]): string {
-  const lines = [pc.bold("Incidents")];
+function incidentSection(
+  incidents: Incident[],
+  colors: ReturnType<typeof pc.createColors>
+): string {
+  const lines = [colors.bold("Incidents")];
 
   if (incidents.length === 0) {
     lines.push("  none");
@@ -57,7 +72,7 @@ function incidentSection(incidents: Incident[]): string {
     const count = incident.evidence.find((item) => item.key === "count")?.value;
     const suffix = count ? ` count=${count}` : "";
     lines.push(
-      `  ${severity(incident.severity)} ${incident.score.toString().padStart(3, " ")}  ${incident.title}${suffix}`
+      `  ${severity(incident.severity, colors)} ${incident.score.toString().padStart(3, " ")}  ${incident.title}${suffix}`
     );
 
     const path = incident.evidence.find((item) => item.key === "path")?.value;
@@ -73,17 +88,20 @@ function incidentSection(incidents: Incident[]): string {
   return lines.join("\n");
 }
 
-function severity(value: Incident["severity"]): string {
+function severity(
+  value: Incident["severity"],
+  colors: ReturnType<typeof pc.createColors>
+): string {
   switch (value) {
     case "critical":
-      return pc.red(value.padEnd(8, " "));
+      return colors.red(value.padEnd(8, " "));
     case "high":
-      return pc.magenta(value.padEnd(8, " "));
+      return colors.magenta(value.padEnd(8, " "));
     case "medium":
-      return pc.yellow(value.padEnd(8, " "));
+      return colors.yellow(value.padEnd(8, " "));
     case "low":
-      return pc.cyan(value.padEnd(8, " "));
+      return colors.cyan(value.padEnd(8, " "));
     case "info":
-      return pc.dim(value.padEnd(8, " "));
+      return colors.dim(value.padEnd(8, " "));
   }
 }

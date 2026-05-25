@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -207,6 +207,68 @@ describe("citrx CLI", () => {
     expect(report.incidents.flatMap((incident) => incident.samples).join("\n")).toContain(
       "token=%5BREDACTED%5D"
     );
+  });
+
+  it("writes Markdown and HTML reports", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-output-"));
+    const logFile = join(directory, "access.log");
+    const htmlFile = join(directory, "report.html");
+    await writeFile(
+      logFile,
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /.env?token=secret HTTP/1.1" 404 12 "-" "Mozilla/5.0"\n'
+    );
+
+    const markdownOut = memoryStream();
+    const markdownCode = await runCli(
+      ["node", "citrx", "analyze", logFile, "--markdown", "--no-session"],
+      {
+        stdout: markdownOut.stream,
+        stderr: memoryStream().stream,
+        stdinIsTTY: true
+      }
+    );
+
+    expect(markdownCode).toBe(0);
+    expect(markdownOut.output()).toContain("# citrx access log analysis");
+    expect(markdownOut.output()).toContain("Sensitive file probe");
+
+    const htmlCode = await runCli(
+      ["node", "citrx", "analyze", logFile, "--html", "--out", htmlFile, "--no-session"],
+      {
+        stdout: memoryStream().stream,
+        stderr: memoryStream().stream,
+        stdinIsTTY: true
+      }
+    );
+
+    expect(htmlCode).toBe(0);
+    const html = await readFile(htmlFile, "utf8");
+    expect(html).toContain("<!doctype html>");
+    expect(html).toContain("citrx access log analysis");
+    expect(html).toContain("Sensitive file probe");
+    expect(html).not.toMatch(/https?:\/\//);
+  });
+
+  it("rejects multiple report output formats", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-output-"));
+    const logFile = join(directory, "access.log");
+    await writeFile(
+      logFile,
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET / HTTP/1.1" 200 12 "-" "Mozilla/5.0"\n'
+    );
+    const stderr = memoryStream();
+
+    const code = await runCli(
+      ["node", "citrx", "analyze", logFile, "--json", "--html", "--no-session"],
+      {
+        stdout: memoryStream().stream,
+        stderr: stderr.stream,
+        stdinIsTTY: true
+      }
+    );
+
+    expect(code).toBe(1);
+    expect(stderr.output()).toContain("Choose only one output format");
   });
 
   it("persists analysis sessions by default", async () => {

@@ -7,6 +7,8 @@ import type { AnalyzeInputSource } from "./analysis/types.js";
 import { discoverInputFiles } from "./input/files.js";
 import { isAccessLogFormatId } from "./parser/access-log.js";
 import type { FormatChoice } from "./parser/access-log.js";
+import { renderHtmlReport } from "./report/html.js";
+import { renderMarkdownReport } from "./report/markdown.js";
 import { renderTerminalReport } from "./report/terminal.js";
 import {
   deleteSession,
@@ -72,6 +74,7 @@ export function createProgram(runtime: CliRuntime): Command {
 
       const top = parseTopOption(options.top);
       const format = parseFormatOption(options.format);
+      const outputFormat = parseOutputFormat(options);
       const sources = await buildInputSources(paths, runtime);
       let report = await analyzeAccessLogSources(sources, {
         top,
@@ -88,9 +91,7 @@ export function createProgram(runtime: CliRuntime): Command {
         report = session.report;
       }
 
-      const output = options.json
-        ? `${JSON.stringify(report, null, 2)}\n`
-        : renderTerminalReport(report);
+      const output = renderReport(report, outputFormat, options, runtime);
 
       if (typeof options.out === "string") {
         await writeFile(options.out, output, "utf8");
@@ -149,12 +150,12 @@ export function createProgram(runtime: CliRuntime): Command {
     .description("Export a saved session report.")
     .argument("<id>", "Session id.")
     .option("--json", "Write machine-readable JSON output.")
+    .option("--markdown", "Write Markdown output.")
+    .option("--html", "Write a self-contained HTML report.")
     .option("--out <path>", "Write export output to a file.")
     .action(async (id: string, options: Record<string, unknown>) => {
       const saved = await readSession(id, runtime.env.CITRX_SESSION_DIR);
-      const output = options.json
-        ? `${JSON.stringify(saved.report, null, 2)}\n`
-        : renderTerminalReport(saved.report);
+      const output = renderReport(saved.report, parseOutputFormat(options), options, runtime);
 
       if (typeof options.out === "string") {
         await writeFile(options.out, output, "utf8");
@@ -241,6 +242,42 @@ function parseDateOption(value: unknown, flag: string): Date | undefined {
   }
 
   return date;
+}
+
+type OutputFormat = "terminal" | "json" | "markdown" | "html";
+
+function parseOutputFormat(options: Record<string, unknown>): OutputFormat {
+  const requested = [
+    options.json ? "json" : null,
+    options.markdown ? "markdown" : null,
+    options.html ? "html" : null
+  ].filter(Boolean);
+
+  if (requested.length > 1) {
+    throw new Error("Choose only one output format: --json, --markdown, or --html.");
+  }
+
+  return (requested[0] as OutputFormat | undefined) ?? "terminal";
+}
+
+function renderReport(
+  report: Parameters<typeof renderTerminalReport>[0],
+  format: OutputFormat,
+  options: Record<string, unknown>,
+  runtime: CliRuntime
+): string {
+  switch (format) {
+    case "json":
+      return `${JSON.stringify(report, null, 2)}\n`;
+    case "markdown":
+      return renderMarkdownReport(report);
+    case "html":
+      return renderHtmlReport(report);
+    case "terminal":
+      return renderTerminalReport(report, {
+        color: options.color !== false && runtime.env.NO_COLOR === undefined
+      });
+  }
 }
 
 export async function runCli(
