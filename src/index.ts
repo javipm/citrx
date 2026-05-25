@@ -4,6 +4,9 @@ import type { Readable, Writable } from "node:stream";
 
 import { analyzeAccessLogSources } from "./analysis/access-log.js";
 import type { AnalyzeInputSource } from "./analysis/types.js";
+import { enrichReportWithGeo } from "./geo/enrich.js";
+import { createIpWhoisLookup } from "./geo/ipwhois.js";
+import type { GeoLookup } from "./geo/ipwhois.js";
 import { discoverInputFiles } from "./input/files.js";
 import { isAccessLogFormatId } from "./parser/access-log.js";
 import type { FormatChoice } from "./parser/access-log.js";
@@ -34,6 +37,7 @@ export interface CliRuntime {
   stdinIsTTY: boolean;
   env: NodeJS.ProcessEnv;
   promptAnalyze?: () => Promise<AnalyzeWizardAnswers>;
+  geoLookup?: GeoLookup;
 }
 
 export function createProgram(runtime: CliRuntime): Command {
@@ -104,6 +108,14 @@ export function createProgram(runtime: CliRuntime): Command {
         until: parseDateOption(options.until, "--until")
       });
       const sessionDir = runtime.env.CITRX_SESSION_DIR;
+
+      if (options.geo) {
+        report = await enrichReportWithGeo(report, {
+          lookup: runtime.geoLookup ?? createIpWhoisLookup(runtime.env),
+          limit: top,
+          delayMs: runtime.geoLookup ? 0 : 250
+        });
+      }
 
       if (options.session !== false) {
         const session = await saveSession(report, report.inputs, sessionDir);
@@ -382,7 +394,8 @@ export async function runCli(
     stdin: runtime.stdin ?? process.stdin,
     stdinIsTTY: runtime.stdinIsTTY ?? Boolean(process.stdin.isTTY),
     env: runtime.env ?? process.env,
-    promptAnalyze: runtime.promptAnalyze
+    promptAnalyze: runtime.promptAnalyze,
+    geoLookup: runtime.geoLookup
   };
 
   try {

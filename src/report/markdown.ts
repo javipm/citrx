@@ -30,6 +30,18 @@ export function renderMarkdownReport(report: AnalyzeReport): string {
     topSection("Top Paths", report.topPaths),
     topSection("Methods", report.topMethods),
     topSection("Statuses", report.topStatuses),
+    ...(report.geo
+      ? [
+          "## GeoIP / ASN",
+          "",
+          `Provider: ${report.geo.provider}`,
+          `Looked up: ${report.geo.lookedUp}`,
+          `Failed: ${report.geo.failed}`,
+          "",
+          topSection("Countries", report.geo.topCountries),
+          topSection("ASNs / Organizations", report.geo.topAsns)
+        ]
+      : []),
     incidentSection(report.incidents)
   ];
 

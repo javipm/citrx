@@ -3,6 +3,24 @@ export interface TopItem {
   count: number;
 }
 
+export interface GeoIpInfo {
+  ip: string;
+  country: string | null;
+  countryCode: string | null;
+  asn: string | null;
+  org: string | null;
+  cached: boolean;
+}
+
+export interface GeoSummary {
+  provider: string;
+  lookedUp: number;
+  failed: number;
+  topCountries: TopItem[];
+  topAsns: TopItem[];
+  ips: GeoIpInfo[];
+}
+
 export type IncidentSeverity = "info" | "low" | "medium" | "high" | "critical";
 
 export interface IncidentEvidence {
@@ -63,4 +81,5 @@ export interface AnalyzeReport {
   topMethods: TopItem[];
   topStatuses: TopItem[];
   incidents: Incident[];
+  geo?: GeoSummary;
 }

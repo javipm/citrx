@@ -108,7 +108,7 @@ Custom format configs are JSON:
 }
 ```
 
-GeoIP and AI follow-up are planned in later phases.
+AI follow-up is planned in a later phase.
 
 ## Compressed Logs
 
@@ -136,6 +136,19 @@ Supported report outputs:
 Use `--out <path>` to write a report to disk. HTML reports are self-contained
 and do not load external assets. Use `--no-color` or `NO_COLOR=1` to disable
 terminal colors.
+
+## GeoIP / ASN
+
+Pass `--geo` to enrich the top IPs with country, ASN, and organization data
+after the local analysis finishes:
+
+```bash
+citrx analyze /path/to/access.log --geo
+```
+
+GeoIP uses the free `ipwho.is` API, runs sequential lookups to be gentle with
+rate limits, and caches responses for seven days. Set `CITRX_CACHE_DIR` to
+override the cache directory.
 
 ## Local Detection
 

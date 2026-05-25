@@ -209,6 +209,54 @@ describe("citrx CLI", () => {
     );
   });
 
+  it("enriches top IPs with GeoIP and ASN data when requested", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-geo-"));
+    const logFile = join(directory, "access.log");
+    await writeFile(
+      logFile,
+      [
+        '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /one HTTP/1.1" 200 10 "-" "Mozilla/5.0"',
+        '203.0.113.10 - - [25/May/2026:03:12:50 +0200] "GET /two HTTP/1.1" 200 20 "-" "Mozilla/5.0"',
+        '198.51.100.2 - - [25/May/2026:03:12:51 +0200] "GET /three HTTP/1.1" 200 30 "-" "Mozilla/5.0"'
+      ].join("\n")
+    );
+    const stdout = memoryStream();
+
+    const code = await runCli(
+      ["node", "citrx", "analyze", logFile, "--geo", "--json", "--no-session"],
+      {
+        stdout: stdout.stream,
+        stderr: memoryStream().stream,
+        stdinIsTTY: true,
+        geoLookup: async (ip) => ({
+          ip,
+          country: ip === "203.0.113.10" ? "Spain" : "United States",
+          countryCode: ip === "203.0.113.10" ? "ES" : "US",
+          asn: ip === "203.0.113.10" ? "AS45102" : "AS64496",
+          org: ip === "203.0.113.10" ? "Alibaba" : "ExampleNet",
+          cached: false
+        })
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.output())).toMatchObject({
+      geo: {
+        provider: "ipwho.is",
+        lookedUp: 2,
+        failed: 0,
+        topCountries: [
+          { value: "Spain", count: 2 },
+          { value: "United States", count: 1 }
+        ],
+        topAsns: [
+          { value: "AS45102 Alibaba", count: 2 },
+          { value: "AS64496 ExampleNet", count: 1 }
+        ]
+      }
+    });
+  });
+
   it("writes Markdown and HTML reports", async () => {
     const directory = await mkdtemp(join(tmpdir(), "citrx-output-"));
     const logFile = join(directory, "access.log");

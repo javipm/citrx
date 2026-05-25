@@ -33,6 +33,10 @@ export function renderTerminalReport(
   lines.push(section("Top paths", report.topPaths, colors));
   lines.push(section("Methods", report.topMethods, colors));
   lines.push(section("Statuses", report.topStatuses, colors));
+  if (report.geo) {
+    lines.push(section("Geo countries", report.geo.topCountries, colors));
+    lines.push(section("Geo ASN/org", report.geo.topAsns, colors));
+  }
   lines.push(incidentSection(report.incidents, colors));
 
   return `${lines.join("\n")}\n`;
