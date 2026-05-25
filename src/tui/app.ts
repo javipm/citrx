@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Box, Text, render, useApp, useInput } from "ink";
+import { Box, Text, render, useApp, useInput, useWindowSize } from "ink";
 import { input } from "@inquirer/prompts";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -36,7 +36,8 @@ export async function openSessionTui(
     {
       stdin: runtime.stdin as NodeJS.ReadStream,
       stdout: runtime.stdout as NodeJS.WriteStream,
-      stderr: runtime.stderr as NodeJS.WriteStream
+      stderr: runtime.stderr as NodeJS.WriteStream,
+      alternateScreen: true
     }
   );
 
@@ -51,6 +52,7 @@ function CitrxExplorer({
   runtime: TuiRuntime;
 }) {
   const { exit } = useApp();
+  const { rows, columns } = useWindowSize();
   const [screen, setScreen] = useState<Screen>("summary");
   const [incidentIndex, setIncidentIndex] = useState(0);
   const [lineIndex, setLineIndex] = useState(0);
@@ -200,7 +202,7 @@ function CitrxExplorer({
 
   return React.createElement(
     Box,
-    { flexDirection: "column", paddingX: 1 },
+    { flexDirection: "column", paddingX: 1, width: columns, height: rows },
     React.createElement(Header, { session }),
     screen === "summary"
       ? React.createElement(SummaryScreen, { report: session.report, incidents, incidentIndex })
