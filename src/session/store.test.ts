@@ -26,6 +26,7 @@ function reportFixture(): AnalyzeReport {
       files: 1,
       totalLines: 1,
       parsedLines: 1,
+      filteredLines: 0,
       invalidLines: 0,
       totalBytes: 123
     },

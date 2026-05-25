@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Writable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 
 import { runCli } from "./index.js";
@@ -95,6 +95,7 @@ describe("citrx CLI", () => {
         files: 1,
         totalLines: 3,
         parsedLines: 3,
+        filteredLines: 0,
         invalidLines: 0,
         totalBytes: 165
       }
@@ -170,6 +171,127 @@ describe("citrx CLI", () => {
 
     expect(deleteCode).toBe(0);
     await expect(readdir(sessionDir)).resolves.toEqual([]);
+  });
+
+  it("reads access logs from stdin", async () => {
+    const stdout = memoryStream();
+    const stderr = memoryStream();
+    const input = Readable.from([
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /stdin HTTP/1.1" 200 123 "-" "Mozilla/5.0"\n'
+    ]);
+
+    const code = await runCli(["node", "citrx", "analyze", "-", "--json", "--no-session"], {
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      stdin: input,
+      stdinIsTTY: false
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.output())).toMatchObject({
+      inputs: ["-"],
+      summary: {
+        totalLines: 1,
+        parsedLines: 1,
+        totalBytes: 123
+      },
+      topPaths: [{ value: "/stdin", count: 1 }]
+    });
+    expect(stderr.output()).toBe("");
+  });
+
+  it("reads piped stdin when no paths are provided", async () => {
+    const stdout = memoryStream();
+    const input = Readable.from([
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /implicit-stdin HTTP/1.1" 200 10 "-" "Mozilla/5.0"\n'
+    ]);
+
+    const code = await runCli(["node", "citrx", "analyze", "--json", "--no-session"], {
+      stdout: stdout.stream,
+      stderr: memoryStream().stream,
+      stdin: input,
+      stdinIsTTY: false
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.output())).toMatchObject({
+      inputs: ["-"],
+      topPaths: [{ value: "/implicit-stdin", count: 1 }]
+    });
+  });
+
+  it("applies since and until filters", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    await writeFile(
+      logFile,
+      [
+        '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /old HTTP/1.1" 200 100 "-" "Mozilla/5.0"',
+        '203.0.113.10 - - [25/May/2026:04:12:49 +0200] "GET /kept HTTP/1.1" 200 200 "-" "Mozilla/5.0"',
+        '203.0.113.10 - - [25/May/2026:05:12:49 +0200] "GET /new HTTP/1.1" 200 300 "-" "Mozilla/5.0"'
+      ].join("\n")
+    );
+    const stdout = memoryStream();
+
+    const code = await runCli(
+      [
+        "node",
+        "citrx",
+        "analyze",
+        logFile,
+        "--json",
+        "--no-session",
+        "--since",
+        "2026-05-25T02:00:00Z",
+        "--until",
+        "2026-05-25T02:30:59Z"
+      ],
+      {
+        stdout: stdout.stream,
+        stderr: memoryStream().stream,
+        stdinIsTTY: true
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.output())).toMatchObject({
+      summary: {
+        totalLines: 3,
+        parsedLines: 1,
+        filteredLines: 2,
+        totalBytes: 200
+      },
+      topPaths: [{ value: "/kept", count: 1 }]
+    });
+  });
+
+  it("discovers access logs inside directories", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-dir-"));
+    await writeFile(
+      join(directory, "a.log"),
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /a HTTP/1.1" 200 10 "-" "Mozilla/5.0"\n'
+    );
+    await writeFile(
+      join(directory, "b.log"),
+      '203.0.113.11 - - [25/May/2026:03:12:50 +0200] "GET /b HTTP/1.1" 200 20 "-" "Mozilla/5.0"\n'
+    );
+    const stdout = memoryStream();
+
+    const code = await runCli(["node", "citrx", "analyze", directory, "--json", "--no-session"], {
+      stdout: stdout.stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.output())).toMatchObject({
+      summary: {
+        files: 2,
+        totalLines: 2,
+        parsedLines: 2,
+        totalBytes: 30
+      }
+    });
   });
 
   it("skips session persistence with --no-session", async () => {
@@ -284,6 +406,7 @@ describe("citrx CLI", () => {
       summary: {
         totalLines: 2,
         parsedLines: 2,
+        filteredLines: 0,
         totalBytes: 333
       },
       topPaths: [

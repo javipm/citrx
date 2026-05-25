@@ -12,6 +12,9 @@ export function renderTerminalReport(report: AnalyzeReport): string {
   }
   lines.push(`Files: ${report.summary.files}`);
   lines.push(`Lines: ${report.summary.parsedLines}/${report.summary.totalLines}`);
+  if (report.summary.filteredLines > 0) {
+    lines.push(`Filtered: ${report.summary.filteredLines}`);
+  }
   lines.push(`Invalid: ${report.summary.invalidLines}`);
   lines.push(`Bytes served: ${report.summary.totalBytes}`);
   lines.push(

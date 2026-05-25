@@ -41,7 +41,10 @@ After building:
 node dist/cli.js --help
 node dist/cli.js --version
 node dist/cli.js analyze /path/to/access.log --json
+cat /path/to/access.log | node dist/cli.js analyze - --json
+cat /path/to/access.log | node dist/cli.js analyze --json
 node dist/cli.js analyze /path/to/access.log --format apache_combined
+node dist/cli.js analyze /path/to/access.log --since 2026-05-25T00:00:00Z --until 2026-05-25T23:59:59Z
 node dist/cli.js analyze /path/to/access.log --format custom:my_format --format-config ./formats.json
 node dist/cli.js session list
 node dist/cli.js session show <session-id>
@@ -56,6 +59,7 @@ streams files line by line to keep memory bounded for large logs.
 Current report data:
 
 - total, parsed, and invalid line counts
+- filtered line counts when `--since`/`--until` are used
 - total bytes served
 - detected access-log format per input
 - top IPs

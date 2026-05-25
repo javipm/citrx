@@ -7,6 +7,7 @@ export interface AnalyzeSummary {
   files: number;
   totalLines: number;
   parsedLines: number;
+  filteredLines: number;
   invalidLines: number;
   totalBytes: number;
 }
@@ -18,6 +19,17 @@ export interface InputFormatSummary {
   parsedSampleLines: number;
   sampleParseRatio: number;
 }
+
+export type AnalyzeInputSource =
+  | {
+      kind: "file";
+      path: string;
+    }
+  | {
+      kind: "stream";
+      label: string;
+      stream: NodeJS.ReadableStream;
+    };
 
 export interface AnalyzeReport {
   app: "citrx";

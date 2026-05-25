@@ -2,7 +2,8 @@ import { Command, CommanderError } from "commander";
 import { writeFile } from "node:fs/promises";
 import type { Readable, Writable } from "node:stream";
 
-import { analyzeAccessLogs } from "./analysis/access-log.js";
+import { analyzeAccessLogSources } from "./analysis/access-log.js";
+import type { AnalyzeInputSource } from "./analysis/types.js";
 import { discoverInputFiles } from "./input/files.js";
 import { isAccessLogFormatId } from "./parser/access-log.js";
 import type { FormatChoice } from "./parser/access-log.js";
@@ -62,26 +63,28 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--debug", "Print debug details on failure.")
     .action(async (paths: string[], options: Record<string, unknown>) => {
       if (paths.length === 0) {
-        throw new Error(
-          runtime.stdinIsTTY
-            ? "No input paths provided. Interactive mode arrives in Phase 7."
-            : "Reading from stdin arrives in Phase 3. Pass a file path for now."
-        );
+        if (runtime.stdinIsTTY) {
+          throw new Error("No input paths provided. Interactive mode arrives in Phase 7.");
+        }
+
+        paths = ["-"];
       }
 
       const top = parseTopOption(options.top);
       const format = parseFormatOption(options.format);
-      const files = await discoverInputFiles(paths);
-      let report = await analyzeAccessLogs(files, {
+      const sources = await buildInputSources(paths, runtime);
+      let report = await analyzeAccessLogSources(sources, {
         top,
         format,
         formatConfig:
-          typeof options.formatConfig === "string" ? options.formatConfig : undefined
+          typeof options.formatConfig === "string" ? options.formatConfig : undefined,
+        since: parseDateOption(options.since, "--since"),
+        until: parseDateOption(options.until, "--until")
       });
       const sessionDir = runtime.env.CITRX_SESSION_DIR;
 
       if (options.session !== false) {
-        const session = await saveSession(report, files, sessionDir);
+        const session = await saveSession(report, report.inputs, sessionDir);
         report = session.report;
       }
 
@@ -173,6 +176,37 @@ export function createProgram(runtime: CliRuntime): Command {
   return program;
 }
 
+async function buildInputSources(
+  paths: string[],
+  runtime: CliRuntime
+): Promise<AnalyzeInputSource[]> {
+  const filePaths = paths.filter((inputPath) => inputPath !== "-");
+  const sources: AnalyzeInputSource[] = [];
+
+  if (filePaths.length > 0) {
+    sources.push(
+      ...(await discoverInputFiles(filePaths)).map((filePath) => ({
+        kind: "file" as const,
+        path: filePath
+      }))
+    );
+  }
+
+  if (paths.includes("-")) {
+    if (runtime.stdinIsTTY) {
+      throw new Error("Stdin was requested with '-', but no piped input was detected.");
+    }
+
+    sources.push({
+      kind: "stream",
+      label: "-",
+      stream: runtime.stdin
+    });
+  }
+
+  return sources;
+}
+
 function parseFormatOption(value: unknown): FormatChoice {
   const format = String(value ?? "auto");
 
@@ -193,6 +227,20 @@ function parseTopOption(value: unknown): number {
   }
 
   return parsed;
+}
+
+function parseDateOption(value: unknown, flag: string): Date | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const date = new Date(String(value));
+
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`${flag} must be a valid date.`);
+  }
+
+  return date;
 }
 
 export async function runCli(
