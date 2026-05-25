@@ -1,0 +1,30 @@
+# Local agent instructions
+AGENTS.md
+PLAN.md
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build and coverage
+dist/
+coverage/
+.vitest/
+
+# Local development fixtures
+examples/
+
+# Runtime/session data
+.citrx/
+*.log
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

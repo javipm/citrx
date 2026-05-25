@@ -1,0 +1,54 @@
+{
+  "name": "citrx",
+  "version": "0.1.0",
+  "description": "CLI for local-first Apache/Nginx access log analysis.",
+  "type": "module",
+  "packageManager": "pnpm@11.1.0",
+  "bin": {
+    "citrx": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "tsx src/cli.ts",
+    "prepack": "pnpm run build"
+  },
+  "keywords": [
+    "apache",
+    "nginx",
+    "access-log",
+    "security",
+    "cli",
+    "forensics",
+    "openai",
+    "asn"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.15"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.0.0",
+    "commander": "^14.0.2",
+    "openai": "^6.10.0",
+    "picocolors": "^1.1.1",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.14"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}
