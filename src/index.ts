@@ -1,7 +1,10 @@
 import { Command, CommanderError } from "commander";
-import pc from "picocolors";
+import { writeFile } from "node:fs/promises";
 import type { Readable, Writable } from "node:stream";
 
+import { analyzeAccessLogs } from "./analysis/access-log.js";
+import { discoverInputFiles } from "./input/files.js";
+import { renderTerminalReport } from "./report/terminal.js";
 import { APP_NAME, VERSION } from "./version.js";
 
 export interface CliRuntime {
@@ -41,29 +44,41 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--exclude <glob>", "Exclude paths matching this glob.")
     .option("--no-color", "Disable colored terminal output.")
     .option("--debug", "Print debug details on failure.")
-    .action((paths: string[], options: Record<string, unknown>) => {
-      const hasInput = paths.length > 0 || !runtime.stdinIsTTY;
-      const summary = {
-        app: APP_NAME,
-        phase: 0,
-        status: "scaffold-ready",
-        message: hasInput
-          ? "The analyze command is wired. Log parsing arrives in Phase 1."
-          : "Interactive mode arrives in Phase 7.",
-        paths,
-        options: Object.keys(options).sort()
-      };
+    .action(async (paths: string[], options: Record<string, unknown>) => {
+      if (paths.length === 0) {
+        throw new Error(
+          runtime.stdinIsTTY
+            ? "No input paths provided. Interactive mode arrives in Phase 7."
+            : "Reading from stdin arrives in Phase 3. Pass a file path for now."
+        );
+      }
 
-      if (options.json) {
-        runtime.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+      const top = parseTopOption(options.top);
+      const files = await discoverInputFiles(paths);
+      const report = await analyzeAccessLogs(files, { top });
+      const output = options.json
+        ? `${JSON.stringify(report, null, 2)}\n`
+        : renderTerminalReport(report);
+
+      if (typeof options.out === "string") {
+        await writeFile(options.out, output, "utf8");
         return;
       }
 
-      runtime.stdout.write(`${pc.bold(APP_NAME)} ${pc.green("Phase 0 ready")}\n`);
-      runtime.stdout.write(`${summary.message}\n`);
+      runtime.stdout.write(output);
     });
 
   return program;
+}
+
+function parseTopOption(value: unknown): number {
+  const parsed = Number.parseInt(String(value ?? "20"), 10);
+
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error("--top must be a positive integer.");
+  }
+
+  return parsed;
 }
 
 export async function runCli(
