@@ -58,6 +58,8 @@ function CitrxExplorer({
   const [sortKey, setSortKey] = useState<SortKey>("timestamp");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [selectedLineKeys, setSelectedLineKeys] = useState<Set<string>>(new Set());
+  const [detailLine, setDetailLine] = useState<IncidentLogLine | undefined>();
+  const [promptActive, setPromptActive] = useState(false);
   const [message, setMessage] = useState("Ready");
   const [busy, setBusy] = useState(false);
   const incidents = session.report.incidents;
@@ -82,6 +84,17 @@ function CitrxExplorer({
   const pageLines = lines.slice(pageStart, pageStart + pageSize);
 
   useInput((inputValue, key) => {
+    if (promptActive) {
+      return;
+    }
+
+    if (detailLine) {
+      if (inputValue === "d" || inputValue === "b" || key.escape || key.backspace) {
+        setDetailLine(undefined);
+      }
+      return;
+    }
+
     if (inputValue === "q" || (screen === "summary" && key.escape)) {
       exit();
       return;
@@ -109,6 +122,7 @@ function CitrxExplorer({
         setLineIndex(0);
         setFilter("");
         setSelectedLineKeys(new Set());
+        setDetailLine(undefined);
         setMessage(`Opened ${incident.id}`);
         return;
       }
@@ -120,7 +134,8 @@ function CitrxExplorer({
           scope: "summary",
           lines: [],
           setBusy,
-          setMessage
+          setMessage,
+          setPromptActive
         });
       }
 
@@ -157,6 +172,14 @@ function CitrxExplorer({
       return;
     }
 
+    if (inputValue === "d") {
+      const line = lines[lineIndex];
+      if (line) {
+        setDetailLine(line);
+      }
+      return;
+    }
+
     if (inputValue === "A") {
       setSelectedLineKeys(new Set(lines.map(lineKey)));
       setMessage(`Selected ${lines.length} visible lines`);
@@ -171,12 +194,15 @@ function CitrxExplorer({
       return;
     }
 
-    if (inputValue === "/") {
-      void promptFilter().then((value) => {
+    if (inputValue === "/" || inputValue === "f" || inputValue === "F") {
+      setPromptActive(true);
+      void promptFilter(filter).then((value) => {
         setFilter(value);
         setLineIndex(0);
         setSelectedLineKeys(new Set());
         setMessage(value ? `Filter: ${value}` : "Filter cleared");
+      }).finally(() => {
+        setPromptActive(false);
       });
       return;
     }
@@ -197,7 +223,8 @@ function CitrxExplorer({
         incident,
         lines: selectedLines.length > 0 ? selectedLines : lines,
         setBusy,
-        setMessage
+        setMessage,
+        setPromptActive
       });
     }
   });
@@ -221,9 +248,11 @@ function CitrxExplorer({
             filter,
             sortKey,
             sortDirection,
-            selectedLineKeys
+            selectedLineKeys,
+            columns
           })
     ),
+    detailLine ? React.createElement(LineDetailModal, { line: detailLine }) : null,
     React.createElement(Footer, {
       screen,
       busy,
@@ -342,7 +371,8 @@ function IncidentScreen({
   filter,
   sortKey,
   sortDirection,
-  selectedLineKeys
+  selectedLineKeys,
+  columns
 }: {
   report: AnalyzeReport;
   incident: Incident | undefined;
@@ -354,6 +384,7 @@ function IncidentScreen({
   sortKey: SortKey;
   sortDirection: SortDirection;
   selectedLineKeys: Set<string>;
+  columns: number;
 }) {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
 
@@ -385,7 +416,8 @@ function IncidentScreen({
       filter,
       sortKey,
       sortDirection,
-      selectedLineKeys
+      selectedLineKeys,
+      columns
     })
   );
 }
@@ -398,7 +430,8 @@ function LineTable({
   filter,
   sortKey,
   sortDirection,
-  selectedLineKeys
+  selectedLineKeys,
+  columns
 }: {
   lines: IncidentLogLine[];
   pageLines: IncidentLogLine[];
@@ -408,7 +441,11 @@ function LineTable({
   sortKey: SortKey;
   sortDirection: SortDirection;
   selectedLineKeys: Set<string>;
+  columns: number;
 }) {
+  const uaWidth = 34;
+  const pathWidth = Math.max(28, columns - 100 - uaWidth);
+
   return React.createElement(
     Box,
     { flexDirection: "column", borderStyle: "single", paddingX: 1, flexGrow: 1 },
@@ -417,7 +454,11 @@ function LineTable({
       { bold: true },
       `Accesses ${lines.length} | sort=${sortKey}:${sortDirection}${filter ? ` | filter=${filter}` : ""}`
     ),
-    React.createElement(Text, { color: "gray" }, "sel line   time     ip              mth status bytes    path"),
+    React.createElement(
+      Text,
+      { color: "gray" },
+      `sel line   time     ip              mth status bytes    ${"path".padEnd(pathWidth)} ua`
+    ),
     ...(pageLines.length > 0
       ? pageLines.map((line, offset) => {
           const absoluteIndex = pageStart + offset;
@@ -430,10 +471,26 @@ function LineTable({
               color: active ? "black" : undefined,
               backgroundColor: active ? "white" : undefined
             },
-            `${selected ? "*" : " "} ${String(line.lineNumber).padStart(6)} ${compactTime(line.timestamp).padEnd(8)} ${truncate(line.ip, 15).padEnd(15)} ${line.method.padEnd(6)} ${String(line.status).padEnd(6)} ${String(line.bytes ?? "-").padEnd(8)} ${truncate(line.path, 64)}`
+            `${selected ? "*" : " "} ${String(line.lineNumber).padStart(6)} ${compactTime(line.timestamp).padEnd(8)} ${truncate(line.ip, 15).padEnd(15)} ${line.method.padEnd(6)} ${String(line.status).padEnd(6)} ${String(line.bytes ?? "-").padEnd(8)} ${truncate(line.path, pathWidth).padEnd(pathWidth)} ${truncate(userAgentLabel(line.userAgent), uaWidth)}`
           );
         })
       : [React.createElement(Text, { key: "empty", color: "yellow" }, "No stored lines for this incident")])
+  );
+}
+
+function LineDetailModal({ line }: { line: IncidentLogLine }) {
+  return React.createElement(
+    Box,
+    { flexDirection: "column", borderStyle: "double", paddingX: 1 },
+    React.createElement(Text, { bold: true, color: "cyan" }, `Request detail | line ${line.lineNumber} | d/b/Esc close`),
+    React.createElement(Text, null, `source: ${line.source}`),
+    React.createElement(Text, null, `time:   ${line.timestamp}`),
+    React.createElement(Text, null, `ip:     ${line.ip}`),
+    React.createElement(Text, null, `method: ${line.method} | status: ${line.status} | bytes: ${line.bytes ?? "-"}`),
+    React.createElement(Text, null, `path:   ${line.path}`),
+    React.createElement(Text, null, `target: ${line.target}`),
+    React.createElement(Text, null, `ua:     ${line.userAgent ?? "-"}`),
+    React.createElement(Text, { color: "gray" }, `raw:    ${line.raw}`)
   );
 }
 
@@ -451,7 +508,7 @@ function Footer({
   const shortcuts =
     screen === "summary"
       ? "↑/↓ incidents | Enter detail | a ask global | q quit"
-      : "↑/↓ rows | Space select | A select visible | / filter | s sort | Tab dir | a ask | e export | b back | q quit";
+      : "↑/↓ rows | d detail | Space select | A select visible | f filter | s sort | Tab dir | a ask | e export | b back | q quit";
   return React.createElement(
     Text,
     { color: busy ? "yellow" : "cyan" },
@@ -515,8 +572,8 @@ function nextSort(sortKey: SortKey): SortKey {
   return keys[(keys.indexOf(sortKey) + 1) % keys.length] ?? "timestamp";
 }
 
-async function promptFilter(): Promise<string> {
-  return input({ message: "Filter lines" });
+async function promptFilter(currentValue: string): Promise<string> {
+  return input({ message: "Filter lines", default: currentValue });
 }
 
 async function exportContext(
@@ -538,7 +595,8 @@ async function askOpenAi({
   incident,
   lines,
   setBusy,
-  setMessage
+  setMessage,
+  setPromptActive
 }: {
   session: CitrxSession;
   runtime: TuiRuntime;
@@ -547,8 +605,14 @@ async function askOpenAi({
   lines: IncidentLogLine[];
   setBusy: (value: boolean) => void;
   setMessage: (value: string) => void;
+  setPromptActive: (value: boolean) => void;
 }): Promise<void> {
-  const question = await input({ message: scope === "summary" ? "Ask OpenAI about the analysis" : "Ask OpenAI about this incident" });
+  setPromptActive(true);
+  const question = await input({
+    message: scope === "summary" ? "Ask OpenAI about the analysis" : "Ask OpenAI about this incident"
+  }).finally(() => {
+    setPromptActive(false);
+  });
   if (!question.trim()) {
     return;
   }
@@ -592,6 +656,17 @@ function lineKey(line: IncidentLogLine): string {
 function compactTime(timestamp: string): string {
   const match = timestamp.match(/:(\d{2}:\d{2}:\d{2})/);
   return match?.[1] ?? timestamp.slice(0, 8);
+}
+
+function userAgentLabel(userAgent: string | null): string {
+  if (!userAgent || userAgent === "-") {
+    return "-";
+  }
+
+  return userAgent
+    .replace(/^Mozilla\/5\.0\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function joinTop(items: TopItem[], limit: number): string {
