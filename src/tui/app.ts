@@ -34,6 +34,7 @@ interface IncidentInsights {
   ips: TopItem[];
   userAgents: TopItem[];
   params: TopItem[];
+  paramValues: TopItem[];
 }
 
 interface AccessTableColumns {
@@ -551,7 +552,7 @@ function TopValuesScreen({
 }) {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
   const insights = incidentInsights(matchSet?.lines ?? []);
-  const panelWidth = Math.max(30, Math.floor((columns - 8) / 3));
+  const panelWidth = Math.max(30, Math.floor((columns - 7) / 2));
   const headerWidth = Math.max(40, columns - 10);
 
   if (!incident) {
@@ -580,22 +581,35 @@ function TopValuesScreen({
     ),
     React.createElement(
       Box,
-      { flexDirection: "row", gap: 1, flexGrow: 1 },
-      React.createElement(TopListPanel, {
-        title: "Top IPs",
-        items: insights.ips,
-        width: panelWidth
-      }),
-      React.createElement(TopListPanel, {
-        title: "Top user agents",
-        items: insights.userAgents,
-        width: panelWidth
-      }),
-      React.createElement(TopListPanel, {
-        title: "Top query params",
-        items: insights.params,
-        width: panelWidth
-      })
+      { flexDirection: "column", flexGrow: 1 },
+      React.createElement(
+        Box,
+        { flexDirection: "row", gap: 1, flexGrow: 1 },
+        React.createElement(TopListPanel, {
+          title: "Top IPs",
+          items: insights.ips,
+          width: panelWidth
+        }),
+        React.createElement(TopListPanel, {
+          title: "Top user agents",
+          items: insights.userAgents,
+          width: panelWidth
+        })
+      ),
+      React.createElement(
+        Box,
+        { flexDirection: "row", gap: 1, flexGrow: 1 },
+        React.createElement(TopListPanel, {
+          title: "Top query params",
+          items: insights.params,
+          width: panelWidth
+        }),
+        React.createElement(TopListPanel, {
+          title: "Top query param values",
+          items: insights.paramValues,
+          width: panelWidth
+        })
+      )
     )
   );
 }
@@ -775,6 +789,7 @@ function incidentInsights(lines: IncidentLogLine[]): IncidentInsights {
   const ips = new Map<string, number>();
   const userAgents = new Map<string, number>();
   const params = new Map<string, number>();
+  const paramValues = new Map<string, number>();
 
   for (const line of lines) {
     incrementMap(ips, line.ip);
@@ -783,12 +798,17 @@ function incidentInsights(lines: IncidentLogLine[]): IncidentInsights {
     for (const param of requestParamNames(line.target)) {
       incrementMap(params, param);
     }
+
+    for (const paramValue of requestParamValues(line.target)) {
+      incrementMap(paramValues, paramValue);
+    }
   }
 
   return {
     ips: topMapItems(ips, 10),
     userAgents: topMapItems(userAgents, 10),
-    params: topMapItems(params, 10)
+    params: topMapItems(params, 10),
+    paramValues: topMapItems(paramValues, 10)
   };
 }
 
@@ -812,6 +832,70 @@ function requestParamNames(target: string): string[] {
           .filter((part): part is string => Boolean(part))
       )
     ];
+  }
+}
+
+function requestParamValues(target: string): string[] {
+  try {
+    const url = new URL(target, "http://citrx.local");
+    return uniqueParamValues([...url.searchParams.entries()]);
+  } catch {
+    const queryStart = target.indexOf("?");
+
+    if (queryStart === -1) {
+      return [];
+    }
+
+    return uniqueParamValues(
+      target
+        .slice(queryStart + 1)
+        .split("&")
+        .map(parseQueryPart)
+    );
+  }
+}
+
+function parseQueryPart(part: string): [string, string] {
+  const separator = part.indexOf("=");
+
+  if (separator === -1) {
+    return [safeDecode(part), ""];
+  }
+
+  return [safeDecode(part.slice(0, separator)), safeDecode(part.slice(separator + 1))];
+}
+
+function uniqueParamValues(entries: Array<[string, string]>): string[] {
+  return [
+    ...new Set(
+      entries
+        .map(([name, value]) => paramValueLabel(name.trim(), value.trim()))
+        .filter((part): part is string => Boolean(part))
+    )
+  ];
+}
+
+function paramValueLabel(name: string, value: string): string | undefined {
+  if (!name) {
+    return undefined;
+  }
+
+  if (isSensitiveParamName(name)) {
+    return `${name}=<redacted>`;
+  }
+
+  return `${name}=${value || "<empty>"}`;
+}
+
+function isSensitiveParamName(name: string): boolean {
+  return /pass(word)?|token|secret|key|auth|session|sid|jwt|credential/i.test(name);
+}
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value.replace(/\+/g, " "));
+  } catch {
+    return value;
   }
 }
 
