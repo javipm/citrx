@@ -21,13 +21,6 @@ import { APP_NAME, VERSION } from "./version.js";
 
 type OutputFormat = "terminal" | "json" | "markdown" | "html";
 
-export interface AnalyzeWizardAnswers {
-  paths: string[];
-  outputFormat: OutputFormat;
-  top: number;
-  session: boolean;
-}
-
 export type InteractiveLauncher = (session: CitrxSession) => Promise<void>;
 
 export interface CliRuntime {
@@ -36,7 +29,6 @@ export interface CliRuntime {
   stdin: Readable;
   stdinIsTTY: boolean;
   env: NodeJS.ProcessEnv;
-  promptAnalyze?: () => Promise<AnalyzeWizardAnswers>;
   openInteractive?: InteractiveLauncher;
 }
 
@@ -163,7 +155,7 @@ export function createProgram(runtime: CliRuntime): Command {
     });
 
   program.action(async (options: Record<string, unknown>, command: Command) => {
-    await runRootAnalysis(command.args, options, command, runtime);
+    await runRootAnalysis(command.args, options, runtime);
   });
 
   return program;
@@ -172,7 +164,6 @@ export function createProgram(runtime: CliRuntime): Command {
 async function runRootAnalysis(
   initialPaths: string[],
   options: Record<string, unknown>,
-  command: Command,
   runtime: CliRuntime
 ): Promise<void> {
   let paths = initialPaths;
@@ -186,15 +177,7 @@ async function runRootAnalysis(
 
   if (paths.length === 0) {
     if (runtime.stdinIsTTY) {
-      if (!shouldRunAnalyzeWizard(command)) {
-        throw new Error("No input paths provided.");
-      }
-
-      const answers = await promptAnalyzeOptions(runtime);
-      paths = answers.paths;
-      top = answers.top;
-      outputFormat = answers.outputFormat;
-      options.session = answers.session;
+      throw new Error("No input paths provided. Usage: citrx <access-log-paths...>");
     } else {
       paths = ["-"];
     }
@@ -326,32 +309,6 @@ function parseOutputFormat(options: Record<string, unknown>): OutputFormat {
   return (requested[0] as OutputFormat | undefined) ?? "terminal";
 }
 
-function shouldRunAnalyzeWizard(command: Command): boolean {
-  const optionNames = [
-    "interactive",
-    "json",
-    "markdown",
-    "html",
-    "out",
-    "session",
-    "format",
-    "formatConfig",
-    "top",
-    "incidentLines",
-    "since",
-    "until",
-    "include",
-    "exclude",
-    "color",
-    "debug"
-  ];
-
-  return optionNames.every((name) => {
-    const source = command.getOptionValueSource(name);
-    return source === undefined || source === "default";
-  });
-}
-
 function shouldOpenTui(
   options: Record<string, unknown>,
   outputFormat: OutputFormat,
@@ -381,55 +338,6 @@ async function openInteractiveSession(
     stderr: runtime.stderr,
     stdin: runtime.stdin
   });
-}
-
-async function promptAnalyzeOptions(runtime: CliRuntime): Promise<AnalyzeWizardAnswers> {
-  if (runtime.promptAnalyze) {
-    return runtime.promptAnalyze();
-  }
-
-  const prompts = await import("@inquirer/prompts");
-  const rawPaths = await prompts.input({
-    message: "Access log paths",
-    required: true
-  });
-  const outputFormat = await prompts.select<OutputFormat>({
-    message: "Output format",
-    choices: [
-      { name: "Terminal", value: "terminal" },
-      { name: "JSON", value: "json" },
-      { name: "Markdown", value: "markdown" },
-      { name: "HTML", value: "html" }
-    ]
-  });
-  const rawTop = await prompts.input({
-    message: "Top list size",
-    default: "20",
-    validate: (value) =>
-      Number.isInteger(Number.parseInt(value, 10)) && Number.parseInt(value, 10) > 0
-        ? true
-        : "Enter a positive integer."
-  });
-  const session = await prompts.confirm({
-    message: "Save analysis session?",
-    default: true
-  });
-
-  const paths = rawPaths
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-  if (paths.length === 0) {
-    throw new Error("No input paths provided.");
-  }
-
-  return {
-    paths,
-    outputFormat,
-    top: Number.parseInt(rawTop, 10),
-    session
-  };
 }
 
 function renderReport(
@@ -462,7 +370,6 @@ export async function runCli(
     stdin: runtime.stdin ?? process.stdin,
     stdinIsTTY: runtime.stdinIsTTY ?? Boolean(process.stdin.isTTY),
     env: runtime.env ?? process.env,
-    promptAnalyze: runtime.promptAnalyze,
     openInteractive: runtime.openInteractive
   };
 

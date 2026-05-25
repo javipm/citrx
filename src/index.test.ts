@@ -408,42 +408,26 @@ describe("citrx CLI", () => {
     expect(stderr.output()).toContain("Choose only one output format");
   });
 
-  it("runs the interactive wizard when no args or flags are provided", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "citrx-wizard-"));
-    const logFile = join(directory, "access.log");
-    await writeFile(
-      logFile,
-      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /wizard HTTP/1.1" 200 10 "-" "Mozilla/5.0"\n'
-    );
-    const stdout = memoryStream();
+  it("requires input paths when no stdin is piped", async () => {
+    const stderr = memoryStream();
 
     const code = await runCli(["node", "citrx"], {
-      stdout: stdout.stream,
-      stderr: memoryStream().stream,
-      stdinIsTTY: true,
-      promptAnalyze: async () => ({
-        paths: [logFile],
-        outputFormat: "markdown",
-        top: 5,
-        session: false
-      })
+      stdout: memoryStream().stream,
+      stderr: stderr.stream,
+      stdinIsTTY: true
     });
 
-    expect(code).toBe(0);
-    expect(stdout.output()).toContain("# citrx access log analysis");
-    expect(stdout.output()).toContain("/wizard");
+    expect(code).toBe(1);
+    expect(stderr.output()).toContain("No input paths provided");
   });
 
-  it("does not run the wizard when flags are provided without paths", async () => {
+  it("requires input paths when flags are provided without paths", async () => {
     const stderr = memoryStream();
 
     const code = await runCli(["node", "citrx", "--json"], {
       stdout: memoryStream().stream,
       stderr: stderr.stream,
-      stdinIsTTY: true,
-      promptAnalyze: async () => {
-        throw new Error("wizard should not run");
-      }
+      stdinIsTTY: true
     });
 
     expect(code).toBe(1);

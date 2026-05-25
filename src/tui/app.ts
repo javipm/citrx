@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useWindowSize } from "ink";
-import { input } from "@inquirer/prompts";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -21,6 +20,15 @@ export interface TuiRuntime {
 type Screen = "summary" | "incident";
 type SortKey = "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
 type SortDirection = "asc" | "desc";
+type PromptState =
+  | { kind: "filter"; value: string }
+  | {
+      kind: "ai";
+      value: string;
+      scope: "summary" | "incident";
+      incident?: Incident;
+      lines: IncidentLogLine[];
+    };
 
 export async function openSessionTui(
   session: CitrxSession,
@@ -59,7 +67,7 @@ function CitrxExplorer({
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [selectedLineKeys, setSelectedLineKeys] = useState<Set<string>>(new Set());
   const [detailLine, setDetailLine] = useState<IncidentLogLine | undefined>();
-  const [promptActive, setPromptActive] = useState(false);
+  const [prompt, setPrompt] = useState<PromptState | undefined>();
   const [message, setMessage] = useState("Ready");
   const [busy, setBusy] = useState(false);
   const incidents = session.report.incidents;
@@ -84,7 +92,29 @@ function CitrxExplorer({
   const pageLines = lines.slice(pageStart, pageStart + pageSize);
 
   useInput((inputValue, key) => {
-    if (promptActive) {
+    if (prompt) {
+      handlePromptInput({
+        inputValue,
+        key,
+        prompt,
+        setPrompt,
+        setFilter,
+        setLineIndex,
+        setSelectedLineKeys,
+        setMessage,
+        submitAi: (question, state) => {
+          void submitOpenAi({
+            session,
+            runtime,
+            scope: state.scope,
+            incident: state.incident,
+            lines: state.lines,
+            question,
+            setBusy,
+            setMessage
+          });
+        }
+      });
       return;
     }
 
@@ -128,14 +158,11 @@ function CitrxExplorer({
       }
 
       if (inputValue === "a") {
-        void askOpenAi({
-          session,
-          runtime,
+        setPrompt({
+          kind: "ai",
+          value: "",
           scope: "summary",
-          lines: [],
-          setBusy,
-          setMessage,
-          setPromptActive
+          lines: []
         });
       }
 
@@ -195,15 +222,7 @@ function CitrxExplorer({
     }
 
     if (inputValue === "/" || inputValue === "f" || inputValue === "F") {
-      setPromptActive(true);
-      void promptFilter(filter).then((value) => {
-        setFilter(value);
-        setLineIndex(0);
-        setSelectedLineKeys(new Set());
-        setMessage(value ? `Filter: ${value}` : "Filter cleared");
-      }).finally(() => {
-        setPromptActive(false);
-      });
+      setPrompt({ kind: "filter", value: filter });
       return;
     }
 
@@ -216,15 +235,12 @@ function CitrxExplorer({
     }
 
     if (inputValue === "a") {
-      void askOpenAi({
-        session,
-        runtime,
+      setPrompt({
+        kind: "ai",
+        value: "",
         scope: "incident",
         incident,
-        lines: selectedLines.length > 0 ? selectedLines : lines,
-        setBusy,
-        setMessage,
-        setPromptActive
+        lines: selectedLines.length > 0 ? selectedLines : lines
       });
     }
   });
@@ -253,6 +269,7 @@ function CitrxExplorer({
           })
     ),
     detailLine ? React.createElement(LineDetailModal, { line: detailLine }) : null,
+    prompt ? React.createElement(PromptBar, { prompt }) : null,
     React.createElement(Footer, {
       screen,
       busy,
@@ -494,6 +511,23 @@ function LineDetailModal({ line }: { line: IncidentLogLine }) {
   );
 }
 
+function PromptBar({ prompt }: { prompt: PromptState }) {
+  const label =
+    prompt.kind === "filter"
+      ? "Filter"
+      : prompt.scope === "summary"
+        ? "Ask OpenAI about analysis"
+        : "Ask OpenAI about incident";
+
+  return React.createElement(
+    Box,
+    { borderStyle: "single", paddingX: 1 },
+    React.createElement(Text, { color: "cyan" }, `${label}: `),
+    React.createElement(Text, null, prompt.value),
+    React.createElement(Text, { inverse: true }, " ")
+  );
+}
+
 function Footer({
   screen,
   busy,
@@ -572,10 +606,6 @@ function nextSort(sortKey: SortKey): SortKey {
   return keys[(keys.indexOf(sortKey) + 1) % keys.length] ?? "timestamp";
 }
 
-async function promptFilter(currentValue: string): Promise<string> {
-  return input({ message: "Filter lines", default: currentValue });
-}
-
 async function exportContext(
   sessionId: string,
   incident: Incident | undefined,
@@ -588,35 +618,88 @@ async function exportContext(
   return file;
 }
 
-async function askOpenAi({
+function handlePromptInput({
+  inputValue,
+  key,
+  prompt,
+  setPrompt,
+  setFilter,
+  setLineIndex,
+  setSelectedLineKeys,
+  setMessage,
+  submitAi
+}: {
+  inputValue: string;
+  key: {
+    return?: boolean;
+    escape?: boolean;
+    backspace?: boolean;
+    delete?: boolean;
+    ctrl?: boolean;
+  };
+  prompt: PromptState;
+  setPrompt: (value: PromptState | undefined) => void;
+  setFilter: (value: string) => void;
+  setLineIndex: (value: number) => void;
+  setSelectedLineKeys: (value: Set<string>) => void;
+  setMessage: (value: string) => void;
+  submitAi: (question: string, state: Extract<PromptState, { kind: "ai" }>) => void;
+}): void {
+  if (key.escape) {
+    setPrompt(undefined);
+    setMessage("Prompt cancelled");
+    return;
+  }
+
+  if (key.return) {
+    const value = prompt.value.trim();
+    setPrompt(undefined);
+
+    if (prompt.kind === "filter") {
+      setFilter(value);
+      setLineIndex(0);
+      setSelectedLineKeys(new Set());
+      setMessage(value ? `Filter: ${value}` : "Filter cleared");
+      return;
+    }
+
+    if (value) {
+      submitAi(value, prompt);
+    }
+    return;
+  }
+
+  if (key.backspace || key.delete) {
+    setPrompt({ ...prompt, value: prompt.value.slice(0, -1) });
+    return;
+  }
+
+  if (key.ctrl || !isPrintableInput(inputValue)) {
+    return;
+  }
+
+  setPrompt({ ...prompt, value: `${prompt.value}${inputValue}` });
+}
+
+async function submitOpenAi({
   session,
   runtime,
   scope,
   incident,
   lines,
+  question,
   setBusy,
-  setMessage,
-  setPromptActive
+  setMessage
 }: {
   session: CitrxSession;
   runtime: TuiRuntime;
   scope: "summary" | "incident";
   incident?: Incident;
   lines: IncidentLogLine[];
+  question: string;
   setBusy: (value: boolean) => void;
   setMessage: (value: string) => void;
-  setPromptActive: (value: boolean) => void;
 }): Promise<void> {
-  setPromptActive(true);
-  const question = await input({
-    message: scope === "summary" ? "Ask OpenAI about the analysis" : "Ask OpenAI about this incident"
-  }).finally(() => {
-    setPromptActive(false);
-  });
-  if (!question.trim()) {
-    return;
-  }
-
   setBusy(true);
   try {
     const client = runtime.aiClient ?? new OpenAiIncidentQuestionClient();
@@ -634,6 +717,10 @@ async function askOpenAi({
   } finally {
     setBusy(false);
   }
+}
+
+function isPrintableInput(inputValue: string): boolean {
+  return inputValue.length > 0 && !inputValue.startsWith("\u001B");
 }
 
 function toggleSelection(current: Set<string>, line: IncidentLogLine): Set<string> {

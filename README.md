@@ -60,9 +60,8 @@ node dist/cli.js session list
 node dist/cli.js session show <session-id>
 ```
 
-Running `citrx` with no paths, no flags, and an interactive terminal starts a
-guided wizard for paths, output format, top-list size, and session persistence.
-Piped stdin still works without prompts.
+Running `citrx` without paths in an interactive terminal fails fast with a
+usage hint. Piped stdin still works without prompts.
 
 ## Phase 1.1
 

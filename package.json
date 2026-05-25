@@ -34,7 +34,6 @@
     "node": ">=24.15"
   },
   "dependencies": {
-    "@inquirer/prompts": "^8.0.0",
     "commander": "^14.0.2",
     "ink": "^7.0.3",
     "openai": "^6.10.0",
