@@ -224,7 +224,7 @@ export function mergeRuleHit(
   incidents: Map<string, Incident>,
   hit: RuleHit,
   path: string
-): void {
+): string {
   const id = `${hit.ruleId}:${path}`;
   const existing = incidents.get(id);
 
@@ -239,7 +239,7 @@ export function mergeRuleHit(
       existing.samples.push(hit.sample);
     }
 
-    return;
+    return id;
   }
 
   incidents.set(id, {
@@ -255,6 +255,8 @@ export function mergeRuleHit(
     ],
     samples: [hit.sample]
   });
+
+  return id;
 }
 
 export function redactTarget(target: string): string {

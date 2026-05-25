@@ -9,7 +9,7 @@ incident detection for plain text and compressed files.
 ## Goals
 
 - Detect abusive crawling, attack probes, suspicious POST traffic, fake bots,
-  ASN concentration, high-cost URLs, and malformed requests.
+  high-cost URLs, and malformed requests.
 - Run useful local analysis before any optional AI step.
 - Keep OpenAI analysis explicit, redacted, and post-analysis.
 - Produce terminal, JSON, Markdown, and self-contained HTML reports.
@@ -41,6 +41,8 @@ After building:
 node dist/cli.js --help
 node dist/cli.js --version
 node dist/cli.js analyze /path/to/access.log --json
+node dist/cli.js analyze /path/to/access.log --interactive
+node dist/cli.js analyze /path/to/access.log --incident-lines 1000
 node dist/cli.js analyze /path/to/access.log --markdown --out report.md
 node dist/cli.js analyze /path/to/access.log --html --out report.html
 node dist/cli.js analyze /path/to/access.log.gz --json
@@ -75,6 +77,7 @@ Current report data:
 - top methods
 - top statuses
 - local security incidents
+- stored access-log lines per incident
 
 Built-in formats:
 
@@ -108,7 +111,7 @@ Custom format configs are JSON:
 }
 ```
 
-AI follow-up is planned in a later phase.
+Interactive OpenAI follow-up is available from the terminal incident explorer.
 
 ## Compressed Logs
 
@@ -136,19 +139,6 @@ Supported report outputs:
 Use `--out <path>` to write a report to disk. HTML reports are self-contained
 and do not load external assets. Use `--no-color` or `NO_COLOR=1` to disable
 terminal colors.
-
-## GeoIP / ASN
-
-Pass `--geo` to enrich the top IPs with country, ASN, and organization data
-after the local analysis finishes:
-
-```bash
-citrx analyze /path/to/access.log --geo
-```
-
-GeoIP uses the free `ipwho.is` API, runs sequential lookups to be gentle with
-rate limits, and caches responses for seven days. Set `CITRX_CACHE_DIR` to
-override the cache directory.
 
 ## Local Detection
 
@@ -178,6 +168,7 @@ copy raw log files.
 citrx analyze /path/to/access.log
 citrx session list
 citrx session show <session-id>
+citrx session open <session-id>
 citrx session export <session-id> --json --out report.json
 citrx session delete <session-id>
 ```
@@ -185,10 +176,14 @@ citrx session delete <session-id>
 Use `--no-session` for one-off runs. Set `CITRX_SESSION_DIR` to override the
 session storage directory.
 
+Use `--incident-lines <n>` to control how many parsed access-log lines are stored
+per incident. The default is `500`; `0` stores counts only.
+
 ## Privacy
 
-`citrx` is local-first. Future OpenAI integration will be opt-in and will send
-only redacted aggregate findings by default, never full raw logs.
+`citrx` is local-first. OpenAI is only called from the interactive explorer when
+you explicitly ask a question, and only the selected incident plus limited,
+redacted matching lines are sent.
 
 ## License
 

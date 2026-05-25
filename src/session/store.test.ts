@@ -34,6 +34,7 @@ function reportFixture(): AnalyzeReport {
     topPaths: [{ value: "/", count: 1 }],
     topMethods: [{ value: "GET", count: 1 }],
     topStatuses: [{ value: "200", count: 1 }],
+    incidentMatches: [],
     incidents: []
   };
 }

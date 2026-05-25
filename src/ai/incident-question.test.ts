@@ -1,0 +1,121 @@
+import { describe, expect, it } from "vitest";
+
+import type { AnalyzeReport, Incident } from "../analysis/types.js";
+import { OpenAiIncidentQuestionClient, parseMaxLines } from "./incident-question.js";
+
+const incident: Incident = {
+  id: "sqli:/search",
+  category: "sql_injection",
+  severity: "critical",
+  score: 95,
+  title: "SQL injection payload",
+  description: "Request target contains SQL injection indicators.",
+  evidence: [{ key: "path", value: "/search" }],
+  samples: ["/search?q=union"]
+};
+
+const report: AnalyzeReport = {
+  app: "citrx",
+  phase: 1,
+  status: "ok",
+  generatedAt: "2026-05-25T00:00:00.000Z",
+  inputs: ["/tmp/access.log"],
+  inputFormats: [],
+  summary: {
+    files: 1,
+    totalLines: 2,
+    parsedLines: 2,
+    filteredLines: 0,
+    invalidLines: 0,
+    totalBytes: 20
+  },
+  topIps: [{ value: "203.0.113.10", count: 2 }],
+  topPaths: [{ value: "/search", count: 2 }],
+  topMethods: [{ value: "GET", count: 2 }],
+  topStatuses: [{ value: "200", count: 2 }],
+  incidents: [incident],
+  incidentMatches: []
+};
+
+describe("OpenAI incident questions", () => {
+  it("requires OPENAI_API_KEY", async () => {
+    const client = new OpenAiIncidentQuestionClient(async () => ({
+      output_text: "unused"
+    }));
+
+    await expect(
+      client.ask({
+        report,
+        incident,
+        lines: [],
+        question: "What happened?",
+        env: {}
+      })
+    ).rejects.toThrow("OPENAI_API_KEY is required");
+  });
+
+  it("limits lines sent to OpenAI and returns renderable text", async () => {
+    let payload = "";
+    const client = new OpenAiIncidentQuestionClient(async (body) => {
+      payload = body.input;
+      return {
+        output_text: "Likely SQLi scan. Consider blocking the payload pattern."
+      };
+    });
+
+    const result = await client.ask({
+      report,
+      incident,
+      lines: [
+        {
+          source: "/tmp/access.log",
+          lineNumber: 1,
+          raw: "line 1",
+          ip: "203.0.113.10",
+          timestamp: "25/May/2026:03:12:49 +0200",
+          method: "GET",
+          path: "/search",
+          target: "/search?q=union",
+          status: 200,
+          bytes: 10,
+          userAgent: "Mozilla/5.0"
+        },
+        {
+          source: "/tmp/access.log",
+          lineNumber: 2,
+          raw: "line 2",
+          ip: "203.0.113.11",
+          timestamp: "25/May/2026:03:12:50 +0200",
+          method: "GET",
+          path: "/search",
+          target: "/search?q=union",
+          status: 200,
+          bytes: 10,
+          userAgent: "Mozilla/5.0"
+        }
+      ],
+      question: "What WAF rule should I use?",
+      env: {
+        OPENAI_API_KEY: "test-key",
+        CITRX_AI_MAX_LINES: "1",
+        CITRX_OPENAI_MODEL: "gpt-5-mini"
+      }
+    });
+
+    expect(result).toEqual({
+      answer: "Likely SQLi scan. Consider blocking the payload pattern.",
+      model: "gpt-5-mini",
+      sentLines: 1
+    });
+    expect(JSON.parse(payload)).toMatchObject({
+      question: "What WAF rule should I use?",
+      lines: [{ lineNumber: 1 }]
+    });
+  });
+
+  it("defaults invalid max lines to 200", () => {
+    expect(parseMaxLines("-1")).toBe(200);
+    expect(parseMaxLines("nope")).toBe(200);
+    expect(parseMaxLines("25")).toBe(25);
+  });
+});

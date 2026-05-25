@@ -64,8 +64,6 @@ export function renderHtmlReport(report: AnalyzeReport): string {
       ${topTable("Top Paths", report.topPaths)}
       ${topTable("Methods", report.topMethods)}
       ${topTable("Statuses", report.topStatuses)}
-      ${report.geo ? topTable("Geo Countries", report.geo.topCountries) : ""}
-      ${report.geo ? topTable("Geo ASN / Org", report.geo.topAsns) : ""}
     </section>
     <section>
       <h2>Incidents</h2>

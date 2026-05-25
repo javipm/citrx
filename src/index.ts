@@ -4,9 +4,6 @@ import type { Readable, Writable } from "node:stream";
 
 import { analyzeAccessLogSources } from "./analysis/access-log.js";
 import type { AnalyzeInputSource } from "./analysis/types.js";
-import { enrichReportWithGeo } from "./geo/enrich.js";
-import { createIpWhoisLookup } from "./geo/ipwhois.js";
-import type { GeoLookup } from "./geo/ipwhois.js";
 import { discoverInputFiles } from "./input/files.js";
 import { isAccessLogFormatId } from "./parser/access-log.js";
 import type { FormatChoice } from "./parser/access-log.js";
@@ -19,6 +16,7 @@ import {
   readSession,
   saveSession
 } from "./session/store.js";
+import type { CitrxSession } from "./session/types.js";
 import { APP_NAME, VERSION } from "./version.js";
 
 type OutputFormat = "terminal" | "json" | "markdown" | "html";
@@ -30,6 +28,8 @@ export interface AnalyzeWizardAnswers {
   session: boolean;
 }
 
+export type InteractiveLauncher = (session: CitrxSession) => Promise<void>;
+
 export interface CliRuntime {
   stdout: Writable;
   stderr: Writable;
@@ -37,7 +37,7 @@ export interface CliRuntime {
   stdinIsTTY: boolean;
   env: NodeJS.ProcessEnv;
   promptAnalyze?: () => Promise<AnalyzeWizardAnswers>;
-  geoLookup?: GeoLookup;
+  openInteractive?: InteractiveLauncher;
 }
 
 export function createProgram(runtime: CliRuntime): Command {
@@ -57,8 +57,8 @@ export function createProgram(runtime: CliRuntime): Command {
     .command("analyze")
     .description("Analyze access logs from files, folders, or stdin.")
     .argument("[paths...]", "Log files, folders, or '-' for stdin.")
-    .option("--geo", "Enrich suspicious IPs with GeoIP/ASN data.")
     .option("--ai", "Offer OpenAI deep analysis after local analysis.")
+    .option("-i, --interactive", "Open the interactive incident explorer after analysis.")
     .option("--json", "Write machine-readable JSON output.")
     .option("--markdown", "Write Markdown output.")
     .option("--html", "Write a self-contained HTML report.")
@@ -71,6 +71,7 @@ export function createProgram(runtime: CliRuntime): Command {
     )
     .option("--format-config <path>", "JSON file with custom access-log formats.")
     .option("--top <n>", "Limit top lists.", "20")
+    .option("--incident-lines <n>", "Stored log lines per incident.", "500")
     .option("--since <date>", "Include entries at or after this date.")
     .option("--until <date>", "Include entries at or before this date.")
     .option("--include <glob>", "Include paths matching this glob.")
@@ -79,6 +80,7 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--debug", "Print debug details on failure.")
     .action(async (paths: string[], options: Record<string, unknown>, command: Command) => {
       let top = parseTopOption(options.top);
+      const incidentLines = parseIncidentLinesOption(options.incidentLines);
       let outputFormat = parseOutputFormat(options);
 
       if (paths.length === 0) {
@@ -105,21 +107,21 @@ export function createProgram(runtime: CliRuntime): Command {
         formatConfig:
           typeof options.formatConfig === "string" ? options.formatConfig : undefined,
         since: parseDateOption(options.since, "--since"),
-        until: parseDateOption(options.until, "--until")
+        until: parseDateOption(options.until, "--until"),
+        incidentLines
       });
       const sessionDir = runtime.env.CITRX_SESSION_DIR;
-
-      if (options.geo) {
-        report = await enrichReportWithGeo(report, {
-          lookup: runtime.geoLookup ?? createIpWhoisLookup(runtime.env),
-          limit: top,
-          delayMs: runtime.geoLookup ? 0 : 250
-        });
-      }
+      let session: CitrxSession | undefined;
 
       if (options.session !== false) {
-        const session = await saveSession(report, report.inputs, sessionDir);
+        session = await saveSession(report, report.inputs, sessionDir);
         report = session.report;
+      }
+
+      if (options.interactive) {
+        session ??= await saveSession(report, report.inputs, sessionDir);
+        await openInteractiveSession(session, runtime);
+        return;
       }
 
       const output = renderReport(report, outputFormat, options, runtime);
@@ -174,6 +176,15 @@ export function createProgram(runtime: CliRuntime): Command {
       }
 
       runtime.stdout.write(renderTerminalReport(saved.report));
+    });
+
+  session
+    .command("open")
+    .description("Open a saved session in the interactive incident explorer.")
+    .argument("<id>", "Session id.")
+    .action(async (id: string) => {
+      const saved = await readSession(id, runtime.env.CITRX_SESSION_DIR);
+      await openInteractiveSession(saved, runtime);
     });
 
   session
@@ -261,6 +272,16 @@ function parseTopOption(value: unknown): number {
   return parsed;
 }
 
+function parseIncidentLinesOption(value: unknown): number {
+  const parsed = Number.parseInt(String(value ?? "500"), 10);
+
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error("--incident-lines must be an integer greater than or equal to 0.");
+  }
+
+  return parsed;
+}
+
 function parseDateOption(value: unknown, flag: string): Date | undefined {
   if (value === undefined) {
     return undefined;
@@ -291,8 +312,8 @@ function parseOutputFormat(options: Record<string, unknown>): OutputFormat {
 
 function shouldRunAnalyzeWizard(command: Command): boolean {
   const optionNames = [
-    "geo",
     "ai",
+    "interactive",
     "json",
     "markdown",
     "html",
@@ -301,6 +322,7 @@ function shouldRunAnalyzeWizard(command: Command): boolean {
     "format",
     "formatConfig",
     "top",
+    "incidentLines",
     "since",
     "until",
     "include",
@@ -312,6 +334,24 @@ function shouldRunAnalyzeWizard(command: Command): boolean {
   return optionNames.every((name) => {
     const source = command.getOptionValueSource(name);
     return source === undefined || source === "default";
+  });
+}
+
+async function openInteractiveSession(
+  session: CitrxSession,
+  runtime: CliRuntime
+): Promise<void> {
+  if (runtime.openInteractive) {
+    await runtime.openInteractive(session);
+    return;
+  }
+
+  const { openSessionTui } = await import("./tui/app.js");
+  await openSessionTui(session, {
+    env: runtime.env,
+    stdout: runtime.stdout,
+    stderr: runtime.stderr,
+    stdin: runtime.stdin
   });
 }
 
@@ -395,7 +435,7 @@ export async function runCli(
     stdinIsTTY: runtime.stdinIsTTY ?? Boolean(process.stdin.isTTY),
     env: runtime.env ?? process.env,
     promptAnalyze: runtime.promptAnalyze,
-    geoLookup: runtime.geoLookup
+    openInteractive: runtime.openInteractive
   };
 
   try {

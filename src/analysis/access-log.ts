@@ -12,10 +12,18 @@ import {
   buildAggregateIncidents,
   detectRequestHits,
   mergeRuleHit,
+  redactTarget,
   querySignature
 } from "../rules/local.js";
 import type { PathStats } from "../rules/local.js";
-import type { AnalyzeInputSource, AnalyzeReport, Incident, TopItem } from "./types.js";
+import type {
+  AnalyzeInputSource,
+  AnalyzeReport,
+  Incident,
+  IncidentLogLine,
+  IncidentMatchSet,
+  TopItem
+} from "./types.js";
 
 interface AnalyzeOptions {
   top: number;
@@ -23,6 +31,7 @@ interface AnalyzeOptions {
   formatConfig?: string;
   since?: Date;
   until?: Date;
+  incidentLines?: number;
 }
 
 interface SourceParserSelection {
@@ -48,6 +57,16 @@ interface Counters {
   statuses: Map<string, number>;
   pathStats: Map<string, PathStats>;
   ruleIncidents: Map<string, Incident>;
+  ruleMatches: Map<string, MutableIncidentMatches>;
+  pathMatches: Map<string, MutableIncidentMatches>;
+  lineNumbers: Map<string, number>;
+  incidentLineLimit: number;
+}
+
+interface MutableIncidentMatches {
+  incidentId: string;
+  totalMatches: number;
+  lines: IncidentLogLine[];
 }
 
 const MIN_SAMPLE_LINES = 1;
@@ -85,7 +104,11 @@ export async function analyzeAccessLogSources(
     methods: new Map(),
     statuses: new Map(),
     pathStats: new Map(),
-    ruleIncidents: new Map()
+    ruleIncidents: new Map(),
+    ruleMatches: new Map(),
+    pathMatches: new Map(),
+    lineNumbers: new Map(),
+    incidentLineLimit: options.incidentLines ?? 500
   };
   const inputFormats: AnalyzeReport["inputFormats"] = [];
 
@@ -131,7 +154,8 @@ export async function analyzeAccessLogSources(
     incidents: sortIncidents([
       ...counters.ruleIncidents.values(),
       ...buildAggregateIncidents(counters.pathStats.values())
-    ])
+    ]),
+    incidentMatches: incidentMatches(counters)
   };
 }
 
@@ -226,6 +250,7 @@ async function analyzeTextSource(
     selection.parser,
     counters,
     options,
+    selection.label,
     selection.sampleLines ?? []
   );
 }
@@ -235,14 +260,15 @@ async function analyzeLines(
   parser: AccessLogParser,
   counters: Counters,
   options: AnalyzeOptions,
+  sourceLabel: string,
   prefixLines: string[] = []
 ): Promise<void> {
   for (const line of prefixLines) {
-    analyzeLine(line, parser, counters, options);
+    analyzeLine(line, parser, counters, options, sourceLabel);
   }
 
   for await (const line of lines) {
-    analyzeLine(line, parser, counters, options);
+    analyzeLine(line, parser, counters, options, sourceLabel);
   }
 }
 
@@ -250,13 +276,15 @@ function analyzeLine(
   line: string,
   parser: AccessLogParser,
   counters: Counters,
-  options: AnalyzeOptions
+  options: AnalyzeOptions,
+  sourceLabel: string
 ): void {
   if (line.length === 0) {
     return;
   }
 
   counters.totalLines += 1;
+  const lineNumber = incrementLineNumber(counters.lineNumbers, sourceLabel);
 
   const entry = parser.parse(line);
 
@@ -277,9 +305,35 @@ function analyzeLine(
   increment(counters.methods, entry.method);
   increment(counters.statuses, String(entry.status));
   updatePathStats(counters.pathStats, entry);
+  addIncidentLine(counters.pathMatches, entry.path, counters.incidentLineLimit, {
+    source: sourceLabel,
+    lineNumber,
+    raw: redactRawLine(line),
+    ip: entry.ip,
+    timestamp: entry.timestamp,
+    method: entry.method,
+    path: entry.path,
+    target: redactTarget(entry.target),
+    status: entry.status,
+    bytes: entry.bytes,
+    userAgent: entry.userAgent
+  });
 
   for (const hit of detectRequestHits(entry)) {
-    mergeRuleHit(counters.ruleIncidents, hit, entry.path);
+    const incidentId = mergeRuleHit(counters.ruleIncidents, hit, entry.path);
+    addIncidentLine(counters.ruleMatches, incidentId, counters.incidentLineLimit, {
+      source: sourceLabel,
+      lineNumber,
+      raw: redactRawLine(line),
+      ip: entry.ip,
+      timestamp: entry.timestamp,
+      method: entry.method,
+      path: entry.path,
+      target: redactTarget(entry.target),
+      status: entry.status,
+      bytes: entry.bytes,
+      userAgent: entry.userAgent
+    });
   }
 }
 
@@ -300,6 +354,74 @@ function topItems(map: Map<string, number>, limit: number): TopItem[] {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, limit)
     .map(([value, count]) => ({ value, count }));
+}
+
+function incidentMatches(counters: Counters): IncidentMatchSet[] {
+  const aggregateIncidents = buildAggregateIncidents(counters.pathStats.values());
+  const matches = new Map<string, MutableIncidentMatches>();
+
+  for (const [incidentId, matchSet] of counters.ruleMatches) {
+    matches.set(incidentId, matchSet);
+  }
+
+  for (const incident of aggregateIncidents) {
+    const path = String(
+      incident.evidence.find((item) => item.key === "path")?.value ?? ""
+    );
+    const pathMatches = counters.pathMatches.get(path);
+
+    if (pathMatches) {
+      matches.set(incident.id, {
+        incidentId: incident.id,
+        totalMatches: pathMatches.totalMatches,
+        lines: pathMatches.lines
+      });
+    }
+  }
+
+  return [...matches.values()]
+    .sort((a, b) => a.incidentId.localeCompare(b.incidentId))
+    .map((matchSet) => ({
+      incidentId: matchSet.incidentId,
+      totalMatches: matchSet.totalMatches,
+      storedLines: matchSet.lines.length,
+      truncated: matchSet.totalMatches > matchSet.lines.length,
+      lines: matchSet.lines
+    }));
+}
+
+function addIncidentLine(
+  matches: Map<string, MutableIncidentMatches>,
+  incidentId: string,
+  limit: number,
+  line: IncidentLogLine
+): void {
+  const current = matches.get(incidentId) ?? {
+    incidentId,
+    totalMatches: 0,
+    lines: []
+  };
+
+  current.totalMatches += 1;
+
+  if (current.lines.length < limit) {
+    current.lines.push(line);
+  }
+
+  matches.set(incidentId, current);
+}
+
+function incrementLineNumber(map: Map<string, number>, sourceLabel: string): number {
+  const next = (map.get(sourceLabel) ?? 0) + 1;
+  map.set(sourceLabel, next);
+  return next;
+}
+
+function redactRawLine(line: string): string {
+  return line.replace(
+    /(token|_token|sid|session|password|passwd|key|secret|jwt|auth|authorization)=([^&\s"]+)/gi,
+    "$1=[REDACTED]"
+  );
 }
 
 function updatePathStats(

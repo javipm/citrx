@@ -196,6 +196,13 @@ describe("citrx CLI", () => {
     expect(code).toBe(0);
     const report = JSON.parse(stdout.output()) as {
       incidents: Array<{ id: string; samples: string[] }>;
+      incidentMatches: Array<{
+        incidentId: string;
+        totalMatches: number;
+        storedLines: number;
+        truncated: boolean;
+        lines: Array<{ raw: string; path: string; lineNumber: number }>;
+      }>;
     };
 
     expect(report.incidents).toEqual(
@@ -207,102 +214,123 @@ describe("citrx CLI", () => {
     expect(report.incidents.flatMap((incident) => incident.samples).join("\n")).toContain(
       "token=%5BREDACTED%5D"
     );
+    expect(report.incidentMatches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          incidentId: "sqli:/search",
+          totalMatches: 1,
+          storedLines: 1,
+          truncated: false,
+          lines: [
+            expect.objectContaining({
+              path: "/search",
+              raw: expect.stringContaining("UNION")
+            })
+          ]
+        }),
+        expect.objectContaining({
+          incidentId: "recon_sensitive_file:/.env",
+          lines: [
+            expect.objectContaining({
+              raw: expect.stringContaining("token=[REDACTED]")
+            })
+          ]
+        })
+      ])
+    );
   });
 
-  it("enriches top IPs with GeoIP and ASN data when requested", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "citrx-geo-"));
+  it("rejects removed --geo option", async () => {
+    const stderr = memoryStream();
+
+    const code = await runCli(["node", "citrx", "analyze", "--geo"], {
+      stdout: memoryStream().stream,
+      stderr: stderr.stream,
+      stdinIsTTY: true
+    });
+
+    expect(code).toBe(1);
+    expect(stderr.output()).toContain("unknown option '--geo'");
+  });
+
+  it("limits stored incident lines with --incident-lines", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-incident-lines-"));
     const logFile = join(directory, "access.log");
     await writeFile(
       logFile,
-      [
-        '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /one HTTP/1.1" 200 10 "-" "Mozilla/5.0"',
-        '203.0.113.10 - - [25/May/2026:03:12:50 +0200] "GET /two HTTP/1.1" 200 20 "-" "Mozilla/5.0"',
-        '203.0.113.11 - - [25/May/2026:03:12:51 +0200] "GET /three HTTP/1.1" 200 30 "-" "Mozilla/5.0"',
-        '198.51.100.2 - - [25/May/2026:03:12:52 +0200] "GET /four HTTP/1.1" 200 40 "-" "Mozilla/5.0"'
-      ].join("\n")
+      Array.from(
+        { length: 55 },
+        (_, index) =>
+          `203.0.113.10 - - [25/May/2026:03:12:${String(index % 60).padStart(2, "0")} +0200] "POST /login HTTP/1.1" 200 10 "-" "Mozilla/5.0"`
+      ).join("\n")
     );
     const stdout = memoryStream();
 
     const code = await runCli(
-      ["node", "citrx", "analyze", logFile, "--geo", "--json", "--no-session"],
+      ["node", "citrx", "analyze", logFile, "--json", "--no-session", "--incident-lines", "2"],
       {
         stdout: stdout.stream,
         stderr: memoryStream().stream,
-        stdinIsTTY: true,
-        geoLookup: async (ip) => ({
-          ip,
-          country: ip.startsWith("203.0.113.") ? "Spain" : "United States",
-          countryCode: ip.startsWith("203.0.113.") ? "ES" : "US",
-          asn: ip.startsWith("203.0.113.") ? "AS45102" : "AS64496",
-          org: ip.startsWith("203.0.113.") ? "Alibaba" : "ExampleNet",
-          cached: false
-        })
+        stdinIsTTY: true
       }
     );
 
     expect(code).toBe(0);
     expect(JSON.parse(stdout.output())).toMatchObject({
-      geo: {
-        provider: "ipwho.is",
-        lookedUp: 3,
-        failed: 0,
-        topCountries: [
-          { value: "Spain", count: 3 },
-          { value: "United States", count: 1 }
-        ],
-        topAsns: [
-          { value: "AS45102 Alibaba", count: 3 },
-          { value: "AS64496 ExampleNet", count: 1 }
-        ]
-      },
-      incidents: expect.arrayContaining([
+      incidentMatches: expect.arrayContaining([
         expect.objectContaining({
-          id: "geo_asn_concentration:AS45102",
-          category: "geo_asn_concentration",
-          evidence: expect.arrayContaining([
-            { key: "wafScope", value: "asn" },
-            { key: "wafValue", value: "AS45102 Alibaba" },
-            { key: "uniqueIpsInTopIps", value: 2 }
-          ])
+          incidentId: "post_hotspot:/login",
+          totalMatches: 55,
+          storedLines: 2,
+          truncated: true
         })
       ])
     });
   });
 
-  it("reports GeoIP lookup failures instead of silent empty tables", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "citrx-geo-"));
+  it("stores only incident counts when --incident-lines is 0", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-incident-lines-"));
     const logFile = join(directory, "access.log");
     await writeFile(
       logFile,
-      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET / HTTP/1.1" 200 10 "-" "Mozilla/5.0"\n'
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /.env HTTP/1.1" 404 10 "-" "Mozilla/5.0"\n'
     );
     const stdout = memoryStream();
 
     const code = await runCli(
-      ["node", "citrx", "analyze", logFile, "--geo", "--json", "--no-session"],
+      ["node", "citrx", "analyze", logFile, "--json", "--no-session", "--incident-lines", "0"],
       {
         stdout: stdout.stream,
         stderr: memoryStream().stream,
-        stdinIsTTY: true,
-        geoLookup: async () => null
+        stdinIsTTY: true
       }
     );
 
     expect(code).toBe(0);
     expect(JSON.parse(stdout.output())).toMatchObject({
-      geo: {
-        lookedUp: 0,
-        failed: 1,
-        topCountries: [],
-        topAsns: []
-      },
-      incidents: expect.arrayContaining([
+      incidentMatches: [
         expect.objectContaining({
-          id: "geo_lookup_failed",
-          category: "geo_diagnostic"
+          incidentId: "recon_sensitive_file:/.env",
+          totalMatches: 1,
+          storedLines: 0,
+          truncated: true,
+          lines: []
         })
-      ])
+      ]
     });
+  });
+
+  it("validates --incident-lines", async () => {
+    const stderr = memoryStream();
+
+    const code = await runCli(["node", "citrx", "analyze", "--incident-lines", "-1"], {
+      stdout: memoryStream().stream,
+      stderr: stderr.stream,
+      stdinIsTTY: true
+    });
+
+    expect(code).toBe(1);
+    expect(stderr.output()).toContain("--incident-lines must be an integer");
   });
 
   it("writes Markdown and HTML reports", async () => {
@@ -471,6 +499,67 @@ describe("citrx CLI", () => {
 
     expect(deleteCode).toBe(0);
     await expect(readdir(sessionDir)).resolves.toEqual([]);
+  });
+
+  it("opens an existing session in the interactive explorer", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const sessionDir = join(directory, "sessions");
+    const logFile = join(directory, "access.log");
+    await writeFile(
+      logFile,
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /.env HTTP/1.1" 404 123 "-" "Mozilla/5.0"\n'
+    );
+    const stdout = memoryStream();
+    const opened: string[] = [];
+
+    const analyzeCode = await runCli(["node", "citrx", "analyze", logFile, "--json"], {
+      stdout: stdout.stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true,
+      env: { CITRX_SESSION_DIR: sessionDir }
+    });
+    const report = JSON.parse(stdout.output()) as { sessionId: string };
+
+    const openCode = await runCli(["node", "citrx", "session", "open", report.sessionId], {
+      stdout: memoryStream().stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true,
+      env: { CITRX_SESSION_DIR: sessionDir },
+      openInteractive: async (session) => {
+        opened.push(session.id);
+      }
+    });
+
+    expect(analyzeCode).toBe(0);
+    expect(openCode).toBe(0);
+    expect(opened).toEqual([report.sessionId]);
+  });
+
+  it("opens the interactive explorer after analysis with --interactive", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const sessionDir = join(directory, "sessions");
+    const logFile = join(directory, "access.log");
+    await writeFile(
+      logFile,
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /.env HTTP/1.1" 404 123 "-" "Mozilla/5.0"\n'
+    );
+    const opened: string[] = [];
+
+    const code = await runCli(
+      ["node", "citrx", "analyze", logFile, "--interactive", "--no-session"],
+      {
+        stdout: memoryStream().stream,
+        stderr: memoryStream().stream,
+        stdinIsTTY: true,
+        env: { CITRX_SESSION_DIR: sessionDir },
+        openInteractive: async (session) => {
+          opened.push(session.report.sessionId ?? session.id);
+        }
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(opened).toHaveLength(1);
   });
 
   it("reads access logs from stdin", async () => {
