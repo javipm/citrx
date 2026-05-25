@@ -41,9 +41,11 @@ After building:
 node dist/cli.js --help
 node dist/cli.js --version
 node dist/cli.js analyze /path/to/access.log --json
+node dist/cli.js analyze /path/to/access.log --format apache_combined
+node dist/cli.js analyze /path/to/access.log --format custom:my_format --format-config ./formats.json
 ```
 
-## Phase 1
+## Phase 1.1
 
 `citrx analyze` currently supports plain text Apache/Nginx-style access logs.
 It validates that inputs look like access logs before full analysis, then
@@ -53,10 +55,43 @@ Current report data:
 
 - total, parsed, and invalid line counts
 - total bytes served
+- detected access-log format per input
 - top IPs
 - top paths
 - top methods
 - top statuses
+
+Built-in formats:
+
+- `apache_common`
+- `apache_combined`
+- `nginx_combined`
+
+By default, `--format auto` samples each input and selects the best parser. If
+your logs use a custom format, pass `--format custom:<name>` and
+`--format-config <path>`.
+
+Custom format configs are JSON:
+
+```json
+{
+  "formats": [
+    {
+      "name": "pipe",
+      "pattern": "^(?<ip>\\S+)\\|(?<timestamp>[^|]+)\\|(?<method>\\S+)\\|(?<target>\\S+)\\|(?<protocol>HTTP/[^|]+)\\|(?<status>\\d{3})\\|(?<bytes>\\S+)$",
+      "fields": {
+        "ip": "ip",
+        "timestamp": "timestamp",
+        "method": "method",
+        "target": "target",
+        "protocol": "protocol",
+        "status": "status",
+        "bytes": "bytes"
+      }
+    }
+  ]
+}
+```
 
 Compressed files, stdin, sessions, GeoIP, AI follow-up, Markdown, and HTML
 reports are planned in later phases.

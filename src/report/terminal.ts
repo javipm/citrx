@@ -11,6 +11,9 @@ export function renderTerminalReport(report: AnalyzeReport): string {
   lines.push(`Lines: ${report.summary.parsedLines}/${report.summary.totalLines}`);
   lines.push(`Invalid: ${report.summary.invalidLines}`);
   lines.push(`Bytes served: ${report.summary.totalBytes}`);
+  lines.push(
+    `Formats: ${[...new Set(report.inputFormats.map((input) => input.format))].join(", ")}`
+  );
   lines.push("");
   lines.push(section("Top IPs", report.topIps));
   lines.push(section("Top paths", report.topPaths));

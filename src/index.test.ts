@@ -80,6 +80,14 @@ describe("citrx CLI", () => {
       app: "citrx",
       phase: 1,
       status: "ok",
+      inputFormats: [
+        expect.objectContaining({
+          format: "apache_combined",
+          sampledLines: 3,
+          parsedSampleLines: 3,
+          sampleParseRatio: 1
+        })
+      ],
       summary: {
         files: 1,
         totalLines: 3,
@@ -120,5 +128,76 @@ describe("citrx CLI", () => {
     expect(code).toBe(1);
     expect(stdout.output()).toBe("");
     expect(stderr.output()).toContain("does not look like an Apache/Nginx access log");
+  });
+
+  it("analyzes logs with a custom format config", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "custom.log");
+    const configFile = join(directory, "formats.json");
+    await writeFile(
+      logFile,
+      [
+        "198.51.100.3|25/May/2026:03:12:49 +0200|GET|/custom?x=1|HTTP/1.1|200|321|Custom UA",
+        "198.51.100.4|25/May/2026:03:12:50 +0200|POST|/checkout|HTTP/1.1|500|12|Custom UA"
+      ].join("\n")
+    );
+    await writeFile(
+      configFile,
+      JSON.stringify({
+        formats: [
+          {
+            name: "pipe",
+            pattern:
+              "^(?<ip>\\S+)\\|(?<timestamp>[^|]+)\\|(?<method>\\S+)\\|(?<target>\\S+)\\|(?<protocol>HTTP/[^|]+)\\|(?<status>\\d{3})\\|(?<bytes>\\S+)\\|(?<userAgent>.*)$",
+            fields: {
+              ip: "ip",
+              timestamp: "timestamp",
+              method: "method",
+              target: "target",
+              protocol: "protocol",
+              status: "status",
+              bytes: "bytes",
+              userAgent: "userAgent"
+            }
+          }
+        ]
+      })
+    );
+    const stdout = memoryStream();
+    const stderr = memoryStream();
+
+    const code = await runCli(
+      [
+        "node",
+        "citrx",
+        "analyze",
+        logFile,
+        "--format",
+        "custom:pipe",
+        "--format-config",
+        configFile,
+        "--json"
+      ],
+      {
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        stdinIsTTY: true
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.output())).toMatchObject({
+      inputFormats: [expect.objectContaining({ format: "custom:pipe" })],
+      summary: {
+        totalLines: 2,
+        parsedLines: 2,
+        totalBytes: 333
+      },
+      topPaths: [
+        { value: "/checkout", count: 1 },
+        { value: "/custom", count: 1 }
+      ]
+    });
+    expect(stderr.output()).toBe("");
   });
 });

@@ -2,14 +2,27 @@ import { createReadStream } from "node:fs";
 import { open } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 
-import { parseAccessLogLine } from "../parser/access-log.js";
+import {
+  detectParser,
+  loadCustomParsers,
+  resolveParser,
+  validateParserOnSample
+} from "../parser/access-log.js";
+import type {
+  AccessLogParser,
+  FormatChoice
+} from "../parser/access-log.js";
 import type { AnalyzeReport, TopItem } from "./types.js";
 
 interface AnalyzeOptions {
   top: number;
+  format: FormatChoice;
+  formatConfig?: string;
 }
 
-interface ValidationResult {
+interface FileParserSelection {
+  file: string;
+  parser: AccessLogParser;
   sampledLines: number;
   parsedLines: number;
   parseRatio: number;
@@ -40,6 +53,7 @@ export async function analyzeAccessLogs(
     throw new Error("No input files found.");
   }
 
+  const customParsers = await loadCustomParsers(options.formatConfig);
   const counters: Counters = {
     files: files.length,
     totalLines: 0,
@@ -51,21 +65,36 @@ export async function analyzeAccessLogs(
     methods: new Map(),
     statuses: new Map()
   };
+  const inputFormats: AnalyzeReport["inputFormats"] = [];
 
   for (const file of files) {
-    const validation = await validateAccessLogFile(file);
+    const selection = await selectParserForFile(
+      file,
+      options.format,
+      customParsers
+    );
 
     if (
-      validation.sampledLines < MIN_SAMPLE_LINES ||
-      validation.parseRatio < MIN_PARSE_RATIO
+      selection.sampledLines < MIN_SAMPLE_LINES ||
+      selection.parseRatio < MIN_PARSE_RATIO
     ) {
       throw new Error(
         `Input does not look like an Apache/Nginx access log: ${file} ` +
-          `(${validation.parsedLines}/${validation.sampledLines} sampled lines parsed).`
+          `(${selection.parsedLines}/${selection.sampledLines} sampled lines parsed). ` +
+          "If this is a custom access-log format, pass --format custom:<name> " +
+          "and --format-config <path>."
       );
     }
 
-    await analyzeFile(file, counters);
+    inputFormats.push({
+      file,
+      format: selection.parser.id,
+      sampledLines: selection.sampledLines,
+      parsedSampleLines: selection.parsedLines,
+      sampleParseRatio: selection.parseRatio
+    });
+
+    await analyzeFile(file, selection.parser, counters);
   }
 
   return {
@@ -74,6 +103,7 @@ export async function analyzeAccessLogs(
     status: "ok",
     generatedAt: new Date().toISOString(),
     inputs: files,
+    inputFormats,
     summary: {
       files: counters.files,
       totalLines: counters.totalLines,
@@ -88,7 +118,46 @@ export async function analyzeAccessLogs(
   };
 }
 
-async function validateAccessLogFile(file: string): Promise<ValidationResult> {
+async function selectParserForFile(
+  file: string,
+  format: FormatChoice,
+  customParsers: AccessLogParser[]
+): Promise<FileParserSelection> {
+  const sampleLines = await readSampleLines(file);
+  const explicitParser = resolveParser(format, customParsers);
+
+  if (format !== "auto" && !explicitParser) {
+    throw new Error(
+      `Unknown access-log format: ${format}. ` +
+        "Use one of auto, apache_common, apache_combined, nginx_combined, " +
+        "or provide --format-config for custom:<name>."
+    );
+  }
+
+  const detection = explicitParser
+    ? validateParserOnSample(explicitParser, sampleLines)
+    : detectParser(sampleLines, customParsers);
+
+  if (!detection) {
+    return {
+      file,
+      parser: explicitParser ?? customParsers[0] ?? fallbackParser(),
+      sampledLines: sampleLines.length,
+      parsedLines: 0,
+      parseRatio: 0
+    };
+  }
+
+  return {
+    file,
+    parser: detection.parser,
+    sampledLines: detection.sampledLines,
+    parsedLines: detection.parsedLines,
+    parseRatio: detection.parseRatio
+  };
+}
+
+async function readSampleLines(file: string): Promise<string[]> {
   const handle = await open(file, "r");
 
   try {
@@ -96,13 +165,13 @@ async function validateAccessLogFile(file: string): Promise<ValidationResult> {
     const { bytesRead } = await handle.read(buffer, 0, SAMPLE_BYTES, 0);
 
     if (bytesRead === 0) {
-      return { sampledLines: 0, parsedLines: 0, parseRatio: 0 };
+      return [];
     }
 
     const sampleBuffer = buffer.subarray(0, bytesRead);
 
     if (sampleBuffer.includes(0)) {
-      return { sampledLines: 0, parsedLines: 0, parseRatio: 0 };
+      return [];
     }
 
     const text = sampleBuffer.toString("utf8");
@@ -111,21 +180,17 @@ async function validateAccessLogFile(file: string): Promise<ValidationResult> {
       .slice(0, MAX_SAMPLE_LINES)
       .filter((line) => line.trim().length > 0);
     const completeLines = bytesRead === SAMPLE_BYTES ? lines.slice(0, -1) : lines;
-    const parsedLines = completeLines.filter((line) => parseAccessLogLine(line))
-      .length;
-
-    return {
-      sampledLines: completeLines.length,
-      parsedLines,
-      parseRatio:
-        completeLines.length === 0 ? 0 : parsedLines / completeLines.length
-    };
+    return completeLines;
   } finally {
     await handle.close();
   }
 }
 
-async function analyzeFile(file: string, counters: Counters): Promise<void> {
+async function analyzeFile(
+  file: string,
+  parser: AccessLogParser,
+  counters: Counters
+): Promise<void> {
   const stream = createReadStream(file, {
     encoding: "utf8",
     highWaterMark: 64 * 1024
@@ -142,7 +207,7 @@ async function analyzeFile(file: string, counters: Counters): Promise<void> {
 
     counters.totalLines += 1;
 
-    const entry = parseAccessLogLine(line);
+    const entry = parser.parse(line);
 
     if (!entry) {
       counters.invalidLines += 1;
@@ -156,6 +221,14 @@ async function analyzeFile(file: string, counters: Counters): Promise<void> {
     increment(counters.methods, entry.method);
     increment(counters.statuses, String(entry.status));
   }
+}
+
+function fallbackParser(): AccessLogParser {
+  return {
+    id: "apache_combined",
+    label: "Apache combined",
+    parse: () => null
+  };
 }
 
 function increment(map: Map<string, number>, key: string): void {

@@ -11,12 +11,21 @@ export interface AnalyzeSummary {
   totalBytes: number;
 }
 
+export interface InputFormatSummary {
+  file: string;
+  format: string;
+  sampledLines: number;
+  parsedSampleLines: number;
+  sampleParseRatio: number;
+}
+
 export interface AnalyzeReport {
   app: "citrx";
   phase: 1;
   status: "ok";
   generatedAt: string;
   inputs: string[];
+  inputFormats: InputFormatSummary[];
   summary: AnalyzeSummary;
   topIps: TopItem[];
   topPaths: TopItem[];
