@@ -8,6 +8,7 @@ import type { AnalyzeReport, Incident, IncidentLogLine, TopItem } from "../analy
 import { OpenAiIncidentQuestionClient } from "../ai/incident-question.js";
 import type { IncidentQuestionClient } from "../ai/incident-question.js";
 import type { CitrxSession } from "../session/types.js";
+import { createAccessLogLineFilter, validateAccessLogFilter } from "./filter.js";
 
 export interface TuiRuntime {
   env: NodeJS.ProcessEnv;
@@ -779,9 +780,9 @@ function visibleLines(
   sortKey: SortKey,
   sortDirection: SortDirection
 ): IncidentLogLine[] {
-  const needle = filter.toLowerCase();
+  const lineMatches = createAccessLogLineFilter(filter);
   return lines
-    .filter((line) => (needle ? searchableLine(line).includes(needle) : true))
+    .filter((line) => lineMatches(line))
     .sort((a, b) => compareLine(a, b, sortKey, sortDirection));
 }
 
@@ -1011,22 +1012,6 @@ function compareLine(
   return String(a[sortKey]).localeCompare(String(b[sortKey])) * multiplier;
 }
 
-function searchableLine(line: IncidentLogLine): string {
-  return [
-    line.ip,
-    line.timestamp,
-    line.method,
-    line.path,
-    line.target,
-    line.status,
-    line.bytes,
-    line.userAgent,
-    line.raw
-  ]
-    .join(" ")
-    .toLowerCase();
-}
-
 function nextSort(sortKey: SortKey): SortKey {
   const keys: SortKey[] = ["timestamp", "ip", "status", "method", "path", "bytes"];
   return keys[(keys.indexOf(sortKey) + 1) % keys.length] ?? "timestamp";
@@ -1079,15 +1064,25 @@ function handlePromptInput({
 
   if (key.return) {
     const value = prompt.value.trim();
-    setPrompt(undefined);
 
     if (prompt.kind === "filter") {
+      const validation = validateAccessLogFilter(value);
+
+      if (!validation.ok) {
+        setMessage(`Invalid filter: ${validation.error}`);
+        setPrompt(prompt);
+        return;
+      }
+
+      setPrompt(undefined);
       setFilter(value);
       setLineIndex(0);
       setSelectedLineKeys(new Set());
       setMessage(value ? `Filter: ${value}` : "Filter cleared");
       return;
     }
+
+    setPrompt(undefined);
 
     if (value) {
       submitAi(value, prompt);

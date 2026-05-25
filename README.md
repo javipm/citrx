@@ -126,6 +126,23 @@ interactive terminal console.
   sort column, `Tab` flips sort direction, `Space` selects a row, `A` selects
   visible rows, `a` asks OpenAI, `e` exports the current context, and `q` quits.
 
+Incident filters support text search plus a small query syntax. Terms are joined
+with `AND` by default, `OR`/`|` and parentheses are supported, and `!` negates a
+term. Use `*` as the wildcard.
+
+```text
+method:POST status:200 url:*admin*
+(method:POST OR method:PUT) status:2xx
+(status:403 | status:404) !ua:*Googlebot*
+ip:66.249.* bytes>50000
+param:q
+param:q=*select*
+url:"/admin/login?q=camper"
+```
+
+Supported fields include `ip`, `method`, `status`, `path`, `url`/`target`, `ua`,
+`bytes`, `param`, `source`, `line`, `time`, and `raw`.
+
 OpenAI follow-up is scoped to the current screen. From the summary it receives a
 compact global analysis. From an incident it receives only selected rows, or the
 currently visible filtered rows when nothing is selected.
