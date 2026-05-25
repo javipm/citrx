@@ -19,6 +19,8 @@ export interface TuiRuntime {
 }
 
 type Screen = "summary" | "incident" | "tops";
+type SummaryFocus = "accesses" | "incidents";
+type TopScope = "summary" | "incident";
 type SortKey = "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
 type SortDirection = "asc" | "desc";
 interface PromptInputState {
@@ -84,8 +86,11 @@ function CitrxExplorer({
   const { exit } = useApp();
   const { rows, columns } = useWindowSize();
   const [screen, setScreen] = useState<Screen>("summary");
+  const [summaryFocus, setSummaryFocus] = useState<SummaryFocus>("accesses");
+  const [topScope, setTopScope] = useState<TopScope>("summary");
   const [incidentIndex, setIncidentIndex] = useState(0);
   const [lineIndex, setLineIndex] = useState(0);
+  const [summaryLineIndex, setSummaryLineIndex] = useState(0);
   const [filter, setFilter] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("timestamp");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
@@ -97,6 +102,14 @@ function CitrxExplorer({
   const [busy, setBusy] = useState(false);
   const incidents = session.report.incidents;
   const incident = incidents[incidentIndex];
+  const allStoredLines = useMemo(
+    () => storedIncidentLines(session.report),
+    [session.report]
+  );
+  const globalLines = useMemo(
+    () => visibleLines(allStoredLines, filter, sortKey, sortDirection),
+    [allStoredLines, filter, sortKey, sortDirection]
+  );
   const allIncidentLines = useMemo(
     () => incidentLines(session.report, incident?.id),
     [session.report, incident?.id]
@@ -109,7 +122,12 @@ function CitrxExplorer({
     () => lines.filter((line) => selectedLineKeys.has(lineKey(line))),
     [lines, selectedLineKeys]
   );
-  const pageSize = screen === "incident" ? Math.max(8, rows - 13) : Math.max(6, rows - 14);
+  const selectedGlobalLines = useMemo(
+    () => globalLines.filter((line) => selectedLineKeys.has(lineKey(line))),
+    [globalLines, selectedLineKeys]
+  );
+  const pageSize = screen === "incident" ? Math.max(8, rows - 13) : Math.max(6, rows - 16);
+  const summaryPageSize = Math.max(8, rows - 15);
   const detailRows = Math.max(6, rows - 6);
   const detailWidth = Math.max(40, columns - 10);
   const detailLines = useMemo(
@@ -122,6 +140,11 @@ function CitrxExplorer({
     Math.min(lineIndex - Math.floor(pageSize / 2), Math.max(0, lines.length - pageSize))
   );
   const pageLines = lines.slice(pageStart, pageStart + pageSize);
+  const summaryPageStart = Math.max(
+    0,
+    Math.min(summaryLineIndex - Math.floor(summaryPageSize / 2), Math.max(0, globalLines.length - summaryPageSize))
+  );
+  const summaryPageLines = globalLines.slice(summaryPageStart, summaryPageStart + summaryPageSize);
 
   useInput((inputValue, key) => {
     if (prompt) {
@@ -131,7 +154,7 @@ function CitrxExplorer({
         prompt,
         setPrompt,
         setFilter,
-        setLineIndex,
+        setLineIndex: screen === "summary" ? setSummaryLineIndex : setLineIndex,
         setSelectedLineKeys,
         setMessage,
         submitAi: (question, state) => {
@@ -159,7 +182,7 @@ function CitrxExplorer({
       if (inputValue === "d" || inputValue === "b" || key.escape || key.backspace) {
         setDetailLine(undefined);
         setDetailScroll(0);
-        setMessage("Back to incident");
+        setMessage(screen === "summary" ? "Back to summary" : "Back to incident");
         return;
       }
 
@@ -180,8 +203,8 @@ function CitrxExplorer({
     }
 
     if ((inputValue === "b" || key.backspace || key.escape) && screen === "tops") {
-      setScreen("incident");
-      setMessage("Back to incident");
+      setScreen(topScope === "summary" ? "summary" : "incident");
+      setMessage(topScope === "summary" ? "Back to summary" : "Back to incident");
       return;
     }
 
@@ -193,16 +216,29 @@ function CitrxExplorer({
 
     if (screen === "summary") {
       if (key.upArrow) {
-        setIncidentIndex((value) => Math.max(0, value - 1));
+        if (summaryFocus === "incidents") {
+          setIncidentIndex((value) => Math.max(0, value - 1));
+        } else {
+          setSummaryLineIndex((value) => Math.max(0, value - 1));
+        }
         return;
       }
 
       if (key.downArrow) {
-        setIncidentIndex((value) => Math.min(incidents.length - 1, value + 1));
+        if (summaryFocus === "incidents") {
+          setIncidentIndex((value) => Math.min(incidents.length - 1, value + 1));
+        } else {
+          setSummaryLineIndex((value) => Math.min(globalLines.length - 1, value + 1));
+        }
         return;
       }
 
-      if (key.return && incident) {
+      if (key.tab) {
+        setSummaryFocus((value) => (value === "accesses" ? "incidents" : "accesses"));
+        return;
+      }
+
+      if (key.return && summaryFocus === "incidents" && incident) {
         setScreen("incident");
         setLineIndex(0);
         setFilter("");
@@ -212,23 +248,58 @@ function CitrxExplorer({
         return;
       }
 
-      if (inputValue === "a") {
-        setPrompt({
-          kind: "ai",
-          value: "",
-          cursor: 0,
-          scope: "summary",
-          lines: []
-        });
+      if ((inputValue === "d" || key.return) && summaryFocus === "accesses") {
+        const line = globalLines[summaryLineIndex];
+        if (line) {
+          setDetailLine(line);
+          setDetailScroll(0);
+        }
+        return;
       }
 
-      return;
-    }
+      if (inputValue === "s") {
+        setSortKey(nextSort(sortKey));
+        setSummaryLineIndex(0);
+        return;
+      }
 
-    if (screen === "tops") {
+      if (inputValue === "S") {
+        setSortDirection((value) => (value === "desc" ? "asc" : "desc"));
+        setSummaryLineIndex(0);
+        return;
+      }
+
+      if (inputValue === " ") {
+        const line = globalLines[summaryLineIndex];
+        if (line) {
+          setSelectedLineKeys((current) => toggleSelection(current, line));
+        }
+        return;
+      }
+
+      if (inputValue === "A") {
+        setSelectedLineKeys(new Set(globalLines.map(lineKey)));
+        setMessage(`Selected ${globalLines.length} visible lines`);
+        return;
+      }
+
+      if (inputValue === "r") {
+        setFilter("");
+        setSummaryLineIndex(0);
+        setSelectedLineKeys(new Set());
+        setMessage("Filter and selection reset");
+        return;
+      }
+
+      if (inputValue === "/" || inputValue === "f" || inputValue === "F") {
+        setPrompt({ kind: "filter", value: filter, cursor: filter.length });
+        return;
+      }
+
       if (inputValue === "t") {
-        setScreen("incident");
-        setMessage("Back to incident");
+        setTopScope("summary");
+        setScreen("tops");
+        setMessage("Global top values");
         return;
       }
 
@@ -237,9 +308,31 @@ function CitrxExplorer({
           kind: "ai",
           value: "",
           cursor: 0,
-          scope: "incident",
-          incident,
-          lines: selectedLines.length > 0 ? selectedLines : lines
+          scope: "summary",
+          lines: selectedGlobalLines.length > 0 ? selectedGlobalLines : globalLines
+        });
+      }
+
+      return;
+    }
+
+    if (screen === "tops") {
+      if (inputValue === "t") {
+        setScreen(topScope === "summary" ? "summary" : "incident");
+        setMessage(topScope === "summary" ? "Back to summary" : "Back to incident");
+        return;
+      }
+
+      if (inputValue === "a") {
+        setPrompt({
+          kind: "ai",
+          value: "",
+          cursor: 0,
+          scope: topScope === "summary" ? "summary" : "incident",
+          incident: topScope === "summary" ? undefined : incident,
+          lines: topScope === "summary"
+            ? selectedGlobalLines.length > 0 ? selectedGlobalLines : globalLines
+            : selectedLines.length > 0 ? selectedLines : lines
         });
       }
 
@@ -286,6 +379,7 @@ function CitrxExplorer({
     }
 
     if (inputValue === "t") {
+      setTopScope("incident");
       setScreen("tops");
       setMessage(`Top values for ${incident?.id ?? "incident"}`);
       return;
@@ -345,11 +439,26 @@ function CitrxExplorer({
             totalLines: detailLines.length
           })
         : screen === "summary"
-          ? React.createElement(SummaryScreen, { report: session.report, incidents, incidentIndex, pageSize })
+          ? React.createElement(SummaryScreen, {
+              report: session.report,
+              incidents,
+              incidentIndex,
+              focus: summaryFocus,
+              lines: globalLines,
+              pageLines: summaryPageLines,
+              pageStart: summaryPageStart,
+              lineIndex: summaryLineIndex,
+              filter,
+              sortKey,
+              sortDirection,
+              selectedLineKeys,
+              columns
+            })
           : screen === "tops"
             ? React.createElement(TopValuesScreen, {
                 report: session.report,
-                incident,
+                incident: topScope === "summary" ? undefined : incident,
+                scope: topScope,
                 columns
               })
           : React.createElement(IncidentScreen, {
@@ -369,6 +478,7 @@ function CitrxExplorer({
     prompt ? React.createElement(PromptBar, { prompt, columns }) : null,
     React.createElement(Footer, {
       screen,
+      summaryFocus,
       detailOpen: Boolean(detailLine),
       busy,
       message,
@@ -394,12 +504,30 @@ function SummaryScreen({
   report,
   incidents,
   incidentIndex,
-  pageSize
+  focus,
+  lines,
+  pageLines,
+  pageStart,
+  lineIndex,
+  filter,
+  sortKey,
+  sortDirection,
+  selectedLineKeys,
+  columns
 }: {
   report: AnalyzeReport;
   incidents: Incident[];
   incidentIndex: number;
-  pageSize: number;
+  focus: SummaryFocus;
+  lines: IncidentLogLine[];
+  pageLines: IncidentLogLine[];
+  pageStart: number;
+  lineIndex: number;
+  filter: string;
+  sortKey: SortKey;
+  sortDirection: SortDirection;
+  selectedLineKeys: Set<string>;
+  columns: number;
 }) {
   return React.createElement(
     Box,
@@ -408,9 +536,27 @@ function SummaryScreen({
       Box,
       { flexDirection: "row", gap: 1 },
       React.createElement(SummaryPanel, { report }),
-      React.createElement(WatchlistPanel, { report })
+      React.createElement(IncidentList, {
+        incidents,
+        incidentIndex,
+        pageSize: 7,
+        active: focus === "incidents"
+      })
     ),
-    React.createElement(IncidentList, { incidents, incidentIndex, pageSize })
+    React.createElement(LineTable, {
+      lines,
+      pageLines,
+      pageStart,
+      lineIndex,
+      filter,
+      sortKey,
+      sortDirection,
+      selectedLineKeys,
+      columns,
+      active: focus === "accesses",
+      label: "Stored accesses",
+      emptyMessage: "No stored access lines. Increase --incident-lines or open an incident."
+    })
   );
 }
 
@@ -427,55 +573,47 @@ function SummaryPanel({ report }: { report: AnalyzeReport }) {
       `lines: ${report.summary.parsedLines}/${report.summary.totalLines} parsed | invalid: ${report.summary.invalidLines}`
     ),
     React.createElement(Text, null, `bytes: ${formatBytes(report.summary.totalBytes)}`),
-    React.createElement(Text, null, `top ips: ${joinTop(report.topIps, 3)}`),
-    React.createElement(Text, null, `top paths: ${joinTop(report.topPaths, 2)}`),
-    React.createElement(Text, null, `statuses: ${joinTop(report.topStatuses, 4)}`)
-  );
-}
-
-function WatchlistPanel({ report }: { report: AnalyzeReport }) {
-  const items = report.incidents.slice(0, 5);
-  return React.createElement(
-    Box,
-    { flexDirection: "column", borderStyle: "single", paddingX: 1, flexGrow: 1 },
-    React.createElement(Text, { bold: true }, "Watchlist"),
-    ...(items.length > 0
-      ? items.map((incident) =>
-          React.createElement(
-            Text,
-            { key: incident.id, color: severityColor(incident.severity) },
-            `${incident.severity.padEnd(8)} ${incident.score} ${truncate(incident.title, 46)}`
-          )
-        )
-      : [React.createElement(Text, { key: "empty", color: "green" }, "No local incidents detected")])
+    React.createElement(Text, null, `stored incident lines: ${storedIncidentLines(report).length}`),
+    React.createElement(Text, { color: "gray" }, "press t for global top values")
   );
 }
 
 function IncidentList({
   incidents,
   incidentIndex,
-  pageSize
+  pageSize,
+  active = true
 }: {
   incidents: Incident[];
   incidentIndex: number;
   pageSize: number;
+  active?: boolean;
 }) {
+  const start = Math.max(
+    0,
+    Math.min(incidentIndex - Math.floor(pageSize / 2), Math.max(0, incidents.length - pageSize))
+  );
+
   return React.createElement(
     Box,
     { flexDirection: "column", borderStyle: "single", paddingX: 1, flexGrow: 1 },
-    React.createElement(Text, { bold: true }, "Incidents"),
+    React.createElement(Text, { bold: true, color: active ? "cyan" : undefined }, `Incidents${active ? " *" : ""}`),
     ...(incidents.length > 0
-      ? incidents.slice(0, pageSize).map((incident, index) =>
+      ? incidents.slice(start, start + pageSize).map((incident, offset) => {
+          const index = start + offset;
+          return (
           React.createElement(
             Text,
             {
               key: incident.id,
-              color: index === incidentIndex ? "black" : severityColor(incident.severity),
-              backgroundColor: index === incidentIndex ? "cyan" : undefined
+              color: active && index === incidentIndex ? "black" : severityColor(incident.severity),
+              backgroundColor: active && index === incidentIndex ? "cyan" : undefined,
+              wrap: "truncate"
             },
             `${index === incidentIndex ? ">" : " "} ${incident.severity.padEnd(8)} ${String(incident.score).padStart(3)} ${truncate(incident.id, 38)} ${truncate(incident.title, 48)}`
           )
-        )
+          );
+        })
       : [React.createElement(Text, { key: "empty" }, "No incidents found")])
   );
 }
@@ -552,20 +690,28 @@ function IncidentScreen({
 function TopValuesScreen({
   report,
   incident,
+  scope,
   columns
 }: {
   report: AnalyzeReport;
   incident: Incident | undefined;
+  scope: TopScope;
   columns: number;
 }) {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
-  const insights = incidentInsights(matchSet?.lines ?? []);
+  const sourceLines = scope === "summary" ? storedIncidentLines(report) : matchSet?.lines ?? [];
+  const insights = incidentInsights(sourceLines);
   const panelWidth = Math.max(30, Math.floor((columns - 7) / 2));
   const headerWidth = Math.max(40, columns - 10);
 
-  if (!incident) {
+  if (scope === "incident" && !incident) {
     return React.createElement(Text, null, "No incident selected");
   }
+
+  const title = scope === "summary" ? "Global top values" : `Top values for ${incident?.id ?? "incident"}`;
+  const subtitle = scope === "summary"
+    ? `computed from ${sourceLines.length} stored matching requests`
+    : `computed from ${matchSet?.storedLines ?? 0}/${matchSet?.totalMatches ?? 0} stored matching requests${matchSet?.truncated ? " (sample truncated)" : ""}`;
 
   return React.createElement(
     Box,
@@ -575,16 +721,13 @@ function TopValuesScreen({
       { flexDirection: "column", borderStyle: "single", paddingX: 1 },
       React.createElement(
         Text,
-        { bold: true, color: severityColor(incident.severity), wrap: "truncate" },
-        fitText(`Top values for ${incident.id}`, headerWidth)
+        { bold: true, color: scope === "summary" ? "cyan" : severityColor(incident?.severity ?? "info"), wrap: "truncate" },
+        fitText(title, headerWidth)
       ),
       React.createElement(
         Text,
         { color: matchSet?.truncated ? "yellow" : "gray", wrap: "truncate" },
-        fitText(
-          `computed from ${matchSet?.storedLines ?? 0}/${matchSet?.totalMatches ?? 0} stored matching requests${matchSet?.truncated ? " (sample truncated)" : ""}`,
-          headerWidth
-        )
+        fitText(subtitle, headerWidth)
       )
     ),
     React.createElement(
@@ -656,7 +799,10 @@ function LineTable({
   sortKey,
   sortDirection,
   selectedLineKeys,
-  columns
+  columns,
+  active = true,
+  label = "Accesses",
+  emptyMessage = "No stored lines for this incident"
 }: {
   lines: IncidentLogLine[];
   pageLines: IncidentLogLine[];
@@ -667,6 +813,9 @@ function LineTable({
   sortDirection: SortDirection;
   selectedLineKeys: Set<string>;
   columns: number;
+  active?: boolean;
+  label?: string;
+  emptyMessage?: string;
 }) {
   const tableColumns = accessTableColumns(columns);
   const visibleStart = pageLines.length > 0 ? pageStart + 1 : 0;
@@ -678,9 +827,9 @@ function LineTable({
     { flexDirection: "column", borderStyle: "single", paddingX: 1, flexGrow: 1 },
     React.createElement(
       Text,
-      { bold: true, color: "cyan", wrap: "truncate" },
+      { bold: true, color: active ? "cyan" : undefined, wrap: "truncate" },
       fitText(
-        `Accesses: ${lines.length} | showing: ${visibleStart}-${visibleEnd} | sort: ${sortKey} ${sortDirection}${filterLabel}`,
+        `${label}${active ? " *" : ""}: ${lines.length} | showing: ${visibleStart}-${visibleEnd} | sort: ${sortKey} ${sortDirection}${filterLabel}`,
         columns - 10
       )
     ),
@@ -692,20 +841,20 @@ function LineTable({
     ...(pageLines.length > 0
       ? pageLines.map((line, offset) => {
           const absoluteIndex = pageStart + offset;
-          const active = absoluteIndex === lineIndex;
+          const rowActive = active && absoluteIndex === lineIndex;
           const selected = selectedLineKeys.has(lineKey(line));
           return React.createElement(
             Text,
             {
               key: lineKey(line),
-              color: active ? "black" : undefined,
-              backgroundColor: active ? "white" : undefined,
+              color: rowActive ? "black" : undefined,
+              backgroundColor: rowActive ? "white" : undefined,
               wrap: "truncate"
             },
             accessTableRow(line, selected, tableColumns)
           );
         })
-      : [React.createElement(Text, { key: "empty", color: "yellow" }, "No stored lines for this incident")])
+      : [React.createElement(Text, { key: "empty", color: "yellow" }, emptyMessage)])
   );
 }
 
@@ -755,6 +904,7 @@ function PromptBar({ prompt, columns }: { prompt: PromptState; columns: number }
 
 function Footer({
   screen,
+  summaryFocus,
   detailOpen,
   busy,
   message,
@@ -762,6 +912,7 @@ function Footer({
   columns
 }: {
   screen: Screen;
+  summaryFocus: SummaryFocus;
   detailOpen: boolean;
   busy: boolean;
   message: string;
@@ -771,9 +922,9 @@ function Footer({
   const shortcuts = detailOpen
     ? "↑/↓ scroll | d/b/Esc close | q quit"
     : screen === "summary"
-      ? "↑/↓ incidents | Enter detail | a ask global | q quit"
+      ? `Tab focus(${summaryFocus}) | ↑/↓ navigate | Enter/d open | f filter | s sort | S dir | t tops | a ask | q quit`
       : screen === "tops"
-        ? "t/b/Esc back | a ask about incident | q quit"
+        ? "t/b/Esc back | a ask about view | q quit"
         : "↑/↓ rows | d detail | t tops | Space select | A select visible | f filter | s sort | Tab dir | a ask | e export | b back | q quit";
   const status = `${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
 
@@ -787,6 +938,18 @@ function Footer({
 
 function incidentLines(report: AnalyzeReport, incidentId: string | undefined): IncidentLogLine[] {
   return report.incidentMatches.find((item) => item.incidentId === incidentId)?.lines ?? [];
+}
+
+function storedIncidentLines(report: AnalyzeReport): IncidentLogLine[] {
+  const lines = new Map<string, IncidentLogLine>();
+
+  for (const matchSet of report.incidentMatches) {
+    for (const line of matchSet.lines) {
+      lines.set(lineKey(line), line);
+    }
+  }
+
+  return [...lines.values()];
 }
 
 function visibleLines(
@@ -1322,13 +1485,6 @@ function userAgentLabel(userAgent: string | null): string {
     normalized.match(/Linux [^;)]+/)?.[0];
 
   return os ? `${browser} ${os}` : browser;
-}
-
-function joinTop(items: TopItem[], limit: number): string {
-  return items
-    .slice(0, limit)
-    .map((item) => `${item.value} (${item.count})`)
-    .join(", ");
 }
 
 function formatBytes(value: number): string {
