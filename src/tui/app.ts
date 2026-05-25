@@ -67,6 +67,7 @@ function CitrxExplorer({
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [selectedLineKeys, setSelectedLineKeys] = useState<Set<string>>(new Set());
   const [detailLine, setDetailLine] = useState<IncidentLogLine | undefined>();
+  const [detailScroll, setDetailScroll] = useState(0);
   const [prompt, setPrompt] = useState<PromptState | undefined>();
   const [message, setMessage] = useState("Ready");
   const [busy, setBusy] = useState(false);
@@ -85,6 +86,13 @@ function CitrxExplorer({
     [lines, selectedLineKeys]
   );
   const pageSize = screen === "incident" ? Math.max(6, rows - 13) : Math.max(6, rows - 14);
+  const detailRows = Math.max(6, rows - 6);
+  const detailWidth = Math.max(40, columns - 8);
+  const detailLines = useMemo(
+    () => (detailLine ? requestDetailLines(detailLine, detailWidth) : []),
+    [detailLine, detailWidth]
+  );
+  const visibleDetailLines = detailLines.slice(detailScroll, detailScroll + detailRows);
   const pageStart = Math.max(
     0,
     Math.min(lineIndex - Math.floor(pageSize / 2), Math.max(0, lines.length - pageSize))
@@ -119,8 +127,25 @@ function CitrxExplorer({
     }
 
     if (detailLine) {
+      if (inputValue === "q") {
+        exit();
+        return;
+      }
+
       if (inputValue === "d" || inputValue === "b" || key.escape || key.backspace) {
         setDetailLine(undefined);
+        setDetailScroll(0);
+        setMessage("Back to incident");
+        return;
+      }
+
+      if (key.upArrow) {
+        setDetailScroll((value) => Math.max(0, value - 1));
+        return;
+      }
+
+      if (key.downArrow) {
+        setDetailScroll((value) => Math.min(Math.max(0, detailLines.length - detailRows), value + 1));
       }
       return;
     }
@@ -203,6 +228,7 @@ function CitrxExplorer({
       const line = lines[lineIndex];
       if (line) {
         setDetailLine(line);
+        setDetailScroll(0);
       }
       return;
     }
@@ -252,26 +278,33 @@ function CitrxExplorer({
     React.createElement(
       Box,
       { flexDirection: "column", flexGrow: 1 },
-      screen === "summary"
-        ? React.createElement(SummaryScreen, { report: session.report, incidents, incidentIndex, pageSize })
-        : React.createElement(IncidentScreen, {
-            report: session.report,
-            incident,
-            lines,
-            pageLines,
-            pageStart,
-            lineIndex,
-            filter,
-            sortKey,
-            sortDirection,
-            selectedLineKeys,
-            columns
+      detailLine
+        ? React.createElement(RequestDetailScreen, {
+            line: detailLine,
+            visibleLines: visibleDetailLines,
+            scroll: detailScroll,
+            totalLines: detailLines.length
           })
+        : screen === "summary"
+          ? React.createElement(SummaryScreen, { report: session.report, incidents, incidentIndex, pageSize })
+          : React.createElement(IncidentScreen, {
+              report: session.report,
+              incident,
+              lines,
+              pageLines,
+              pageStart,
+              lineIndex,
+              filter,
+              sortKey,
+              sortDirection,
+              selectedLineKeys,
+              columns
+            })
     ),
-    detailLine ? React.createElement(LineDetailModal, { line: detailLine }) : null,
     prompt ? React.createElement(PromptBar, { prompt }) : null,
     React.createElement(Footer, {
       screen,
+      detailOpen: Boolean(detailLine),
       busy,
       message,
       selected: selectedLineKeys.size
@@ -495,19 +528,28 @@ function LineTable({
   );
 }
 
-function LineDetailModal({ line }: { line: IncidentLogLine }) {
+function RequestDetailScreen({
+  line,
+  visibleLines,
+  scroll,
+  totalLines
+}: {
+  line: IncidentLogLine;
+  visibleLines: string[];
+  scroll: number;
+  totalLines: number;
+}) {
   return React.createElement(
     Box,
-    { flexDirection: "column", borderStyle: "double", paddingX: 1 },
-    React.createElement(Text, { bold: true, color: "cyan" }, `Request detail | line ${line.lineNumber} | d/b/Esc close`),
-    React.createElement(Text, null, `source: ${line.source}`),
-    React.createElement(Text, null, `time:   ${line.timestamp}`),
-    React.createElement(Text, null, `ip:     ${line.ip}`),
-    React.createElement(Text, null, `method: ${line.method} | status: ${line.status} | bytes: ${line.bytes ?? "-"}`),
-    React.createElement(Text, null, `path:   ${line.path}`),
-    React.createElement(Text, null, `target: ${line.target}`),
-    React.createElement(Text, null, `ua:     ${line.userAgent ?? "-"}`),
-    React.createElement(Text, { color: "gray" }, `raw:    ${line.raw}`)
+    { flexDirection: "column", borderStyle: "double", paddingX: 1, flexGrow: 1 },
+    React.createElement(
+      Text,
+      { bold: true, color: "cyan" },
+      `Request detail | line=${line.lineNumber} | ${scroll + 1}-${Math.min(scroll + visibleLines.length, totalLines)}/${totalLines}`
+    ),
+    ...visibleLines.map((value, index) =>
+      React.createElement(Text, { key: `${scroll + index}:${value}`, color: value.startsWith("raw") || value.startsWith("        ") ? "gray" : undefined }, value)
+    )
   );
 }
 
@@ -530,17 +572,20 @@ function PromptBar({ prompt }: { prompt: PromptState }) {
 
 function Footer({
   screen,
+  detailOpen,
   busy,
   message,
   selected
 }: {
   screen: Screen;
+  detailOpen: boolean;
   busy: boolean;
   message: string;
   selected: number;
 }) {
-  const shortcuts =
-    screen === "summary"
+  const shortcuts = detailOpen
+    ? "↑/↓ scroll | d/b/Esc close | q quit"
+    : screen === "summary"
       ? "↑/↓ incidents | Enter detail | a ask global | q quit"
       : "↑/↓ rows | d detail | Space select | A select visible | f filter | s sort | Tab dir | a ask | e export | b back | q quit";
   return React.createElement(
@@ -738,6 +783,42 @@ function toggleSelection(current: Set<string>, line: IncidentLogLine): Set<strin
 
 function lineKey(line: IncidentLogLine): string {
   return `${line.source}:${line.lineNumber}`;
+}
+
+function requestDetailLines(line: IncidentLogLine, width: number): string[] {
+  return [
+    ...wrapDetailField("source", line.source, width),
+    ...wrapDetailField("time", line.timestamp, width),
+    ...wrapDetailField("ip", line.ip, width),
+    ...wrapDetailField("method", `${line.method} | status=${line.status} | bytes=${line.bytes ?? "-"}`, width),
+    ...wrapDetailField("path", line.path, width),
+    ...wrapDetailField("target", line.target, width),
+    ...wrapDetailField("ua", line.userAgent ?? "-", width),
+    ...wrapDetailField("raw", line.raw, width)
+  ];
+}
+
+function wrapDetailField(label: string, value: string, width: number): string[] {
+  const labelWidth = 8;
+  const contentWidth = Math.max(20, width - labelWidth - 1);
+  const chunks = wrapHard(value, contentWidth);
+
+  return chunks.map((chunk, index) =>
+    `${index === 0 ? label.padEnd(labelWidth) : " ".repeat(labelWidth)} ${chunk}`
+  );
+}
+
+function wrapHard(value: string, width: number): string[] {
+  const chunks: string[] = [];
+  let remaining = value || "-";
+
+  while (remaining.length > width) {
+    chunks.push(remaining.slice(0, width));
+    remaining = remaining.slice(width);
+  }
+
+  chunks.push(remaining);
+  return chunks;
 }
 
 function compactTime(timestamp: string): string {
