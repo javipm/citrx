@@ -54,6 +54,10 @@ node dist/cli.js session list
 node dist/cli.js session show <session-id>
 ```
 
+Running `citrx analyze` with no paths, no flags, and an interactive terminal
+starts a guided wizard for paths, output format, top-list size, and session
+persistence. Piped stdin still works without prompts.
+
 ## Phase 1.1
 
 `citrx analyze` currently supports plain text Apache/Nginx-style access logs.

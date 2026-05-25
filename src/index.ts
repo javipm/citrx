@@ -18,12 +18,22 @@ import {
 } from "./session/store.js";
 import { APP_NAME, VERSION } from "./version.js";
 
+type OutputFormat = "terminal" | "json" | "markdown" | "html";
+
+export interface AnalyzeWizardAnswers {
+  paths: string[];
+  outputFormat: OutputFormat;
+  top: number;
+  session: boolean;
+}
+
 export interface CliRuntime {
   stdout: Writable;
   stderr: Writable;
   stdin: Readable;
   stdinIsTTY: boolean;
   env: NodeJS.ProcessEnv;
+  promptAnalyze?: () => Promise<AnalyzeWizardAnswers>;
 }
 
 export function createProgram(runtime: CliRuntime): Command {
@@ -63,18 +73,27 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--exclude <glob>", "Exclude paths matching this glob.")
     .option("--no-color", "Disable colored terminal output.")
     .option("--debug", "Print debug details on failure.")
-    .action(async (paths: string[], options: Record<string, unknown>) => {
+    .action(async (paths: string[], options: Record<string, unknown>, command: Command) => {
+      let top = parseTopOption(options.top);
+      let outputFormat = parseOutputFormat(options);
+
       if (paths.length === 0) {
         if (runtime.stdinIsTTY) {
-          throw new Error("No input paths provided. Interactive mode arrives in Phase 7.");
-        }
+          if (!shouldRunAnalyzeWizard(command)) {
+            throw new Error("No input paths provided.");
+          }
 
-        paths = ["-"];
+          const answers = await promptAnalyzeOptions(runtime);
+          paths = answers.paths;
+          top = answers.top;
+          outputFormat = answers.outputFormat;
+          options.session = answers.session;
+        } else {
+          paths = ["-"];
+        }
       }
 
-      const top = parseTopOption(options.top);
       const format = parseFormatOption(options.format);
-      const outputFormat = parseOutputFormat(options);
       const sources = await buildInputSources(paths, runtime);
       let report = await analyzeAccessLogSources(sources, {
         top,
@@ -244,8 +263,6 @@ function parseDateOption(value: unknown, flag: string): Date | undefined {
   return date;
 }
 
-type OutputFormat = "terminal" | "json" | "markdown" | "html";
-
 function parseOutputFormat(options: Record<string, unknown>): OutputFormat {
   const requested = [
     options.json ? "json" : null,
@@ -258,6 +275,81 @@ function parseOutputFormat(options: Record<string, unknown>): OutputFormat {
   }
 
   return (requested[0] as OutputFormat | undefined) ?? "terminal";
+}
+
+function shouldRunAnalyzeWizard(command: Command): boolean {
+  const optionNames = [
+    "geo",
+    "ai",
+    "json",
+    "markdown",
+    "html",
+    "out",
+    "session",
+    "format",
+    "formatConfig",
+    "top",
+    "since",
+    "until",
+    "include",
+    "exclude",
+    "color",
+    "debug"
+  ];
+
+  return optionNames.every((name) => {
+    const source = command.getOptionValueSource(name);
+    return source === undefined || source === "default";
+  });
+}
+
+async function promptAnalyzeOptions(runtime: CliRuntime): Promise<AnalyzeWizardAnswers> {
+  if (runtime.promptAnalyze) {
+    return runtime.promptAnalyze();
+  }
+
+  const prompts = await import("@inquirer/prompts");
+  const rawPaths = await prompts.input({
+    message: "Access log paths",
+    required: true
+  });
+  const outputFormat = await prompts.select<OutputFormat>({
+    message: "Output format",
+    choices: [
+      { name: "Terminal", value: "terminal" },
+      { name: "JSON", value: "json" },
+      { name: "Markdown", value: "markdown" },
+      { name: "HTML", value: "html" }
+    ]
+  });
+  const rawTop = await prompts.input({
+    message: "Top list size",
+    default: "20",
+    validate: (value) =>
+      Number.isInteger(Number.parseInt(value, 10)) && Number.parseInt(value, 10) > 0
+        ? true
+        : "Enter a positive integer."
+  });
+  const session = await prompts.confirm({
+    message: "Save analysis session?",
+    default: true
+  });
+
+  const paths = rawPaths
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (paths.length === 0) {
+    throw new Error("No input paths provided.");
+  }
+
+  return {
+    paths,
+    outputFormat,
+    top: Number.parseInt(rawTop, 10),
+    session
+  };
 }
 
 function renderReport(
@@ -289,7 +381,8 @@ export async function runCli(
     stderr: runtime.stderr ?? process.stderr,
     stdin: runtime.stdin ?? process.stdin,
     stdinIsTTY: runtime.stdinIsTTY ?? Boolean(process.stdin.isTTY),
-    env: runtime.env ?? process.env
+    env: runtime.env ?? process.env,
+    promptAnalyze: runtime.promptAnalyze
   };
 
   try {
