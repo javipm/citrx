@@ -269,6 +269,42 @@ describe("citrx CLI", () => {
     });
   });
 
+  it("reports GeoIP lookup failures instead of silent empty tables", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-geo-"));
+    const logFile = join(directory, "access.log");
+    await writeFile(
+      logFile,
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET / HTTP/1.1" 200 10 "-" "Mozilla/5.0"\n'
+    );
+    const stdout = memoryStream();
+
+    const code = await runCli(
+      ["node", "citrx", "analyze", logFile, "--geo", "--json", "--no-session"],
+      {
+        stdout: stdout.stream,
+        stderr: memoryStream().stream,
+        stdinIsTTY: true,
+        geoLookup: async () => null
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.output())).toMatchObject({
+      geo: {
+        lookedUp: 0,
+        failed: 1,
+        topCountries: [],
+        topAsns: []
+      },
+      incidents: expect.arrayContaining([
+        expect.objectContaining({
+          id: "geo_lookup_failed",
+          category: "geo_diagnostic"
+        })
+      ])
+    });
+  });
+
   it("writes Markdown and HTML reports", async () => {
     const directory = await mkdtemp(join(tmpdir(), "citrx-output-"));
     const logFile = join(directory, "access.log");

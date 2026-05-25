@@ -38,7 +38,11 @@ export async function enrichReportWithGeo(
   return {
     ...report,
     geo: buildGeoSummary(infos, ips, failed),
-    incidents: [...report.incidents, ...buildGeoIncidents(infos, ips)]
+    incidents: [
+      ...report.incidents,
+      ...buildGeoIncidents(infos, ips),
+      ...buildGeoDiagnostics(infos, ips, failed)
+    ]
   };
 }
 
@@ -139,6 +143,34 @@ function buildGeoIncidents(infos: GeoIpInfo[], topIps: TopItem[]): Incident[] {
         samples: group.ips.slice(0, 5)
       } satisfies Incident;
     });
+}
+
+function buildGeoDiagnostics(
+  infos: GeoIpInfo[],
+  topIps: TopItem[],
+  failed: number
+): Incident[] {
+  if (topIps.length === 0 || infos.length > 0 || failed === 0) {
+    return [];
+  }
+
+  return [
+    {
+      id: "geo_lookup_failed",
+      category: "geo_diagnostic",
+      severity: "low",
+      score: 20,
+      title: "GeoIP lookup failed",
+      description:
+        "GeoIP was requested, but no top IP could be enriched. Check network access, provider availability, or rate limits.",
+      evidence: [
+        { key: "provider", value: "ipwho.is" },
+        { key: "attemptedIps", value: topIps.length },
+        { key: "failed", value: failed }
+      ],
+      samples: topIps.slice(0, 5).map((item) => item.value)
+    }
+  ];
 }
 
 function topItems(map: Map<string, number>): TopItem[] {
