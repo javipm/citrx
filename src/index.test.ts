@@ -217,7 +217,8 @@ describe("citrx CLI", () => {
       [
         '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /one HTTP/1.1" 200 10 "-" "Mozilla/5.0"',
         '203.0.113.10 - - [25/May/2026:03:12:50 +0200] "GET /two HTTP/1.1" 200 20 "-" "Mozilla/5.0"',
-        '198.51.100.2 - - [25/May/2026:03:12:51 +0200] "GET /three HTTP/1.1" 200 30 "-" "Mozilla/5.0"'
+        '203.0.113.11 - - [25/May/2026:03:12:51 +0200] "GET /three HTTP/1.1" 200 30 "-" "Mozilla/5.0"',
+        '198.51.100.2 - - [25/May/2026:03:12:52 +0200] "GET /four HTTP/1.1" 200 40 "-" "Mozilla/5.0"'
       ].join("\n")
     );
     const stdout = memoryStream();
@@ -230,10 +231,10 @@ describe("citrx CLI", () => {
         stdinIsTTY: true,
         geoLookup: async (ip) => ({
           ip,
-          country: ip === "203.0.113.10" ? "Spain" : "United States",
-          countryCode: ip === "203.0.113.10" ? "ES" : "US",
-          asn: ip === "203.0.113.10" ? "AS45102" : "AS64496",
-          org: ip === "203.0.113.10" ? "Alibaba" : "ExampleNet",
+          country: ip.startsWith("203.0.113.") ? "Spain" : "United States",
+          countryCode: ip.startsWith("203.0.113.") ? "ES" : "US",
+          asn: ip.startsWith("203.0.113.") ? "AS45102" : "AS64496",
+          org: ip.startsWith("203.0.113.") ? "Alibaba" : "ExampleNet",
           cached: false
         })
       }
@@ -243,17 +244,28 @@ describe("citrx CLI", () => {
     expect(JSON.parse(stdout.output())).toMatchObject({
       geo: {
         provider: "ipwho.is",
-        lookedUp: 2,
+        lookedUp: 3,
         failed: 0,
         topCountries: [
-          { value: "Spain", count: 2 },
+          { value: "Spain", count: 3 },
           { value: "United States", count: 1 }
         ],
         topAsns: [
-          { value: "AS45102 Alibaba", count: 2 },
+          { value: "AS45102 Alibaba", count: 3 },
           { value: "AS64496 ExampleNet", count: 1 }
         ]
-      }
+      },
+      incidents: expect.arrayContaining([
+        expect.objectContaining({
+          id: "geo_asn_concentration:AS45102",
+          category: "geo_asn_concentration",
+          evidence: expect.arrayContaining([
+            { key: "wafScope", value: "asn" },
+            { key: "wafValue", value: "AS45102 Alibaba" },
+            { key: "uniqueIpsInTopIps", value: 2 }
+          ])
+        })
+      ])
     });
   });
 
