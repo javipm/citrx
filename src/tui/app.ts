@@ -17,7 +17,7 @@ export interface TuiRuntime {
   aiClient?: IncidentQuestionClient;
 }
 
-type Screen = "summary" | "incident";
+type Screen = "summary" | "incident" | "tops";
 type SortKey = "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
 type SortDirection = "asc" | "desc";
 type PromptState =
@@ -103,7 +103,7 @@ function CitrxExplorer({
     () => lines.filter((line) => selectedLineKeys.has(lineKey(line))),
     [lines, selectedLineKeys]
   );
-  const pageSize = screen === "incident" ? Math.max(4, rows - 19) : Math.max(6, rows - 14);
+  const pageSize = screen === "incident" ? Math.max(8, rows - 10) : Math.max(6, rows - 14);
   const detailRows = Math.max(6, rows - 6);
   const detailWidth = Math.max(40, columns - 10);
   const detailLines = useMemo(
@@ -173,6 +173,12 @@ function CitrxExplorer({
       return;
     }
 
+    if ((inputValue === "b" || key.backspace || key.escape) && screen === "tops") {
+      setScreen("incident");
+      setMessage("Back to incident");
+      return;
+    }
+
     if ((inputValue === "b" || key.backspace || key.escape) && screen === "incident") {
       setScreen("summary");
       setMessage("Back to summary");
@@ -206,6 +212,26 @@ function CitrxExplorer({
           value: "",
           scope: "summary",
           lines: []
+        });
+      }
+
+      return;
+    }
+
+    if (screen === "tops") {
+      if (inputValue === "t") {
+        setScreen("incident");
+        setMessage("Back to incident");
+        return;
+      }
+
+      if (inputValue === "a") {
+        setPrompt({
+          kind: "ai",
+          value: "",
+          scope: "incident",
+          incident,
+          lines: selectedLines.length > 0 ? selectedLines : lines
         });
       }
 
@@ -248,6 +274,12 @@ function CitrxExplorer({
         setDetailLine(line);
         setDetailScroll(0);
       }
+      return;
+    }
+
+    if (inputValue === "t") {
+      setScreen("tops");
+      setMessage(`Top values for ${incident?.id ?? "incident"}`);
       return;
     }
 
@@ -305,6 +337,12 @@ function CitrxExplorer({
           })
         : screen === "summary"
           ? React.createElement(SummaryScreen, { report: session.report, incidents, incidentIndex, pageSize })
+          : screen === "tops"
+            ? React.createElement(TopValuesScreen, {
+                report: session.report,
+                incident,
+                columns
+              })
           : React.createElement(IncidentScreen, {
               report: session.report,
               incident,
@@ -459,7 +497,6 @@ function IncidentScreen({
   columns: number;
 }) {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
-  const insights = incidentInsights(matchSet?.lines ?? []);
 
   if (!incident) {
     return React.createElement(Text, null, "No incident selected");
@@ -489,11 +526,6 @@ function IncidentScreen({
         )
       )
     ),
-    React.createElement(IncidentInsightsPanel, {
-      insights,
-      truncated: Boolean(matchSet?.truncated),
-      columns
-    }),
     React.createElement(LineTable, {
       lines,
       pageLines,
@@ -508,25 +540,88 @@ function IncidentScreen({
   );
 }
 
-function IncidentInsightsPanel({
-  insights,
-  truncated,
+function TopValuesScreen({
+  report,
+  incident,
   columns
 }: {
-  insights: IncidentInsights;
-  truncated: boolean;
+  report: AnalyzeReport;
+  incident: Incident | undefined;
   columns: number;
 }) {
-  const width = Math.max(40, columns - 10);
-  const prefix = truncated ? "stored sample" : "stored lines";
+  const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
+  const insights = incidentInsights(matchSet?.lines ?? []);
+  const panelWidth = Math.max(30, Math.floor((columns - 8) / 3));
+  const headerWidth = Math.max(40, columns - 10);
+
+  if (!incident) {
+    return React.createElement(Text, null, "No incident selected");
+  }
 
   return React.createElement(
     Box,
-    { flexDirection: "column", borderStyle: "single", paddingX: 1 },
-    React.createElement(Text, { bold: true, wrap: "truncate" }, fitText(`Signals (${prefix})`, width)),
-    React.createElement(Text, { wrap: "truncate" }, fitText(`IPs    ${inlineTopItems(insights.ips, 10)}`, width)),
-    React.createElement(Text, { wrap: "truncate" }, fitText(`UA     ${inlineTopItems(insights.userAgents, 10)}`, width)),
-    React.createElement(Text, { wrap: "truncate" }, fitText(`Params ${inlineTopItems(insights.params, 10)}`, width))
+    { flexDirection: "column", flexGrow: 1 },
+    React.createElement(
+      Box,
+      { flexDirection: "column", borderStyle: "single", paddingX: 1 },
+      React.createElement(
+        Text,
+        { bold: true, color: severityColor(incident.severity), wrap: "truncate" },
+        fitText(`Top values for ${incident.id}`, headerWidth)
+      ),
+      React.createElement(
+        Text,
+        { color: matchSet?.truncated ? "yellow" : "gray", wrap: "truncate" },
+        fitText(
+          `computed from ${matchSet?.storedLines ?? 0}/${matchSet?.totalMatches ?? 0} stored matching requests${matchSet?.truncated ? " (sample truncated)" : ""}`,
+          headerWidth
+        )
+      )
+    ),
+    React.createElement(
+      Box,
+      { flexDirection: "row", gap: 1, flexGrow: 1 },
+      React.createElement(TopListPanel, {
+        title: "Top IPs",
+        items: insights.ips,
+        width: panelWidth
+      }),
+      React.createElement(TopListPanel, {
+        title: "Top user agents",
+        items: insights.userAgents,
+        width: panelWidth
+      }),
+      React.createElement(TopListPanel, {
+        title: "Top query params",
+        items: insights.params,
+        width: panelWidth
+      })
+    )
+  );
+}
+
+function TopListPanel({
+  title,
+  items,
+  width
+}: {
+  title: string;
+  items: TopItem[];
+  width: number;
+}) {
+  return React.createElement(
+    Box,
+    { flexDirection: "column", borderStyle: "single", paddingX: 1, width },
+    React.createElement(Text, { bold: true, wrap: "truncate" }, fitText(title, width - 2)),
+    ...(items.length > 0
+      ? items.map((item) =>
+          React.createElement(
+            Text,
+            { key: item.value, wrap: "truncate" },
+            fitText(`${String(item.count).padStart(5)}  ${item.value}`, width - 2)
+          )
+        )
+      : [React.createElement(Text, { key: "empty", color: "gray" }, "none")])
   );
 }
 
@@ -647,7 +742,9 @@ function Footer({
     ? "↑/↓ scroll | d/b/Esc close | q quit"
     : screen === "summary"
       ? "↑/↓ incidents | Enter detail | a ask global | q quit"
-      : "↑/↓ rows | d detail | Space select | A select visible | f filter | s sort | Tab dir | a ask | e export | b back | q quit";
+      : screen === "tops"
+        ? "t/b/Esc back | a ask about incident | q quit"
+        : "↑/↓ rows | d detail | t tops | Space select | A select visible | f filter | s sort | Tab dir | a ask | e export | b back | q quit";
   const status = `${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
 
   return React.createElement(
@@ -731,17 +828,6 @@ function topMapItems(map: Map<string, number>, limit: number): TopItem[] {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, limit)
     .map(([value, count]) => ({ value, count }));
-}
-
-function inlineTopItems(items: TopItem[], limit: number): string {
-  if (items.length === 0) {
-    return "none";
-  }
-
-  return items
-    .slice(0, limit)
-    .map((item) => `${item.count} ${item.value}`)
-    .join(" | ");
 }
 
 function accessTableColumns(columns: number): AccessTableColumns {
