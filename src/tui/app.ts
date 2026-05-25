@@ -21,15 +21,19 @@ export interface TuiRuntime {
 type Screen = "summary" | "incident" | "tops";
 type SortKey = "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
 type SortDirection = "asc" | "desc";
+interface PromptInputState {
+  value: string;
+  cursor: number;
+}
+
 type PromptState =
-  | { kind: "filter"; value: string }
+  | ({ kind: "filter" } & PromptInputState)
   | {
       kind: "ai";
-      value: string;
       scope: "summary" | "incident";
       incident?: Incident;
       lines: IncidentLogLine[];
-    };
+    } & PromptInputState;
 
 interface IncidentInsights {
   ips: TopItem[];
@@ -212,6 +216,7 @@ function CitrxExplorer({
         setPrompt({
           kind: "ai",
           value: "",
+          cursor: 0,
           scope: "summary",
           lines: []
         });
@@ -231,6 +236,7 @@ function CitrxExplorer({
         setPrompt({
           kind: "ai",
           value: "",
+          cursor: 0,
           scope: "incident",
           incident,
           lines: selectedLines.length > 0 ? selectedLines : lines
@@ -300,7 +306,7 @@ function CitrxExplorer({
     }
 
     if (inputValue === "/" || inputValue === "f" || inputValue === "F") {
-      setPrompt({ kind: "filter", value: filter });
+      setPrompt({ kind: "filter", value: filter, cursor: filter.length });
       return;
     }
 
@@ -316,6 +322,7 @@ function CitrxExplorer({
       setPrompt({
         kind: "ai",
         value: "",
+        cursor: 0,
         scope: "incident",
         incident,
         lines: selectedLines.length > 0 ? selectedLines : lines
@@ -359,7 +366,7 @@ function CitrxExplorer({
               columns
             })
     ),
-    prompt ? React.createElement(PromptBar, { prompt }) : null,
+    prompt ? React.createElement(PromptBar, { prompt, columns }) : null,
     React.createElement(Footer, {
       screen,
       detailOpen: Boolean(detailLine),
@@ -721,20 +728,22 @@ function RequestDetailScreen({
   );
 }
 
-function PromptBar({ prompt }: { prompt: PromptState }) {
+function PromptBar({ prompt, columns }: { prompt: PromptState; columns: number }) {
   const label =
     prompt.kind === "filter"
       ? "Filter"
       : prompt.scope === "summary"
         ? "Ask OpenAI about analysis"
         : "Ask OpenAI about incident";
+  const display = promptDisplay(prompt, columns - label.length - 8);
 
   return React.createElement(
     Box,
     { borderStyle: "single", paddingX: 1 },
     React.createElement(Text, { color: "cyan", wrap: "truncate" }, `${label}: `),
-    React.createElement(Text, { wrap: "truncate" }, prompt.value),
-    React.createElement(Text, { inverse: true }, " ")
+    React.createElement(Text, { wrap: "truncate" }, display.beforeCursor),
+    React.createElement(Text, { inverse: true }, display.cursorValue),
+    React.createElement(Text, { wrap: "truncate" }, display.afterCursor)
   );
 }
 
@@ -1047,6 +1056,8 @@ function handlePromptInput({
     backspace?: boolean;
     delete?: boolean;
     ctrl?: boolean;
+    leftArrow?: boolean;
+    rightArrow?: boolean;
   };
   prompt: PromptState;
   setPrompt: (value: PromptState | undefined) => void;
@@ -1090,8 +1101,38 @@ function handlePromptInput({
     return;
   }
 
-  if (key.backspace || key.delete) {
-    setPrompt({ ...prompt, value: prompt.value.slice(0, -1) });
+  if (key.leftArrow) {
+    setPrompt({ ...prompt, cursor: Math.max(0, prompt.cursor - 1) });
+    return;
+  }
+
+  if (key.rightArrow) {
+    setPrompt({ ...prompt, cursor: Math.min(prompt.value.length, prompt.cursor + 1) });
+    return;
+  }
+
+  if (key.backspace) {
+    if (prompt.cursor === 0) {
+      return;
+    }
+
+    setPrompt({
+      ...prompt,
+      value: `${prompt.value.slice(0, prompt.cursor - 1)}${prompt.value.slice(prompt.cursor)}`,
+      cursor: prompt.cursor - 1
+    });
+    return;
+  }
+
+  if (key.delete) {
+    if (prompt.cursor >= prompt.value.length) {
+      return;
+    }
+
+    setPrompt({
+      ...prompt,
+      value: `${prompt.value.slice(0, prompt.cursor)}${prompt.value.slice(prompt.cursor + 1)}`
+    });
     return;
   }
 
@@ -1099,7 +1140,55 @@ function handlePromptInput({
     return;
   }
 
-  setPrompt({ ...prompt, value: `${prompt.value}${inputValue}` });
+  setPrompt({
+    ...prompt,
+    value: `${prompt.value.slice(0, prompt.cursor)}${inputValue}${prompt.value.slice(prompt.cursor)}`,
+    cursor: prompt.cursor + inputValue.length
+  });
+}
+
+function promptDisplay(
+  prompt: PromptInputState,
+  width: number
+): { beforeCursor: string; cursorValue: string; afterCursor: string } {
+  const safeCursor = Math.max(0, Math.min(prompt.cursor, prompt.value.length));
+  const available = Math.max(8, width);
+
+  if (prompt.value.length < available) {
+    return {
+      beforeCursor: prompt.value.slice(0, safeCursor),
+      cursorValue: prompt.value[safeCursor] ?? " ",
+      afterCursor: prompt.value.slice(safeCursor + 1)
+    };
+  }
+
+  const hasCursorChar = safeCursor < prompt.value.length;
+  const textSlots = available - 1;
+  let start = Math.max(0, safeCursor - Math.floor(textSlots / 2));
+
+  if (safeCursor === prompt.value.length) {
+    start = Math.max(0, prompt.value.length - textSlots);
+  }
+
+  let end = Math.min(prompt.value.length, start + textSlots);
+
+  if (safeCursor >= end) {
+    end = Math.min(prompt.value.length, safeCursor + (hasCursorChar ? 1 : 0));
+    start = Math.max(0, end - textSlots);
+  }
+
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < prompt.value.length ? "..." : "";
+  const visibleBefore = prompt.value.slice(start, safeCursor);
+  const visibleAfter = hasCursorChar
+    ? prompt.value.slice(safeCursor + 1, end)
+    : prompt.value.slice(safeCursor, end);
+
+  return {
+    beforeCursor: `${prefix}${visibleBefore}`,
+    cursorValue: prompt.value[safeCursor] ?? " ",
+    afterCursor: `${visibleAfter}${suffix}`
+  };
 }
 
 async function submitOpenAi({
