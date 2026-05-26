@@ -20,6 +20,7 @@ import {
   querySignature
 } from "../rules/local.js";
 import type { PathStats } from "../rules/local.js";
+import { applyScoringMultipliers } from "../rules/scoring.js";
 import type {
   AnalyzeInputSource,
   AnalyzeReport,
@@ -168,11 +169,13 @@ export async function analyzeAccessLogSources(
     timeStats: behavior.timeStats,
     ipBehaviorStats: behavior.ipBehaviorStats,
     aiBotStats: behavior.aiBotStats,
-    incidents: sortIncidents([
-      ...counters.ruleIncidents.values(),
-      ...buildAggregateIncidents(counters.pathStats.values()),
-      ...behavior.incidents
-    ]),
+    incidents: sortIncidents(
+      applyScoringMultipliers([
+        ...counters.ruleIncidents.values(),
+        ...buildAggregateIncidents(counters.pathStats.values()),
+        ...behavior.incidents
+      ])
+    ),
     incidentMatches: incidentMatches(counters, behavior.incidents)
   };
 }
