@@ -38,7 +38,7 @@ export class OpenAiIncidentQuestionClient implements IncidentQuestionClient {
       throw new Error("OPENAI_API_KEY is required to ask OpenAI about an incident.");
     }
 
-    const model = input.env.CITRX_OPENAI_MODEL ?? "gpt-5-mini";
+    const model = input.env.CITRX_OPENAI_MODEL ?? "gpt-5.4-mini";
     const maxLines = parseMaxLines(input.env.CITRX_AI_MAX_LINES);
     const maxChars = parseMaxChars(input.env.CITRX_AI_MAX_CHARS);
     const context = buildAiContext(input, maxLines, maxChars);

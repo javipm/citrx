@@ -120,13 +120,13 @@ describe("OpenAI incident questions", () => {
       env: {
         OPENAI_API_KEY: "test-key",
         CITRX_AI_MAX_LINES: "1",
-        CITRX_OPENAI_MODEL: "gpt-5-mini"
+        CITRX_OPENAI_MODEL: "gpt-5.4-mini"
       }
     });
 
     expect(result).toEqual({
       answer: "Likely SQLi scan. Consider blocking the payload pattern.",
-      model: "gpt-5-mini",
+      model: "gpt-5.4-mini",
       sentLines: 1,
       sentChars: expect.any(Number)
     });
