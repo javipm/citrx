@@ -1,83 +1,138 @@
 # citrx
 
-`citrx` is an open source CLI for local-first Apache/Nginx access log analysis.
+`citrx` is a local-first CLI/TUI for Apache and Nginx access log analysis.
 
-It is being built in small verified phases. The current CLI supports local
-access-log parsing, stdin, date filters, deterministic security incident
-detection, and an interactive terminal console for plain text and compressed
-files.
+It streams large access logs, validates that inputs look like access logs,
+detects security and abuse incidents locally, opens an interactive terminal UI
+by default, and can optionally ask OpenAI for deeper analysis of the current
+view or selected rows.
 
-## Goals
+> Spanish documentation: [README_ES.md](./README_ES.md)
 
-- Detect abusive crawling, attack probes, suspicious POST traffic, fake bots,
-  high-cost URLs, and malformed requests.
-- Run useful local analysis before any optional AI step.
-- Keep OpenAI analysis explicit, redacted, and post-analysis.
-- Open an interactive terminal UI by default, with report exports available
-  when needed.
+## Why citrx
+
+Access logs often hide expensive crawlers, scanner noise, fake bots, SQLi/XSS
+payloads, POST abuse, and traffic spikes. `citrx` is designed for DevOps,
+security engineers, and backend developers who need to quickly answer:
+
+- What happened?
+- Which paths, IPs, methods, user-agents, and query params are involved?
+- Which requests should I inspect?
+- Which WAF/rate-limit rule could reduce the impact?
+
+The default workflow is:
+
+1. Run deterministic local analysis.
+2. Explore incidents and raw matching requests in the TUI.
+3. Filter, sort, inspect, and select rows.
+4. Ask OpenAI only when you explicitly want help interpreting that context.
 
 ## Requirements
 
-- Node.js 24.15 or newer.
-- pnpm 11 or newer.
+- Node.js `>=24.15`
+- pnpm `>=11` for development
 
-## Development
+Published package usage is intended to work with `npx citrx` once released.
+
+## Install And Run
+
+Development checkout:
 
 ```bash
 pnpm install
-pnpm run typecheck
-pnpm test
+pnpm run dev -- /path/to/access.log
+```
+
+After build:
+
+```bash
 pnpm run build
-```
-
-Run the CLI from source:
-
-```bash
-pnpm dev --help
-pnpm dev examples/access_ssl_log
-pnpm dev examples/access_ssl_log --json
-```
-
-After building:
-
-```bash
-node dist/cli.js --help
-node dist/cli.js --version
 node dist/cli.js /path/to/access.log
-node dist/cli.js /path/to/access.log --no-interactive
-node dist/cli.js /path/to/access.log --json
-node dist/cli.js /path/to/access.log --markdown --out report.md
-node dist/cli.js /path/to/access.log --html --out report.html
-node dist/cli.js /path/to/access.log.gz --json
-node dist/cli.js /path/to/archive.zip --json
-cat /path/to/access.log | node dist/cli.js - --json
-cat /path/to/access.log | node dist/cli.js --json
-node dist/cli.js /path/to/access.log --format apache_combined
-node dist/cli.js /path/to/access.log --since 2026-05-25T00:00:00Z --until 2026-05-25T23:59:59Z
-node dist/cli.js /path/to/access.log --format custom:my_format --format-config ./formats.json
 ```
 
-Running `citrx` without paths in an interactive terminal fails fast with a
-usage hint. Piped stdin still works without prompts.
+Common examples:
 
-## Phase 1.1
+```bash
+# Open the interactive TUI by default
+citrx /var/log/nginx/access.log
 
-`citrx` currently supports plain text Apache/Nginx-style access logs.
-It validates that inputs look like access logs before full analysis, then
-streams files line by line to keep memory bounded for large logs.
+# Analyze many paths, folders, and compressed files
+citrx ./logs access.log.gz archive.zip
 
-Current report data:
+# Read from stdin
+cat access.log | citrx -
 
-- total, parsed, and invalid line counts
-- filtered line counts when `--since`/`--until` are used
-- total bytes served
-- detected access-log format per input
-- top IPs
-- top paths
-- top methods
-- top statuses
-- local security incidents
-- related access-log lines per incident
+# Non-interactive terminal report
+citrx access.log --no-interactive
+
+# JSON / Markdown / HTML reports
+citrx access.log --json
+citrx access.log --markdown --out report.md
+citrx access.log --html --out report.html
+
+# Date range
+citrx access.log --since 2026-05-25T00:00:00Z --until 2026-05-25T23:59:59Z
+
+# Explicit parser
+citrx access.log --format apache_combined
+```
+
+`citrx analyze` was removed. Use:
+
+```bash
+citrx <paths...>
+```
+
+## CLI Options
+
+```text
+Usage: citrx [options] <paths...>
+
+Options:
+  --json                    Write machine-readable JSON output
+  --markdown                Write Markdown output
+  --html                    Write a self-contained HTML report
+  --out <path>              Write report output to a file
+  --no-interactive          Print terminal report instead of opening the TUI
+  --format <format>         auto, apache_common, apache_combined,
+                            nginx_combined, or custom:<name>
+  --format-config <path>    JSON file with custom access-log formats
+  --top <n>                 Limit top lists
+  --since <date>            Include entries at or after this date
+  --until <date>            Include entries at or before this date
+  --include <glob>          Include paths matching this glob
+  --exclude <glob>          Exclude paths matching this glob
+  --no-color                Disable colored terminal output
+  --debug                   Print debug details on failure
+  -v, --version             Display version
+```
+
+`NO_COLOR=1` disables color. `CITRX_QUIET=1` disables startup UI/progress noise
+for terminal output.
+
+Removed options: `--geo`, `--no-session`, `--incident-lines`.
+
+## Inputs
+
+Supported inputs:
+
+- individual access log files
+- folders
+- stdin with `-`
+- `.gz`
+- `.br`
+- `.zip`
+- `.tar.gz`
+- `.tgz`
+
+ZIP and TAR archives are scanned for candidate log files such as `access.log`,
+`.log`, `.txt`, extensionless logs, `.gz`, and `.br` files.
+
+`citrx` streams inputs and does not read full logs into memory. For the TUI it
+creates a temporary access-log index under the OS temp directory. That workspace
+is removed when the process exits.
+
+## Access Log Formats
 
 Built-in formats:
 
@@ -85,18 +140,19 @@ Built-in formats:
 - `apache_combined`
 - `nginx_combined`
 
-By default, `--format auto` samples each input and selects the best parser. If
-your logs use a custom format, pass `--format custom:<name>` and
-`--format-config <path>`.
+Default mode is `--format auto`. `citrx` samples each input, chooses the best
+parser, and fails early if the sample does not look like an Apache/Nginx-style
+access log.
 
-Custom format configs are JSON:
+Custom formats are supported with `--format custom:<name>` and
+`--format-config <path>`:
 
 ```json
 {
   "formats": [
     {
       "name": "pipe",
-      "pattern": "^(?<ip>\\S+)\\|(?<timestamp>[^|]+)\\|(?<method>\\S+)\\|(?<target>\\S+)\\|(?<protocol>HTTP/[^|]+)\\|(?<status>\\d{3})\\|(?<bytes>\\S+)$",
+      "pattern": "^(?<ip>\\S+)\\|(?<timestamp>[^|]+)\\|(?<method>\\S+)\\|(?<target>\\S+)\\|(?<protocol>HTTP/[^|]+)\\|(?<status>\\d{3})\\|(?<bytes>\\S+)\\|(?<userAgent>.*)$",
       "fields": {
         "ip": "ip",
         "timestamp": "timestamp",
@@ -104,32 +160,119 @@ Custom format configs are JSON:
         "target": "target",
         "protocol": "protocol",
         "status": "status",
-        "bytes": "bytes"
+        "bytes": "bytes",
+        "userAgent": "userAgent"
       }
     }
   ]
 }
 ```
 
-## Terminal UI
+## Interactive TUI
 
-By default, `citrx <paths...>` analyzes locally, creates a temporary access-log
-index, and opens an interactive terminal console. Temporary index files live
-under the OS temp directory while the process is running and are removed when
-`citrx` exits.
+When stdout/stdin are TTYs and no report format is requested, `citrx` opens a
+full-screen terminal UI.
 
-- Summary screen: global metrics, a navigable incident list, and a filterable
-  table of parsed access-log lines. Press `Tab` to move focus between incidents
-  and the table.
-- Incident screen: detailed evidence and a table of related access-log lines.
-- Navigation: `Enter` opens an incident, `b` goes back, `/` filters, `s` changes
-  sort column, `S` flips sort direction, `Space` selects a row, `A` selects
-  visible rows, `t` opens top-value panels, `a` asks OpenAI, `e` exports the
-  current context, and `q` quits.
+### Summary Screen
 
-Incident filters support text search plus a small query syntax. Terms are joined
-with `AND` by default, `OR`/`|` and parentheses are supported, and `!` negates a
-term. Use `*` as the wildcard.
+Shows:
+
+- analysis summary
+- navigable incident watchlist
+- complete indexed access-log table
+
+Keys:
+
+```text
+Tab              switch focus between access log and incidents
+↑/↓              move row
+PgUp/PgDn        page through rows
+Enter / d        open incident or request detail
+f or /           filter access-log rows
+s                cycle sort column
+S                toggle sort direction
+t                open global top values
+Space            select current row
+A                select visible rows
+a                ask OpenAI about current view/selection
+e                export current context to JSON
+q                quit
+```
+
+### Incident Screen
+
+Shows incident evidence and all related access-log lines.
+
+Keys are intentionally similar to the summary screen:
+
+```text
+↑/↓              move row
+PgUp/PgDn        page through rows
+Enter / d        open request detail
+t                open top values for this incident
+Space            select current row
+A                select visible rows
+f or /           filter rows
+s                cycle sort column
+S                toggle sort direction
+a                ask OpenAI about this incident/selection
+e                export current context to JSON
+b                back to summary
+q                quit
+```
+
+### Top Values Screen
+
+Available from summary or incident screens with `t`.
+
+Panels:
+
+- top IPs
+- top paths
+- top user-agents
+- top query params
+- top query param values
+
+Keys:
+
+```text
+Tab              switch panel
+↑/↓              move inside panel
+Enter            apply a filter using selected value
+a                ask OpenAI about the visible top values
+t / b / Esc      back
+q                quit
+```
+
+If a filter is active, top values are computed from the filtered subset.
+
+### Request Detail
+
+Open with `Enter` or `d` on a log row. It shows full source, timestamp, IP,
+method, status, bytes, path, target, user-agent, and raw line with wrapping.
+
+```text
+↑/↓ PgUp/PgDn    scroll
+d / b / Esc      close
+q                quit
+```
+
+## Filtering
+
+Filters work on the global access log and incident-related rows.
+
+Supported features:
+
+- plain text search
+- field filters
+- `AND` by default
+- `OR` or `|`
+- grouping with parentheses
+- negation with `!`
+- wildcard `*`
+- numeric comparisons for `status`, `bytes`, and `line`
+
+Examples:
 
 ```text
 method:POST status:200 url:*admin*
@@ -141,67 +284,188 @@ param:q=*select*
 url:"/admin/login?q=camper"
 ```
 
-Supported fields include `ip`, `method`, `status`, `path`, `url`/`target`, `ua`,
-`bytes`, `param`, `source`, `line`, `time`, and `raw`.
+Fields:
 
-OpenAI follow-up is scoped to the current screen. From the summary it receives a
-compact global analysis. From an incident it receives only selected rows, or the
-currently visible filtered rows when nothing is selected.
+```text
+ip, method, status, path, url, target, ua, bytes, param, source, line, time, raw
+```
 
-Incident details keep all related parsed lines for the current run. The main
-summary table uses the temporary global index so you can navigate the parsed
-access log without persisting runtime state.
+## OpenAI Mode
 
-## Compressed Logs
+OpenAI is never called during the initial analysis. It is only called when you
+press `a` in the TUI.
 
-`citrx` streams compressed inputs where possible and does not inflate them into
-memory first. Supported inputs:
+Setup:
 
-- `.gz`
-- `.br`
-- `.zip`
-- `.tar.gz`
-- `.tgz`
+```bash
+export OPENAI_API_KEY="sk-proj-..."
+```
 
-ZIP and TAR archives are scanned for candidate log entries such as `access.log`,
-plain extensionless logs, `.log`, `.txt`, `.gz`, and `.br` files.
+Optional:
+
+```bash
+export CITRX_OPENAI_MODEL="gpt-5.4-mini"
+export CITRX_AI_MAX_LINES="200"
+export CITRX_AI_MAX_CHARS="60000"
+```
+
+OpenAI receives compact, redacted context:
+
+- report summary
+- time stats
+- top IPs/paths/methods/statuses
+- top behavior stats
+- selected incident evidence
+- selected rows, or visible filtered rows when nothing is selected
+- user-agent references instead of repeating long UAs
+
+The answer is shown in a dedicated scrollable TUI screen with lightweight
+Markdown rendering.
+
+Important: access logs do not contain ASN data. If ASN/organization is not
+present in the local context, the model is instructed not to invent it.
 
 ## Reports
 
-Supported report outputs:
+Supported outputs:
 
-- terminal output with colors by default
-- `--json`
-- `--markdown`
-- `--html`
+- colored terminal report
+- JSON (`--json`)
+- Markdown (`--markdown`)
+- self-contained offline HTML (`--html`)
 
-Use `--out <path>` to write a report to disk. HTML reports are self-contained
-and do not load external assets. Use `--no-color` or `NO_COLOR=1` to disable
-terminal colors.
+Use `--out <path>` to write Markdown/HTML/JSON to disk.
 
-## Local Detection
+HTML reports:
 
-`citrx` always runs local deterministic checks first. Current detections include:
+- self-contained CSS/JS
+- no external network resources
+- escaped output
+- sortable/filterable tables
+- print/PDF friendly
 
-- SQL injection payloads
-- XSS payloads
-- LFI/RFI and path traversal probes
-- SSRF indicators
-- command injection indicators
-- sensitive file probes such as `.env`, `.git`, backups, and dumps
-- uncommon HTTP methods
-- aggregate high-volume path crawling
-- query explosion on a single path
-- POST hotspots
+## Incident Types
 
-Sensitive query values such as tokens, passwords, session ids, auth keys, and
-secrets are redacted from incident samples.
+`citrx` currently emits these incident families.
 
-## Privacy
+### Payload And Recon Rules
 
-`citrx` is local-first. OpenAI is only called from the interactive explorer when
-you explicitly ask a question, and only the selected incident plus limited,
-redacted matching lines are sent.
+| ID prefix | Category | Meaning |
+|---|---|---|
+| `sqli:` | `sql_injection` | SQL injection payload indicators such as `union select`, sleep/benchmark, encoded SQL, prepared statements |
+| `xss:` | `xss` | script/browser execution indicators |
+| `lfi_rfi:` | `path_traversal` | traversal, local/remote file inclusion, `php://filter`, sensitive paths |
+| `ssrf:` | `ssrf` | localhost, metadata IPs/hosts, callback-like URL params |
+| `command_injection:` | `command_injection` | shell metacharacters plus command indicators |
+| `recon_sensitive_file:` | `recon` | probes for `.env`, `.git`, backups, dumps, internals |
+| `rare_method:` | `http_anomaly` | uncommon HTTP methods on public traffic |
+
+Payload incidents are grouped by rule and path. If every matching response is
+404/4xx, score is downgraded so dead probes do not look as urgent as successful
+payloads.
+
+### Aggregate Path Rules
+
+| ID prefix | Category | Meaning |
+|---|---|---|
+| `abusive_crawl:` | `abusive_crawling` | high-volume non-entrypoint path repeatedly requested by many clients |
+| `query_explosion:` | `abusive_crawling` | one path requested with many query variants |
+| `post_hotspot:` | `post_hotspot` | endpoint receives unusually many POST requests |
+
+### Rate And DDoS Rules
+
+| ID prefix | Category | Meaning |
+|---|---|---|
+| `ddos_rps_burst_single_ip:` | `ddos` | one IP exceeds per-second RPS threshold for consecutive seconds |
+| `ddos_global_rps_spike` | `ddos` | global RPS exceeds baseline for consecutive seconds |
+| `http_head_flood:` | `ddos` | one IP sends a high ratio and high peak of HEAD requests |
+| `ddos_distributed_subnet:` | `ddos` | IPv4 `/24` or IPv6 `/48` exceeds RPS and unique-IP thresholds for consecutive seconds |
+
+### HTTP Error Storm Rules
+
+| ID prefix | Category | Meaning |
+|---|---|---|
+| `http_4xx_storm:` | `http_anomaly` | one IP generates many 4xx responses in adjacent minute buckets |
+| `http_5xx_storm:` | `http_anomaly` | one IP generates many 5xx responses in adjacent minute buckets |
+
+### Bot And Scanner Rules
+
+| ID prefix | Category | Meaning |
+|---|---|---|
+| `ai_scraper_known:` | `ai_scraper` | known AI crawler or AI assistant user-agent, grouped by bot |
+| `scanner_ua_known:` | `scanner` | known scanner/offensive tooling user-agent |
+| `scanner_signature_paths:` | `scanner` | one IP touches many known fingerprint paths in adjacent minute buckets |
+| `single_ip_path_explosion:` | `abusive_crawling` | one IP touches hundreds of unique paths |
+| `ua_rotation_same_ip:` | `http_anomaly` | one IP uses many different user-agents |
+| `fake_bot_googlebot:` | `fake_bot` | UA claims core Googlebot but IP is outside published Googlebot ranges |
+| `fake_bot_bingbot:` | `fake_bot` | UA claims bingbot but IP is outside published Bing ranges |
+
+Googlebot and Bingbot range snapshots are stored in source. Refresh them with:
+
+```bash
+pnpm run update-bot-ranges
+```
+
+## Scoring
+
+Each incident has:
+
+- `severity`: `info`, `low`, `medium`, `high`, `critical`
+- `score`: `0` to `100`
+- `evidence`: typed key/value data for audit
+- `samples`: redacted examples when relevant
+
+Scoring includes post-processing multipliers:
+
+- `+10` when the same `evidence.ip` appears in two or more incidents
+- `+15` when a pattern persists for at least 30 minutes
+- `-10` for moderate known AI crawlers that requested `robots.txt`
+
+Scores are capped to `[0, 100]`, then severity is recalculated from the final
+score.
+
+## Security And Privacy
+
+- Local analysis first.
+- No telemetry.
+- OpenAI only on explicit `a` action.
+- Secrets in URL/query values are redacted.
+- HTML output is escaped.
+- Log content is never executed.
+- Runtime TUI index files are temporary and deleted on exit.
+
+Redacted query keys include:
+
+```text
+token, _token, sid, session, password, passwd, key, secret, jwt, auth, authorization
+```
+
+## Development
+
+```bash
+pnpm install
+pnpm run typecheck
+pnpm test
+pnpm run build
+```
+
+Run from source:
+
+```bash
+pnpm run dev -- examples/access_ssl_log
+pnpm run dev -- examples/access_ssl_log --json
+```
+
+Update bot IP range snapshots:
+
+```bash
+pnpm run update-bot-ranges
+```
+
+## Project Status
+
+`citrx` is pre-1.0 and not published yet. CLI and report shapes may still
+change while the core workflow is refined.
 
 ## License
 
