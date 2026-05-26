@@ -4,6 +4,8 @@ import type { Readable, Writable } from "node:stream";
 
 import { analyzeAccessLogSources } from "./analysis/access-log.js";
 import type { AnalyzeInputSource } from "./analysis/types.js";
+import { printBanner } from "./cli/banner.js";
+import { createProgressReporter } from "./cli/progress.js";
 import { discoverInputFiles } from "./input/files.js";
 import { isAccessLogFormatId } from "./parser/access-log.js";
 import type { FormatChoice } from "./parser/access-log.js";
@@ -76,6 +78,18 @@ async function runRootAnalysis(
   let paths = initialPaths;
   let top = parseTopOption(options.top);
   let outputFormat = parseOutputFormat(options);
+  const color = isColorEnabled(options, runtime);
+  const showUi = shouldShowStartupUi(outputFormat, runtime);
+  const progress = createProgressReporter({
+    stream: runtime.stderr,
+    enabled: showUi,
+    color,
+    isTty: showUi && isStderrTty(runtime)
+  });
+
+  if (showUi) {
+    printBanner(runtime.stderr, { color });
+  }
 
   if (paths[0] === "analyze") {
     throw new Error("The analyze subcommand was removed. Use `citrx <paths...>` instead.");
@@ -90,20 +104,24 @@ async function runRootAnalysis(
   }
 
   const format = parseFormatOption(options.format);
-  const sources = await buildInputSources(paths, runtime);
+  const sources = await progress.withStep("Discovering inputs", () =>
+    buildInputSources(paths, runtime)
+  );
   const workspace = await createRunWorkspace();
   const accessLogWriter = await createAccessLogIndexWriter(workspace.directory);
 
   try {
-    const report = await analyzeAccessLogSources(sources, {
-      top,
-      format,
-      formatConfig:
-        typeof options.formatConfig === "string" ? options.formatConfig : undefined,
-      since: parseDateOption(options.since, "--since"),
-      until: parseDateOption(options.until, "--until"),
-      accessLogWriter
-    });
+    const report = await progress.withStep("Reading and analyzing access logs", () =>
+      analyzeAccessLogSources(sources, {
+        top,
+        format,
+        formatConfig:
+          typeof options.formatConfig === "string" ? options.formatConfig : undefined,
+        since: parseDateOption(options.since, "--since"),
+        until: parseDateOption(options.until, "--until"),
+        accessLogWriter
+      })
+    );
     accessLogWriter.close();
 
     const run: CitrxRun = {
@@ -120,18 +138,44 @@ async function runRootAnalysis(
       return;
     }
 
-    const output = renderReport(report, outputFormat, options, runtime);
-
     if (typeof options.out === "string") {
+      const output = await progress.withStep(`Writing report to ${options.out}`, async () =>
+        renderReport(report, outputFormat, options, runtime)
+      );
       await writeFile(options.out, output, "utf8");
       return;
     }
 
+    const output = renderReport(report, outputFormat, options, runtime);
     runtime.stdout.write(output);
   } finally {
     accessLogWriter.close();
     await removeRunWorkspace(workspace.directory);
   }
+}
+
+function shouldShowStartupUi(format: OutputFormat, runtime: CliRuntime): boolean {
+  if (format === "json" || format === "markdown" || format === "html") {
+    return false;
+  }
+
+  if (runtime.env.CITRX_QUIET === "1") {
+    return false;
+  }
+
+  return isStderrTty(runtime);
+}
+
+function isStderrTty(runtime: CliRuntime): boolean {
+  const stderr = runtime.stderr as Writable & { isTTY?: boolean };
+  return Boolean(stderr.isTTY);
+}
+
+function isColorEnabled(
+  options: Record<string, unknown>,
+  runtime: CliRuntime
+): boolean {
+  return options.color !== false && runtime.env.NO_COLOR === undefined;
 }
 
 async function buildInputSources(
