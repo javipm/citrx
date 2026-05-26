@@ -26,6 +26,7 @@ export interface TuiRuntime {
 type Screen = "summary" | "incident" | "tops";
 type SummaryFocus = "accesses" | "incidents";
 type TopScope = "summary" | "incident";
+type TopPanelKey = "ips" | "paths" | "userAgents" | "params" | "paramValues";
 type SortKey = "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
 type SortDirection = "asc" | "desc";
 interface PromptInputState {
@@ -40,10 +41,12 @@ type PromptState =
       scope: "summary" | "incident";
       incident?: Incident;
       lines: IncidentLogLine[];
+      extraContext?: string;
     } & PromptInputState;
 
 interface IncidentInsights {
   ips: TopItem[];
+  paths: TopItem[];
   userAgents: TopItem[];
   params: TopItem[];
   paramValues: TopItem[];
@@ -60,6 +63,8 @@ interface AccessTableColumns {
   path: number;
   ua: number;
 }
+
+const TOP_PANEL_KEYS: TopPanelKey[] = ["ips", "paths", "userAgents", "params", "paramValues"];
 
 export async function openRunTui(
   run: CitrxRun,
@@ -93,6 +98,14 @@ function CitrxExplorer({
   const [screen, setScreen] = useState<Screen>("summary");
   const [summaryFocus, setSummaryFocus] = useState<SummaryFocus>("accesses");
   const [topScope, setTopScope] = useState<TopScope>("summary");
+  const [topFocus, setTopFocus] = useState<TopPanelKey>("ips");
+  const [topIndexes, setTopIndexes] = useState<Record<TopPanelKey, number>>({
+    ips: 0,
+    paths: 0,
+    userAgents: 0,
+    params: 0,
+    paramValues: 0
+  });
   const [incidentIndex, setIncidentIndex] = useState(0);
   const [lineIndex, setLineIndex] = useState(0);
   const [summaryLineIndex, setSummaryLineIndex] = useState(0);
@@ -194,7 +207,9 @@ function CitrxExplorer({
             scope: state.scope,
             incident: state.incident,
             lines: state.lines,
-            question,
+            question: state.extraContext
+              ? `${question}\n\nContexto TUI:\n${state.extraContext}`
+              : question,
             setBusy,
             setMessage
           });
@@ -385,6 +400,27 @@ function CitrxExplorer({
     }
 
     if (screen === "tops") {
+      if (key.tab) {
+        setTopFocus((value) => nextTopPanel(value));
+        return;
+      }
+
+      if (key.upArrow) {
+        setTopIndexes((value) => ({
+          ...value,
+          [topFocus]: Math.max(0, value[topFocus] - 1)
+        }));
+        return;
+      }
+
+      if (key.downArrow) {
+        setTopIndexes((value) => ({
+          ...value,
+          [topFocus]: Math.min(9, value[topFocus] + 1)
+        }));
+        return;
+      }
+
       if (inputValue === "t") {
         setScreen(topScope === "summary" ? "summary" : "incident");
         setMessage(topScope === "summary" ? "Back to summary" : "Back to incident");
@@ -392,15 +428,15 @@ function CitrxExplorer({
       }
 
       if (inputValue === "a") {
+        const topContext = currentTopContext(run.report, topScope, incident, filter, topFocus, topIndexes);
         setPrompt({
           kind: "ai",
           value: "",
           cursor: 0,
           scope: topScope === "summary" ? "summary" : "incident",
           incident: topScope === "summary" ? undefined : incident,
-          lines: topScope === "summary"
-            ? selectedGlobalLines.length > 0 ? selectedGlobalLines : summaryPageLines
-            : selectedLines.length > 0 ? selectedLines : lines
+          lines: [],
+          extraContext: topContext
         });
       }
 
@@ -543,6 +579,18 @@ function CitrxExplorer({
                 report: run.report,
                 incident: topScope === "summary" ? undefined : incident,
                 scope: topScope,
+                filter,
+                focus: topFocus,
+                selectedIndexes: topIndexes,
+                onApplyFilter: (nextFilter) => {
+                  setFilter(nextFilter);
+                  setSelectedLineKeys(new Set());
+                  setLineIndex(0);
+                  setSummaryLineIndex(0);
+                  setSummaryFocus("accesses");
+                  setScreen(topScope === "summary" ? "summary" : "incident");
+                  setMessage(`Filter applied: ${nextFilter}`);
+                },
                 columns
               })
           : React.createElement(IncidentScreen, {
@@ -780,18 +828,26 @@ function TopValuesScreen({
   report,
   incident,
   scope,
+  filter,
+  focus,
+  selectedIndexes,
+  onApplyFilter,
   columns
 }: {
   run: CitrxRun;
   report: AnalyzeReport;
   incident: Incident | undefined;
   scope: TopScope;
+  filter: string;
+  focus: TopPanelKey;
+  selectedIndexes: Record<TopPanelKey, number>;
+  onApplyFilter: (filter: string) => void;
   columns: number;
 }) {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
   const incidentTopValues = useMemo(
-    () => incidentInsights(matchSet?.lines ?? []),
-    [matchSet]
+    () => incidentInsights(filteredTopLines(matchSet?.lines ?? [], filter)),
+    [filter, matchSet]
   );
   const [summaryTopValues, setSummaryTopValues] = useState<{
     insights: IncidentInsights;
@@ -807,7 +863,7 @@ function TopValuesScreen({
 
     let cancelled = false;
 
-    void incidentInsightsFromAccessIndex(run).then((value) => {
+    void incidentInsightsFromAccessIndex(run, filter).then((value) => {
       if (!cancelled) {
         setSummaryTopValues(value);
       }
@@ -816,7 +872,7 @@ function TopValuesScreen({
     return () => {
       cancelled = true;
     };
-  }, [run, scope]);
+  }, [filter, run, scope]);
 
   const insights = scope === "summary"
     ? summaryTopValues?.insights ?? emptyIncidentInsights()
@@ -824,6 +880,15 @@ function TopValuesScreen({
   const sourceCount = scope === "summary"
     ? summaryTopValues?.count ?? 0
     : matchSet?.totalMatches ?? 0;
+  const selectedTopItem = selectedTopValue(insights, focus, selectedIndexes[focus]);
+
+  useInput((_inputValue, key) => {
+    if (!key.return || !selectedTopItem) {
+      return;
+    }
+
+    onApplyFilter(topItemFilter(focus, selectedTopItem.value));
+  });
 
   if (scope === "incident" && !incident) {
     return React.createElement(Text, null, "No incident selected");
@@ -831,8 +896,8 @@ function TopValuesScreen({
 
   const title = scope === "summary" ? "Global top values" : `Top values for ${incident?.id ?? "incident"}`;
   const subtitle = scope === "summary"
-    ? `computed from ${sourceCount}/${report.accessLog.totalLines} parsed access-log rows`
-    : `computed from ${sourceCount} related requests`;
+    ? `computed from ${sourceCount}/${report.accessLog.totalLines} parsed access-log rows${filter ? ` | filter=${filter}` : ""}`
+    : `computed from ${sourceCount} related requests${filter ? ` | filter=${filter}` : ""}`;
 
   return React.createElement(
     Box,
@@ -859,27 +924,51 @@ function TopValuesScreen({
         { flexDirection: "row", gap: 1, flexGrow: 1 },
         React.createElement(TopListPanel, {
           title: "Top IPs",
+          panelKey: "ips",
           items: insights.ips,
-          width: panelWidth
+          width: panelWidth,
+          active: focus === "ips",
+          selectedIndex: selectedIndexes.ips
         }),
         React.createElement(TopListPanel, {
-          title: "Top user agents",
-          items: insights.userAgents,
-          width: panelWidth
+          title: "Top paths",
+          panelKey: "paths",
+          items: insights.paths,
+          width: panelWidth,
+          active: focus === "paths",
+          selectedIndex: selectedIndexes.paths
         })
       ),
       React.createElement(
         Box,
         { flexDirection: "row", gap: 1, flexGrow: 1 },
         React.createElement(TopListPanel, {
-          title: "Top query params",
-          items: insights.params,
-          width: panelWidth
+          title: "Top user agents",
+          panelKey: "userAgents",
+          items: insights.userAgents,
+          width: panelWidth,
+          active: focus === "userAgents",
+          selectedIndex: selectedIndexes.userAgents
         }),
         React.createElement(TopListPanel, {
+          title: "Top query params",
+          panelKey: "params",
+          items: insights.params,
+          width: panelWidth,
+          active: focus === "params",
+          selectedIndex: selectedIndexes.params
+        })
+      ),
+      React.createElement(
+        Box,
+        { flexDirection: "row", flexGrow: 1 },
+        React.createElement(TopListPanel, {
           title: "Top query param values",
+          panelKey: "paramValues",
           items: insights.paramValues,
-          width: panelWidth
+          width: panelWidth,
+          active: focus === "paramValues",
+          selectedIndex: selectedIndexes.paramValues
         })
       )
     )
@@ -888,27 +977,119 @@ function TopValuesScreen({
 
 function TopListPanel({
   title,
+  panelKey,
   items,
-  width
+  width,
+  active,
+  selectedIndex
 }: {
   title: string;
+  panelKey: TopPanelKey;
   items: TopItem[];
   width: number;
+  active: boolean;
+  selectedIndex: number;
 }) {
+  const safeSelectedIndex = Math.max(0, Math.min(selectedIndex, Math.max(0, items.length - 1)));
+
   return React.createElement(
     Box,
-    { flexDirection: "column", borderStyle: "single", paddingX: 1, width },
-    React.createElement(Text, { bold: true, wrap: "truncate" }, fitText(title, width - 2)),
+    {
+      flexDirection: "column",
+      borderStyle: "single",
+      borderColor: active ? "cyan" : undefined,
+      paddingX: 1,
+      width
+    },
+    React.createElement(
+      Text,
+      { bold: true, color: active ? "cyan" : undefined, wrap: "truncate" },
+      fitText(`${active ? "> " : "  "}${title}`, width - 2)
+    ),
     ...(items.length > 0
-      ? items.map((item) =>
+      ? items.map((item, index) =>
           React.createElement(
             Text,
-            { key: item.value, wrap: "truncate" },
+            {
+              key: `${panelKey}:${item.value}`,
+              color: active && index === safeSelectedIndex ? "black" : undefined,
+              backgroundColor: active && index === safeSelectedIndex ? "white" : undefined,
+              wrap: "truncate"
+            },
             fitText(`${String(item.count).padStart(5)}  ${item.value}`, width - 2)
           )
         )
       : [React.createElement(Text, { key: "empty", color: "gray" }, "none")])
   );
+}
+
+function selectedTopValue(
+  insights: IncidentInsights,
+  panel: TopPanelKey,
+  selectedIndex: number
+): TopItem | undefined {
+  const items = insights[panel];
+  return items[Math.max(0, Math.min(selectedIndex, Math.max(0, items.length - 1)))];
+}
+
+function topItemFilter(panel: TopPanelKey, value: string): string {
+  switch (panel) {
+    case "ips":
+      return `ip=${filterValue(value)}`;
+    case "paths":
+      return `path=${filterValue(value)}`;
+    case "userAgents":
+      return `ua:${filterValue(value)}`;
+    case "params":
+      return `param=${filterValue(value)}`;
+    case "paramValues":
+      return `param:${filterValue(value)}`;
+  }
+}
+
+function filterValue(value: string): string {
+  return `"${value.replace(/["\\]/g, (char) => `\\${char}`)}"`;
+}
+
+function currentTopContext(
+  report: AnalyzeReport,
+  scope: TopScope,
+  incident: Incident | undefined,
+  filter: string,
+  focus: TopPanelKey,
+  selectedIndexes: Record<TopPanelKey, number>
+): string {
+  const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
+  const insights = scope === "summary"
+    ? {
+        ips: report.topIps,
+        paths: report.topPaths,
+        userAgents: [],
+        params: [],
+        paramValues: []
+      }
+    : incidentInsights(filteredTopLines(matchSet?.lines ?? [], filter));
+  const selected = selectedTopValue(insights, focus, selectedIndexes[focus]);
+  const lines = [
+    `scope=${scope}`,
+    filter ? `filter=${filter}` : undefined,
+    incident ? `incident=${incident.id}` : undefined,
+    selected ? `selectedPanel=${focus} selected=${selected.value} count=${selected.count}` : `selectedPanel=${focus}`,
+    `topIps=${topItemsForContext(insights.ips)}`,
+    `topPaths=${topItemsForContext(insights.paths)}`,
+    `topUserAgents=${topItemsForContext(insights.userAgents)}`,
+    `topParams=${topItemsForContext(insights.params)}`,
+    `topParamValues=${topItemsForContext(insights.paramValues)}`
+  ].filter((line): line is string => Boolean(line));
+
+  return lines.join("\n");
+}
+
+function topItemsForContext(items: TopItem[]): string {
+  return items
+    .slice(0, 10)
+    .map((item) => `${item.value}:${item.count}`)
+    .join(" | ") || "none";
 }
 
 function LineTable({
@@ -1056,7 +1237,7 @@ function Footer({
     : screen === "summary"
       ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate | Enter/d open | f filter | s sort | S dir | t tops | a ask | e export | q quit`
       : screen === "tops"
-        ? "t/b/Esc back | a ask about view | q quit"
+        ? "Tab panel | ↑/↓ row | Enter filter by value | a ask about tops | t/b/Esc back | q quit"
         : "↑/↓ PgUp/PgDn rows | Enter/d detail | t tops | Space select | A select visible | f filter | s sort | S dir | a ask | e export | b back | q quit";
   const status = `${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
 
@@ -1086,30 +1267,37 @@ function visibleLines(
 
 function incidentInsights(lines: IncidentLogLine[]): IncidentInsights {
   const ips = new Map<string, number>();
+  const paths = new Map<string, number>();
   const userAgents = new Map<string, number>();
   const params = new Map<string, number>();
   const paramValues = new Map<string, number>();
 
   for (const line of lines) {
-    addInsightLine({ ips, userAgents, params, paramValues }, line);
+    addInsightLine({ ips, paths, userAgents, params, paramValues }, line);
   }
 
-  return topInsightMaps({ ips, userAgents, params, paramValues });
+  return topInsightMaps({ ips, paths, userAgents, params, paramValues });
 }
 
-async function incidentInsightsFromAccessIndex(run: CitrxRun): Promise<{
+async function incidentInsightsFromAccessIndex(run: CitrxRun, filter: string): Promise<{
   insights: IncidentInsights;
   count: number;
 }> {
   const maps = {
     ips: new Map<string, number>(),
+    paths: new Map<string, number>(),
     userAgents: new Map<string, number>(),
     params: new Map<string, number>(),
     paramValues: new Map<string, number>()
   };
   let count = 0;
+  const matches = filter ? createAccessLogLineFilter(filter) : () => true;
 
   for await (const line of readAccessLogIndexLines(run.accessIndex)) {
+    if (!matches(line)) {
+      continue;
+    }
+
     addInsightLine(maps, line);
     count += 1;
   }
@@ -1120,9 +1308,19 @@ async function incidentInsightsFromAccessIndex(run: CitrxRun): Promise<{
   };
 }
 
+function filteredTopLines(lines: IncidentLogLine[], filter: string): IncidentLogLine[] {
+  if (!filter) {
+    return lines;
+  }
+
+  const matches = createAccessLogLineFilter(filter);
+  return lines.filter((line) => matches(line));
+}
+
 function emptyIncidentInsights(): IncidentInsights {
   return {
     ips: [],
+    paths: [],
     userAgents: [],
     params: [],
     paramValues: []
@@ -1132,6 +1330,7 @@ function emptyIncidentInsights(): IncidentInsights {
 function addInsightLine(
   maps: {
     ips: Map<string, number>;
+    paths: Map<string, number>;
     userAgents: Map<string, number>;
     params: Map<string, number>;
     paramValues: Map<string, number>;
@@ -1139,6 +1338,7 @@ function addInsightLine(
   line: IncidentLogLine
 ): void {
   incrementMap(maps.ips, line.ip);
+  incrementMap(maps.paths, line.path);
   incrementMap(maps.userAgents, userAgentLabel(line.userAgent));
 
   for (const param of requestParamNames(line.target)) {
@@ -1152,12 +1352,14 @@ function addInsightLine(
 
 function topInsightMaps(maps: {
   ips: Map<string, number>;
+  paths: Map<string, number>;
   userAgents: Map<string, number>;
   params: Map<string, number>;
   paramValues: Map<string, number>;
 }): IncidentInsights {
   return {
     ips: topMapItems(maps.ips, 10),
+    paths: topMapItems(maps.paths, 10),
     userAgents: topMapItems(maps.userAgents, 10),
     params: topMapItems(maps.params, 10),
     paramValues: topMapItems(maps.paramValues, 10)
@@ -1707,6 +1909,11 @@ function severityColor(severity: Incident["severity"]): string {
     case "info":
       return "gray";
   }
+}
+
+function nextTopPanel(value: TopPanelKey): TopPanelKey {
+  const index = TOP_PANEL_KEYS.indexOf(value);
+  return TOP_PANEL_KEYS[(index + 1) % TOP_PANEL_KEYS.length] ?? "ips";
 }
 
 function truncate(value: string, length: number): string {
