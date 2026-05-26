@@ -14,7 +14,7 @@ coverage/
 # Local development fixtures
 examples/
 
-# Runtime/session data
+# Runtime/temp data
 .citrx/
 *.log
 

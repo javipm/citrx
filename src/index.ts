@@ -10,18 +10,14 @@ import type { FormatChoice } from "./parser/access-log.js";
 import { renderHtmlReport } from "./report/html.js";
 import { renderMarkdownReport } from "./report/markdown.js";
 import { renderTerminalReport } from "./report/terminal.js";
-import {
-  deleteSession,
-  listSessions,
-  readSession,
-  saveSession
-} from "./session/store.js";
-import type { CitrxSession } from "./session/types.js";
+import { createAccessLogIndexWriter } from "./run/access-index.js";
+import type { CitrxRun } from "./run/types.js";
+import { createRunWorkspace, removeRunWorkspace } from "./run/workspace.js";
 import { APP_NAME, VERSION } from "./version.js";
 
 type OutputFormat = "terminal" | "json" | "markdown" | "html";
 
-export type InteractiveLauncher = (session: CitrxSession) => Promise<void>;
+export type InteractiveLauncher = (run: CitrxRun) => Promise<void>;
 
 export interface CliRuntime {
   stdout: Writable;
@@ -45,7 +41,6 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--html", "Write a self-contained HTML report.")
     .option("--out <path>", "Write report output to a file.")
     .option("--no-interactive", "Print the terminal report instead of opening the TUI.")
-    .option("--no-session", "Do not persist this analysis session.")
     .option(
       "--format <format>",
       "Access-log format: auto, apache_common, apache_combined, nginx_combined, or custom:<name>.",
@@ -66,93 +61,6 @@ export function createProgram(runtime: CliRuntime): Command {
       writeErr: (message) => runtime.stderr.write(message)
     })
     .exitOverride();
-
-  const session = program
-    .command("session")
-    .description("Manage saved citrx analysis sessions.");
-
-  session
-    .command("list")
-    .description("List saved sessions.")
-    .option("--json", "Write machine-readable JSON output.")
-    .action(async (options: Record<string, unknown>) => {
-      const sessions = await listSessions(runtime.env.CITRX_SESSION_DIR);
-
-      if (options.json || program.opts().json) {
-        runtime.stdout.write(`${JSON.stringify({ sessions }, null, 2)}\n`);
-        return;
-      }
-
-      if (sessions.length === 0) {
-        runtime.stdout.write("No sessions found.\n");
-        return;
-      }
-
-      for (const item of sessions) {
-        runtime.stdout.write(
-          `${item.id}  ${item.createdAt}  files=${item.files} parsed=${item.parsedLines} formats=${item.formats.join(",")}\n`
-        );
-      }
-    });
-
-  session
-    .command("show")
-    .description("Show a saved session report.")
-    .argument("<id>", "Session id.")
-    .option("--json", "Write machine-readable JSON output.")
-    .action(async (id: string, options: Record<string, unknown>) => {
-      const saved = await readSession(id, runtime.env.CITRX_SESSION_DIR);
-
-      if (options.json || program.opts().json) {
-        runtime.stdout.write(`${JSON.stringify(saved, null, 2)}\n`);
-        return;
-      }
-
-      runtime.stdout.write(renderTerminalReport(saved.report));
-    });
-
-  session
-    .command("open")
-    .description("Open a saved session in the interactive incident explorer.")
-    .argument("<id>", "Session id.")
-    .action(async (id: string) => {
-      const saved = await readSession(id, runtime.env.CITRX_SESSION_DIR);
-      await openInteractiveSession(saved, runtime);
-    });
-
-  session
-    .command("export")
-    .description("Export a saved session report.")
-    .argument("<id>", "Session id.")
-    .option("--json", "Write machine-readable JSON output.")
-    .option("--markdown", "Write Markdown output.")
-    .option("--html", "Write a self-contained HTML report.")
-    .option("--out <path>", "Write export output to a file.")
-    .action(async (id: string, options: Record<string, unknown>) => {
-      const saved = await readSession(id, runtime.env.CITRX_SESSION_DIR);
-      const output = renderReport(
-        saved.report,
-        parseOutputFormat({ ...program.opts(), ...options }),
-        { ...program.opts(), ...options },
-        runtime
-      );
-
-      if (typeof options.out === "string") {
-        await writeFile(options.out, output, "utf8");
-        return;
-      }
-
-      runtime.stdout.write(output);
-    });
-
-  session
-    .command("delete")
-    .description("Delete a saved session.")
-    .argument("<id>", "Session id.")
-    .action(async (id: string) => {
-      await deleteSession(id, runtime.env.CITRX_SESSION_DIR);
-      runtime.stdout.write(`Deleted session ${id}\n`);
-    });
 
   program.action(async (options: Record<string, unknown>, command: Command) => {
     await runRootAnalysis(command.args, options, runtime);
@@ -185,37 +93,48 @@ async function runRootAnalysis(
 
   const format = parseFormatOption(options.format);
   const sources = await buildInputSources(paths, runtime);
-  let report = await analyzeAccessLogSources(sources, {
-    top,
-    format,
-    formatConfig:
-      typeof options.formatConfig === "string" ? options.formatConfig : undefined,
-    since: parseDateOption(options.since, "--since"),
-    until: parseDateOption(options.until, "--until"),
-    incidentLines
-  });
-  const sessionDir = runtime.env.CITRX_SESSION_DIR;
-  let session: CitrxSession | undefined;
+  const workspace = await createRunWorkspace();
+  const accessLogWriter = await createAccessLogIndexWriter(workspace.directory);
 
-  if (options.session !== false) {
-    session = await saveSession(report, report.inputs, sessionDir);
-    report = session.report;
+  try {
+    const report = await analyzeAccessLogSources(sources, {
+      top,
+      format,
+      formatConfig:
+        typeof options.formatConfig === "string" ? options.formatConfig : undefined,
+      since: parseDateOption(options.since, "--since"),
+      until: parseDateOption(options.until, "--until"),
+      incidentLines,
+      accessLogWriter
+    });
+    accessLogWriter.close();
+
+    const run: CitrxRun = {
+      id: workspace.id,
+      createdAt: report.generatedAt,
+      sourcePaths: report.inputs,
+      tempDir: workspace.directory,
+      report,
+      accessIndex: accessLogWriter.index
+    };
+
+    if (shouldOpenTui(options, outputFormat, runtime)) {
+      await openInteractiveRun(run, runtime);
+      return;
+    }
+
+    const output = renderReport(report, outputFormat, options, runtime);
+
+    if (typeof options.out === "string") {
+      await writeFile(options.out, output, "utf8");
+      return;
+    }
+
+    runtime.stdout.write(output);
+  } finally {
+    accessLogWriter.close();
+    await removeRunWorkspace(workspace.directory);
   }
-
-  if (shouldOpenTui(options, outputFormat, runtime)) {
-    session ??= await saveSession(report, report.inputs, sessionDir);
-    await openInteractiveSession(session, runtime);
-    return;
-  }
-
-  const output = renderReport(report, outputFormat, options, runtime);
-
-  if (typeof options.out === "string") {
-    await writeFile(options.out, output, "utf8");
-    return;
-  }
-
-  runtime.stdout.write(output);
 }
 
 async function buildInputSources(
@@ -322,17 +241,17 @@ function shouldOpenTui(
   );
 }
 
-async function openInteractiveSession(
-  session: CitrxSession,
+async function openInteractiveRun(
+  run: CitrxRun,
   runtime: CliRuntime
 ): Promise<void> {
   if (runtime.openInteractive) {
-    await runtime.openInteractive(session);
+    await runtime.openInteractive(run);
     return;
   }
 
-  const { openSessionTui } = await import("./tui/app.js");
-  await openSessionTui(session, {
+  const { openRunTui } = await import("./tui/app.js");
+  await openRunTui(run, {
     env: runtime.env,
     stdout: runtime.stdout,
     stderr: runtime.stderr,

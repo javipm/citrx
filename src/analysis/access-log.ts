@@ -8,6 +8,7 @@ import {
   validateParserOnSample
 } from "../parser/access-log.js";
 import type { AccessLogEntry, AccessLogParser, FormatChoice } from "../parser/access-log.js";
+import type { AccessLogIndexWriter } from "../run/access-index.js";
 import {
   buildAggregateIncidents,
   detectRequestHits,
@@ -32,6 +33,7 @@ interface AnalyzeOptions {
   since?: Date;
   until?: Date;
   incidentLines?: number;
+  accessLogWriter?: AccessLogIndexWriter;
 }
 
 interface SourceParserSelection {
@@ -61,7 +63,7 @@ interface Counters {
   pathMatches: Map<string, MutableIncidentMatches>;
   lineNumbers: Map<string, number>;
   incidentLineLimit: number;
-  accessLines: IncidentLogLine[];
+  accessLogWriter?: AccessLogIndexWriter;
 }
 
 interface MutableIncidentMatches {
@@ -110,7 +112,7 @@ export async function analyzeAccessLogSources(
     pathMatches: new Map(),
     lineNumbers: new Map(),
     incidentLineLimit: options.incidentLines ?? 500,
-    accessLines: []
+    accessLogWriter: options.accessLogWriter
   };
   const inputFormats: AnalyzeReport["inputFormats"] = [];
 
@@ -155,9 +157,7 @@ export async function analyzeAccessLogSources(
     topStatuses: topItems(counters.statuses, options.top),
     accessLog: {
       totalLines: counters.parsedLines,
-      storedLines: counters.accessLines.length,
-      truncated: false,
-      lines: counters.accessLines
+      indexedLines: counters.accessLogWriter?.index.totalRows ?? 0
     },
     incidents: sortIncidents([
       ...counters.ruleIncidents.values(),
@@ -322,7 +322,7 @@ function analyzeLine(
     userAgent: entry.userAgent
   };
 
-  counters.accessLines.push(storedLine);
+  counters.accessLogWriter?.write(storedLine);
   increment(counters.ips, entry.ip);
   increment(counters.paths, entry.path);
   increment(counters.methods, entry.method);

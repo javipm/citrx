@@ -15,9 +15,6 @@ export function renderTerminalReport(
 
   lines.push(`${colors.bold("citrx")} ${colors.green("access log analysis")}`);
   lines.push("");
-  if (report.sessionId) {
-    lines.push(`Session: ${report.sessionId}`);
-  }
   lines.push(`Files: ${report.summary.files}`);
   lines.push(`Lines: ${report.summary.parsedLines}/${report.summary.totalLines}`);
   if (report.summary.filteredLines > 0) {

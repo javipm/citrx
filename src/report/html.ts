@@ -36,7 +36,7 @@ export function renderHtmlReport(report: AnalyzeReport): string {
 <body>
   <header>
     <h1>citrx access log analysis</h1>
-    <div class="meta">${escapeHtml(report.generatedAt)}${report.sessionId ? ` · session ${escapeHtml(report.sessionId)}` : ""}</div>
+    <div class="meta">${escapeHtml(report.generatedAt)}</div>
   </header>
   <main>
     <section class="grid">

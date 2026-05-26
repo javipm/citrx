@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useWindowSize } from "ink";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -7,7 +7,12 @@ import type { Readable, Writable } from "node:stream";
 import type { AnalyzeReport, Incident, IncidentLogLine, TopItem } from "../analysis/types.js";
 import { OpenAiIncidentQuestionClient } from "../ai/incident-question.js";
 import type { IncidentQuestionClient } from "../ai/incident-question.js";
-import type { CitrxSession } from "../session/types.js";
+import {
+  passThroughFilter,
+  readAccessLogIndexLines,
+  readAccessLogIndexPage
+} from "../run/access-index.js";
+import type { CitrxRun } from "../run/types.js";
 import { createAccessLogLineFilter, validateAccessLogFilter } from "./filter.js";
 
 export interface TuiRuntime {
@@ -56,13 +61,13 @@ interface AccessTableColumns {
   ua: number;
 }
 
-export async function openSessionTui(
-  session: CitrxSession,
+export async function openRunTui(
+  run: CitrxRun,
   runtime: TuiRuntime
 ): Promise<void> {
   const instance = render(
     React.createElement(CitrxExplorer, {
-      session,
+      run,
       runtime
     }),
     {
@@ -77,10 +82,10 @@ export async function openSessionTui(
 }
 
 function CitrxExplorer({
-  session,
+  run,
   runtime
 }: {
-  session: CitrxSession;
+  run: CitrxRun;
   runtime: TuiRuntime;
 }) {
   const { exit } = useApp();
@@ -100,19 +105,13 @@ function CitrxExplorer({
   const [prompt, setPrompt] = useState<PromptState | undefined>();
   const [message, setMessage] = useState("Ready");
   const [busy, setBusy] = useState(false);
-  const incidents = session.report.incidents;
+  const [globalTotal, setGlobalTotal] = useState(run.report.accessLog.indexedLines);
+  const [summaryPageLines, setSummaryPageLines] = useState<IncidentLogLine[]>([]);
+  const incidents = run.report.incidents;
   const incident = incidents[incidentIndex];
-  const allStoredLines = useMemo(
-    () => session.report.accessLog.lines,
-    [session.report]
-  );
-  const globalLines = useMemo(
-    () => visibleLines(allStoredLines, filter, sortKey, sortDirection),
-    [allStoredLines, filter, sortKey, sortDirection]
-  );
   const allIncidentLines = useMemo(
-    () => incidentLines(session.report, incident?.id),
-    [session.report, incident?.id]
+    () => incidentLines(run.report, incident?.id),
+    [run.report, incident?.id]
   );
   const lines = useMemo(
     () => visibleLines(allIncidentLines, filter, sortKey, sortDirection),
@@ -123,8 +122,8 @@ function CitrxExplorer({
     [lines, selectedLineKeys]
   );
   const selectedGlobalLines = useMemo(
-    () => globalLines.filter((line) => selectedLineKeys.has(lineKey(line))),
-    [globalLines, selectedLineKeys]
+    () => summaryPageLines.filter((line) => selectedLineKeys.has(lineKey(line))),
+    [summaryPageLines, selectedLineKeys]
   );
   const pageSize = screen === "incident" ? Math.max(8, rows - 13) : Math.max(6, rows - 16);
   const summaryPageSize = Math.max(8, rows - 15);
@@ -142,9 +141,40 @@ function CitrxExplorer({
   const pageLines = lines.slice(pageStart, pageStart + pageSize);
   const summaryPageStart = Math.max(
     0,
-    Math.min(summaryLineIndex - Math.floor(summaryPageSize / 2), Math.max(0, globalLines.length - summaryPageSize))
+    Math.min(summaryLineIndex - Math.floor(summaryPageSize / 2), Math.max(0, globalTotal - summaryPageSize))
   );
-  const summaryPageLines = globalLines.slice(summaryPageStart, summaryPageStart + summaryPageSize);
+
+  useEffect(() => {
+    let cancelled = false;
+    const filterFn = filter ? createAccessLogLineFilter(filter) : passThroughFilter;
+
+    void readAccessLogIndexPage(run.accessIndex, {
+      filter: filterFn,
+      sortKey,
+      sortDirection,
+      start: summaryPageStart,
+      limit: summaryPageSize
+    })
+      .then((page) => {
+        if (cancelled) {
+          return;
+        }
+
+        setGlobalTotal(page.total);
+        setSummaryPageLines(page.lines);
+
+        setSummaryLineIndex((value) => Math.min(Math.max(0, page.total - 1), value));
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setMessage(error instanceof Error ? error.message : String(error));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filter, run.accessIndex, sortDirection, sortKey, summaryPageSize, summaryPageStart]);
 
   useInput((inputValue, key) => {
     if (prompt) {
@@ -159,7 +189,7 @@ function CitrxExplorer({
         setMessage,
         submitAi: (question, state) => {
           void submitOpenAi({
-            session,
+            run,
             runtime,
             scope: state.scope,
             incident: state.incident,
@@ -193,6 +223,17 @@ function CitrxExplorer({
 
       if (key.downArrow) {
         setDetailScroll((value) => Math.min(Math.max(0, detailLines.length - detailRows), value + 1));
+        return;
+      }
+
+      if (isPageUp(inputValue, key)) {
+        setDetailScroll((value) => Math.max(0, value - detailRows));
+        return;
+      }
+
+      if (isPageDown(inputValue, key)) {
+        setDetailScroll((value) => Math.min(Math.max(0, detailLines.length - detailRows), value + detailRows));
+        return;
       }
       return;
     }
@@ -226,9 +267,27 @@ function CitrxExplorer({
 
       if (key.downArrow) {
         if (summaryFocus === "incidents") {
-          setIncidentIndex((value) => Math.min(incidents.length - 1, value + 1));
+          setIncidentIndex((value) => Math.min(Math.max(0, incidents.length - 1), value + 1));
         } else {
-          setSummaryLineIndex((value) => Math.min(globalLines.length - 1, value + 1));
+          setSummaryLineIndex((value) => Math.min(Math.max(0, globalTotal - 1), value + 1));
+        }
+        return;
+      }
+
+      if (isPageUp(inputValue, key)) {
+        if (summaryFocus === "incidents") {
+          setIncidentIndex((value) => Math.max(0, value - 7));
+        } else {
+          setSummaryLineIndex((value) => Math.max(0, value - summaryPageSize));
+        }
+        return;
+      }
+
+      if (isPageDown(inputValue, key)) {
+        if (summaryFocus === "incidents") {
+          setIncidentIndex((value) => Math.min(Math.max(0, incidents.length - 1), value + 7));
+        } else {
+          setSummaryLineIndex((value) => Math.min(Math.max(0, globalTotal - 1), value + summaryPageSize));
         }
         return;
       }
@@ -249,7 +308,7 @@ function CitrxExplorer({
       }
 
       if ((inputValue === "d" || key.return) && summaryFocus === "accesses") {
-        const line = globalLines[summaryLineIndex];
+        const line = summaryPageLines[summaryLineIndex - summaryPageStart];
         if (line) {
           setDetailLine(line);
           setDetailScroll(0);
@@ -270,7 +329,7 @@ function CitrxExplorer({
       }
 
       if (inputValue === " ") {
-        const line = globalLines[summaryLineIndex];
+        const line = summaryPageLines[summaryLineIndex - summaryPageStart];
         if (line) {
           setSelectedLineKeys((current) => toggleSelection(current, line));
         }
@@ -278,8 +337,8 @@ function CitrxExplorer({
       }
 
       if (inputValue === "A") {
-        setSelectedLineKeys(new Set(globalLines.map(lineKey)));
-        setMessage(`Selected ${globalLines.length} visible lines`);
+        setSelectedLineKeys(new Set(summaryPageLines.map(lineKey)));
+        setMessage(`Selected ${summaryPageLines.length} visible lines`);
         return;
       }
 
@@ -309,8 +368,17 @@ function CitrxExplorer({
           value: "",
           cursor: 0,
           scope: "summary",
-          lines: selectedGlobalLines.length > 0 ? selectedGlobalLines : globalLines
+          lines: selectedGlobalLines.length > 0 ? selectedGlobalLines : summaryPageLines
         });
+        return;
+      }
+
+      if (inputValue === "e") {
+        const exportable = selectedGlobalLines.length > 0 ? selectedGlobalLines : summaryPageLines;
+        void exportContext(run.id, undefined, exportable).then((file) => {
+          setMessage(`Exported ${exportable.length} lines to ${file}`);
+        });
+        return;
       }
 
       return;
@@ -331,7 +399,7 @@ function CitrxExplorer({
           scope: topScope === "summary" ? "summary" : "incident",
           incident: topScope === "summary" ? undefined : incident,
           lines: topScope === "summary"
-            ? selectedGlobalLines.length > 0 ? selectedGlobalLines : globalLines
+            ? selectedGlobalLines.length > 0 ? selectedGlobalLines : summaryPageLines
             : selectedLines.length > 0 ? selectedLines : lines
         });
       }
@@ -345,7 +413,17 @@ function CitrxExplorer({
     }
 
     if (key.downArrow) {
-      setLineIndex((value) => Math.min(lines.length - 1, value + 1));
+      setLineIndex((value) => Math.min(Math.max(0, lines.length - 1), value + 1));
+      return;
+    }
+
+    if (isPageUp(inputValue, key)) {
+      setLineIndex((value) => Math.max(0, value - pageSize));
+      return;
+    }
+
+    if (isPageDown(inputValue, key)) {
+      setLineIndex((value) => Math.min(Math.max(0, lines.length - 1), value + pageSize));
       return;
     }
 
@@ -410,7 +488,7 @@ function CitrxExplorer({
 
     if (inputValue === "e") {
       const exportable = selectedLines.length > 0 ? selectedLines : lines;
-      void exportContext(session.id, incident, exportable).then((file) => {
+      void exportContext(run.id, incident, exportable).then((file) => {
         setMessage(`Exported ${exportable.length} lines to ${file}`);
       });
       return;
@@ -431,7 +509,7 @@ function CitrxExplorer({
   return React.createElement(
     Box,
     { flexDirection: "column", paddingX: 1, width: columns, height: rows },
-    React.createElement(Header, { session, columns }),
+    React.createElement(Header, { run, columns }),
     React.createElement(
       Box,
       { flexDirection: "column", flexGrow: 1 },
@@ -444,11 +522,12 @@ function CitrxExplorer({
           })
         : screen === "summary"
           ? React.createElement(SummaryScreen, {
-              report: session.report,
+              report: run.report,
               incidents,
               incidentIndex,
               focus: summaryFocus,
-              lines: globalLines,
+              lines: [],
+              totalLines: globalTotal,
               pageLines: summaryPageLines,
               pageStart: summaryPageStart,
               lineIndex: summaryLineIndex,
@@ -460,13 +539,14 @@ function CitrxExplorer({
             })
           : screen === "tops"
             ? React.createElement(TopValuesScreen, {
-                report: session.report,
+                run,
+                report: run.report,
                 incident: topScope === "summary" ? undefined : incident,
                 scope: topScope,
                 columns
               })
           : React.createElement(IncidentScreen, {
-              report: session.report,
+              report: run.report,
               incident,
               lines,
               pageLines,
@@ -492,13 +572,13 @@ function CitrxExplorer({
   );
 }
 
-function Header({ session, columns }: { session: CitrxSession; columns: number }) {
-  const report = session.report;
+function Header({ run, columns }: { run: CitrxRun; columns: number }) {
+  const report = run.report;
   return React.createElement(
     Text,
     { bold: true, color: "cyan", wrap: "truncate" },
     fitText(
-      `citrx ${session.id} | files=${report.summary.files} parsed=${report.summary.parsedLines} incidents=${report.incidents.length}`,
+      `citrx ${run.id} | files=${report.summary.files} parsed=${report.summary.parsedLines} incidents=${report.incidents.length}`,
       columns - 2
     )
   );
@@ -517,7 +597,8 @@ function SummaryScreen({
   sortKey,
   sortDirection,
   selectedLineKeys,
-  columns
+  columns,
+  totalLines
 }: {
   report: AnalyzeReport;
   incidents: Incident[];
@@ -532,6 +613,7 @@ function SummaryScreen({
   sortDirection: SortDirection;
   selectedLineKeys: Set<string>;
   columns: number;
+  totalLines: number;
 }) {
   return React.createElement(
     Box,
@@ -557,9 +639,10 @@ function SummaryScreen({
       sortDirection,
       selectedLineKeys,
       columns,
+      totalLines,
       active: focus === "accesses",
       label: "Access log",
-      emptyMessage: "No stored access lines. Increase --incident-lines or open an incident."
+      emptyMessage: "No indexed access-log lines"
     })
   );
 }
@@ -577,7 +660,7 @@ function SummaryPanel({ report }: { report: AnalyzeReport }) {
       `lines: ${report.summary.parsedLines}/${report.summary.totalLines} parsed | invalid: ${report.summary.invalidLines}`
     ),
     React.createElement(Text, null, `bytes: ${formatBytes(report.summary.totalBytes)}`),
-    React.createElement(Text, null, `access lines: ${report.accessLog.storedLines}`),
+    React.createElement(Text, null, `indexed lines: ${report.accessLog.indexedLines}`),
     React.createElement(Text, { color: "gray" }, "press t for global top values")
   );
 }
@@ -692,21 +775,54 @@ function IncidentScreen({
 }
 
 function TopValuesScreen({
+  run,
   report,
   incident,
   scope,
   columns
 }: {
+  run: CitrxRun;
   report: AnalyzeReport;
   incident: Incident | undefined;
   scope: TopScope;
   columns: number;
 }) {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
-  const sourceLines = scope === "summary" ? report.accessLog.lines : matchSet?.lines ?? [];
-  const insights = incidentInsights(sourceLines);
+  const incidentTopValues = useMemo(
+    () => incidentInsights(matchSet?.lines ?? []),
+    [matchSet]
+  );
+  const [summaryTopValues, setSummaryTopValues] = useState<{
+    insights: IncidentInsights;
+    count: number;
+  }>();
   const panelWidth = Math.max(30, Math.floor((columns - 7) / 2));
   const headerWidth = Math.max(40, columns - 10);
+
+  useEffect(() => {
+    if (scope !== "summary") {
+      return;
+    }
+
+    let cancelled = false;
+
+    void incidentInsightsFromAccessIndex(run).then((value) => {
+      if (!cancelled) {
+        setSummaryTopValues(value);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [run, scope]);
+
+  const insights = scope === "summary"
+    ? summaryTopValues?.insights ?? emptyIncidentInsights()
+    : incidentTopValues;
+  const sourceCount = scope === "summary"
+    ? summaryTopValues?.count ?? 0
+    : matchSet?.storedLines ?? 0;
 
   if (scope === "incident" && !incident) {
     return React.createElement(Text, null, "No incident selected");
@@ -714,7 +830,7 @@ function TopValuesScreen({
 
   const title = scope === "summary" ? "Global top values" : `Top values for ${incident?.id ?? "incident"}`;
   const subtitle = scope === "summary"
-    ? `computed from ${sourceLines.length} stored matching requests`
+    ? `computed from ${sourceCount}/${report.accessLog.totalLines} parsed access-log rows`
     : `computed from ${matchSet?.storedLines ?? 0}/${matchSet?.totalMatches ?? 0} stored matching requests${matchSet?.truncated ? " (sample truncated)" : ""}`;
 
   return React.createElement(
@@ -804,6 +920,7 @@ function LineTable({
   sortDirection,
   selectedLineKeys,
   columns,
+  totalLines,
   active = true,
   label = "Accesses",
   emptyMessage = "No stored lines for this incident"
@@ -817,11 +934,13 @@ function LineTable({
   sortDirection: SortDirection;
   selectedLineKeys: Set<string>;
   columns: number;
+  totalLines?: number;
   active?: boolean;
   label?: string;
   emptyMessage?: string;
 }) {
   const tableColumns = accessTableColumns(columns);
+  const lineCount = totalLines ?? lines.length;
   const visibleStart = pageLines.length > 0 ? pageStart + 1 : 0;
   const visibleEnd = pageStart + pageLines.length;
   const filterLabel = filter ? ` | filter: ${filter}` : " | filter: none";
@@ -830,17 +949,25 @@ function LineTable({
     Box,
     { flexDirection: "column", borderStyle: "single", paddingX: 1, flexGrow: 1 },
     React.createElement(
-      Text,
-      { bold: true, color: active ? "cyan" : undefined, wrap: "truncate" },
-      fitText(
-        `${label}${active ? " *" : ""}: ${lines.length} | showing: ${visibleStart}-${visibleEnd} | sort: ${sortKey} ${sortDirection}${filterLabel}`,
-        columns - 10
+      Box,
+      { flexShrink: 0 },
+      React.createElement(
+        Text,
+        { bold: true, color: active ? "cyan" : undefined, wrap: "truncate" },
+        fitText(
+          `${label}${active ? " *" : ""}: ${lineCount} | showing: ${visibleStart}-${visibleEnd} | sort: ${sortKey} ${sortDirection}${filterLabel}`,
+          columns - 10
+        )
       )
     ),
     React.createElement(
-      Text,
-      { color: "gray", wrap: "truncate" },
-      accessTableHeader(tableColumns)
+      Box,
+      { flexShrink: 0 },
+      React.createElement(
+        Text,
+        { color: "gray", wrap: "truncate" },
+        accessTableHeader(tableColumns)
+      )
     ),
     ...(pageLines.length > 0
       ? pageLines.map((line, offset) => {
@@ -924,12 +1051,12 @@ function Footer({
   columns: number;
 }) {
   const shortcuts = detailOpen
-    ? "↑/↓ scroll | d/b/Esc close | q quit"
+    ? "↑/↓ PgUp/PgDn scroll | d/b/Esc close | q quit"
     : screen === "summary"
-      ? `Tab focus(${summaryFocus}) | ↑/↓ navigate | Enter/d open | f filter | s sort | S dir | t tops | a ask | q quit`
+      ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate | Enter/d open | f filter | s sort | S dir | t tops | a ask | e export | q quit`
       : screen === "tops"
         ? "t/b/Esc back | a ask about view | q quit"
-        : "↑/↓ rows | d detail | t tops | Space select | A select visible | f filter | s sort | S dir | a ask | e export | b back | q quit";
+        : "↑/↓ PgUp/PgDn rows | d detail | t tops | Space select | A select visible | f filter | s sort | S dir | a ask | e export | b back | q quit";
   const status = `${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
 
   return React.createElement(
@@ -963,23 +1090,76 @@ function incidentInsights(lines: IncidentLogLine[]): IncidentInsights {
   const paramValues = new Map<string, number>();
 
   for (const line of lines) {
-    incrementMap(ips, line.ip);
-    incrementMap(userAgents, userAgentLabel(line.userAgent));
+    addInsightLine({ ips, userAgents, params, paramValues }, line);
+  }
 
-    for (const param of requestParamNames(line.target)) {
-      incrementMap(params, param);
-    }
+  return topInsightMaps({ ips, userAgents, params, paramValues });
+}
 
-    for (const paramValue of requestParamValues(line.target)) {
-      incrementMap(paramValues, paramValue);
-    }
+async function incidentInsightsFromAccessIndex(run: CitrxRun): Promise<{
+  insights: IncidentInsights;
+  count: number;
+}> {
+  const maps = {
+    ips: new Map<string, number>(),
+    userAgents: new Map<string, number>(),
+    params: new Map<string, number>(),
+    paramValues: new Map<string, number>()
+  };
+  let count = 0;
+
+  for await (const line of readAccessLogIndexLines(run.accessIndex)) {
+    addInsightLine(maps, line);
+    count += 1;
   }
 
   return {
-    ips: topMapItems(ips, 10),
-    userAgents: topMapItems(userAgents, 10),
-    params: topMapItems(params, 10),
-    paramValues: topMapItems(paramValues, 10)
+    insights: topInsightMaps(maps),
+    count
+  };
+}
+
+function emptyIncidentInsights(): IncidentInsights {
+  return {
+    ips: [],
+    userAgents: [],
+    params: [],
+    paramValues: []
+  };
+}
+
+function addInsightLine(
+  maps: {
+    ips: Map<string, number>;
+    userAgents: Map<string, number>;
+    params: Map<string, number>;
+    paramValues: Map<string, number>;
+  },
+  line: IncidentLogLine
+): void {
+  incrementMap(maps.ips, line.ip);
+  incrementMap(maps.userAgents, userAgentLabel(line.userAgent));
+
+  for (const param of requestParamNames(line.target)) {
+    incrementMap(maps.params, param);
+  }
+
+  for (const paramValue of requestParamValues(line.target)) {
+    incrementMap(maps.paramValues, paramValue);
+  }
+}
+
+function topInsightMaps(maps: {
+  ips: Map<string, number>;
+  userAgents: Map<string, number>;
+  params: Map<string, number>;
+  paramValues: Map<string, number>;
+}): IncidentInsights {
+  return {
+    ips: topMapItems(maps.ips, 10),
+    userAgents: topMapItems(maps.userAgents, 10),
+    params: topMapItems(maps.params, 10),
+    paramValues: topMapItems(maps.paramValues, 10)
   };
 }
 
@@ -1188,13 +1368,13 @@ function nextSort(sortKey: SortKey): SortKey {
 }
 
 async function exportContext(
-  sessionId: string,
+  runId: string,
   incident: Incident | undefined,
   lines: IncidentLogLine[]
 ): Promise<string> {
-  const safeSessionId = sanitizeFilePart(sessionId);
+  const safeRunId = sanitizeFilePart(runId);
   const safeIncidentId = sanitizeFilePart(incident?.id ?? "summary");
-  const file = path.join(process.cwd(), `citrx-${safeSessionId}-${safeIncidentId}.json`);
+  const file = path.join(process.cwd(), `citrx-${safeRunId}-${safeIncidentId}.json`);
   await writeFile(file, `${JSON.stringify({ incident, lines }, null, 2)}\n`, "utf8");
   return file;
 }
@@ -1353,7 +1533,7 @@ function promptDisplay(
 }
 
 async function submitOpenAi({
-  session,
+  run,
   runtime,
   scope,
   incident,
@@ -1362,7 +1542,7 @@ async function submitOpenAi({
   setBusy,
   setMessage
 }: {
-  session: CitrxSession;
+  run: CitrxRun;
   runtime: TuiRuntime;
   scope: "summary" | "incident";
   incident?: Incident;
@@ -1375,7 +1555,7 @@ async function submitOpenAi({
   try {
     const client = runtime.aiClient ?? new OpenAiIncidentQuestionClient();
     const result = await client.ask({
-      report: session.report,
+      report: run.report,
       incident,
       lines,
       question,
@@ -1392,6 +1572,20 @@ async function submitOpenAi({
 
 function isPrintableInput(inputValue: string): boolean {
   return inputValue.length > 0 && !inputValue.startsWith("\u001B");
+}
+
+function isPageUp(
+  inputValue: string,
+  key: { pageUp?: boolean }
+): boolean {
+  return Boolean(key.pageUp) || inputValue === "\u001B[5~";
+}
+
+function isPageDown(
+  inputValue: string,
+  key: { pageDown?: boolean }
+): boolean {
+  return Boolean(key.pageDown) || inputValue === "\u001B[6~";
 }
 
 function toggleSelection(current: Set<string>, line: IncidentLogLine): Set<string> {

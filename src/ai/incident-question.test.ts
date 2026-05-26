@@ -40,9 +40,7 @@ const report: AnalyzeReport = {
   topStatuses: [{ value: "200", count: 2 }],
   accessLog: {
     totalLines: 2,
-    storedLines: 0,
-    truncated: false,
-    lines: []
+    indexedLines: 0
   },
   incidents: [incident],
   incidentMatches: []

@@ -5,7 +5,6 @@ export function renderMarkdownReport(report: AnalyzeReport): string {
     "# citrx access log analysis",
     "",
     `Generated: ${report.generatedAt}`,
-    ...(report.sessionId ? [`Session: ${report.sessionId}`] : []),
     "",
     "## Summary",
     "",
