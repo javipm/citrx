@@ -34,6 +34,18 @@ interface PromptInputState {
   cursor: number;
 }
 
+interface OpenAiAnswerState {
+  title: string;
+  meta: string;
+  answer: string;
+}
+
+interface RenderLine {
+  text: string;
+  color?: "cyan" | "gray" | "yellow" | "green";
+  bold?: boolean;
+}
+
 type PromptState =
   | ({ kind: "filter" } & PromptInputState)
   | {
@@ -115,6 +127,8 @@ function CitrxExplorer({
   const [selectedLineKeys, setSelectedLineKeys] = useState<Set<string>>(new Set());
   const [detailLine, setDetailLine] = useState<IncidentLogLine | undefined>();
   const [detailScroll, setDetailScroll] = useState(0);
+  const [openAiAnswer, setOpenAiAnswer] = useState<OpenAiAnswerState | undefined>();
+  const [openAiAnswerScroll, setOpenAiAnswerScroll] = useState(0);
   const [prompt, setPrompt] = useState<PromptState | undefined>();
   const [message, setMessage] = useState("Ready");
   const [busy, setBusy] = useState(false);
@@ -147,6 +161,16 @@ function CitrxExplorer({
     [detailLine, detailWidth]
   );
   const visibleDetailLines = detailLines.slice(detailScroll, detailScroll + detailRows);
+  const answerRows = Math.max(8, rows - 7);
+  const answerWidth = Math.max(40, columns - 10);
+  const openAiAnswerLines = useMemo(
+    () => (openAiAnswer ? renderMarkdownAnswer(openAiAnswer.answer, answerWidth) : []),
+    [openAiAnswer, answerWidth]
+  );
+  const visibleOpenAiAnswerLines = openAiAnswerLines.slice(
+    openAiAnswerScroll,
+    openAiAnswerScroll + answerRows
+  );
   const pageStart = Math.max(
     0,
     Math.min(lineIndex - Math.floor(pageSize / 2), Math.max(0, lines.length - pageSize))
@@ -211,10 +235,52 @@ function CitrxExplorer({
               ? `${question}\n\nContexto TUI:\n${state.extraContext}`
               : question,
             setBusy,
-            setMessage
+            setMessage,
+            setOpenAiAnswer,
+            setOpenAiAnswerScroll
           });
         }
       });
+      return;
+    }
+
+    if (openAiAnswer) {
+      if (inputValue === "q") {
+        exit();
+        return;
+      }
+
+      if (inputValue === "b" || key.escape || key.backspace) {
+        setOpenAiAnswer(undefined);
+        setOpenAiAnswerScroll(0);
+        setMessage("Back to analysis");
+        return;
+      }
+
+      if (key.upArrow) {
+        setOpenAiAnswerScroll((value) => Math.max(0, value - 1));
+        return;
+      }
+
+      if (key.downArrow) {
+        setOpenAiAnswerScroll((value) =>
+          Math.min(Math.max(0, openAiAnswerLines.length - answerRows), value + 1)
+        );
+        return;
+      }
+
+      if (isPageUp(inputValue, key)) {
+        setOpenAiAnswerScroll((value) => Math.max(0, value - answerRows));
+        return;
+      }
+
+      if (isPageDown(inputValue, key)) {
+        setOpenAiAnswerScroll((value) =>
+          Math.min(Math.max(0, openAiAnswerLines.length - answerRows), value + answerRows)
+        );
+        return;
+      }
+
       return;
     }
 
@@ -556,6 +622,13 @@ function CitrxExplorer({
             scroll: detailScroll,
             totalLines: detailLines.length
           })
+        : openAiAnswer
+          ? React.createElement(OpenAiAnswerScreen, {
+              answer: openAiAnswer,
+              visibleLines: visibleOpenAiAnswerLines,
+              scroll: openAiAnswerScroll,
+              totalLines: openAiAnswerLines.length
+            })
         : screen === "summary"
           ? React.createElement(SummaryScreen, {
               report: run.report,
@@ -612,6 +685,7 @@ function CitrxExplorer({
       screen,
       summaryFocus,
       detailOpen: Boolean(detailLine),
+      answerOpen: Boolean(openAiAnswer),
       busy,
       message,
       selected: selectedLineKeys.size,
@@ -1196,6 +1270,41 @@ function RequestDetailScreen({
   );
 }
 
+function OpenAiAnswerScreen({
+  answer,
+  visibleLines,
+  scroll,
+  totalLines
+}: {
+  answer: OpenAiAnswerState;
+  visibleLines: RenderLine[];
+  scroll: number;
+  totalLines: number;
+}) {
+  return React.createElement(
+    Box,
+    { flexDirection: "column", borderStyle: "double", paddingX: 1, flexGrow: 1 },
+    React.createElement(
+      Text,
+      { bold: true, color: "cyan", wrap: "truncate" },
+      `${answer.title} | ${scroll + 1}-${Math.min(scroll + visibleLines.length, totalLines)}/${totalLines}`
+    ),
+    React.createElement(Text, { color: "gray", wrap: "truncate" }, answer.meta),
+    ...visibleLines.map((value, index) =>
+      React.createElement(
+        Text,
+        {
+          key: `${scroll + index}:${value.text}`,
+          color: value.color,
+          bold: value.bold,
+          wrap: "truncate"
+        },
+        value.text
+      )
+    )
+  );
+}
+
 function PromptBar({ prompt, columns }: { prompt: PromptState; columns: number }) {
   const label =
     prompt.kind === "filter"
@@ -1219,6 +1328,7 @@ function Footer({
   screen,
   summaryFocus,
   detailOpen,
+  answerOpen,
   busy,
   message,
   selected,
@@ -1227,12 +1337,15 @@ function Footer({
   screen: Screen;
   summaryFocus: SummaryFocus;
   detailOpen: boolean;
+  answerOpen: boolean;
   busy: boolean;
   message: string;
   selected: number;
   columns: number;
 }) {
-  const shortcuts = detailOpen
+  const shortcuts = answerOpen
+    ? "↑/↓ PgUp/PgDn scroll | b/Esc close answer | q quit"
+    : detailOpen
     ? "↑/↓ PgUp/PgDn scroll | d/b/Esc close | q quit"
     : screen === "summary"
       ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate | Enter/d open | f filter | s sort | S dir | t tops | a ask | e export | q quit`
@@ -1743,7 +1856,9 @@ async function submitOpenAi({
   lines,
   question,
   setBusy,
-  setMessage
+  setMessage,
+  setOpenAiAnswer,
+  setOpenAiAnswerScroll
 }: {
   run: CitrxRun;
   runtime: TuiRuntime;
@@ -1753,6 +1868,8 @@ async function submitOpenAi({
   question: string;
   setBusy: (value: boolean) => void;
   setMessage: (value: string) => void;
+  setOpenAiAnswer: (value: OpenAiAnswerState | undefined) => void;
+  setOpenAiAnswerScroll: (value: number) => void;
 }): Promise<void> {
   setBusy(true);
   try {
@@ -1765,7 +1882,13 @@ async function submitOpenAi({
       env: runtime.env,
       scope
     });
-    setMessage(`OpenAI (${result.model}, ${result.sentLines} lines, ${result.sentChars} chars): ${truncate(result.answer, 220)}`);
+    setOpenAiAnswer({
+      title: scope === "summary" ? "OpenAI analysis" : `OpenAI incident analysis`,
+      meta: `${result.model} | sent ${result.sentLines} lines | ${result.sentChars} chars`,
+      answer: result.answer
+    });
+    setOpenAiAnswerScroll(0);
+    setMessage("OpenAI answer ready");
   } catch (error) {
     setMessage(error instanceof Error ? error.message : String(error));
   } finally {
@@ -1829,6 +1952,122 @@ function wrapDetailField(label: string, value: string, width: number): string[] 
   return chunks.map((chunk, index) =>
     `${index === 0 ? label.padEnd(labelWidth) : " ".repeat(labelWidth)} ${chunk}`
   );
+}
+
+function renderMarkdownAnswer(value: string, width: number): RenderLine[] {
+  const contentWidth = Math.max(20, width);
+  const lines = value.replace(/\r\n/g, "\n").split("\n");
+  const rendered: RenderLine[] = [];
+  let inCodeBlock = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("```")) {
+      inCodeBlock = !inCodeBlock;
+      rendered.push({ text: inCodeBlock ? "  ┌─ code" : "  └─", color: "gray" });
+      continue;
+    }
+
+    if (line.trim().length === 0) {
+      rendered.push({ text: "" });
+      continue;
+    }
+
+    if (inCodeBlock) {
+      for (const chunk of wrapHard(line, Math.max(20, contentWidth - 6))) {
+        rendered.push({ text: `  │ ${stripMarkdownInline(chunk)}`, color: "green" });
+      }
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      if (rendered.length > 0 && rendered[rendered.length - 1]?.text !== "") {
+        rendered.push({ text: "" });
+      }
+      rendered.push({
+        text: `▶ ${fitText(stripMarkdownInline(heading[2] ?? ""), contentWidth - 2)}`,
+        color: "cyan",
+        bold: true
+      });
+      continue;
+    }
+
+    const bullet = line.match(/^(\s*)[-*]\s+(.+)$/);
+    if (bullet) {
+      const indent = " ".repeat(Math.min(6, Math.floor((bullet[1]?.length ?? 0) / 2) * 2));
+      const prefix = `${indent}• `;
+      for (const [index, chunk] of wrapWords(stripMarkdownInline(bullet[2] ?? ""), Math.max(20, contentWidth - prefix.length)).entries()) {
+        rendered.push({
+          text: `${index === 0 ? prefix : " ".repeat(prefix.length)}${chunk}`,
+          color: index === 0 ? undefined : "gray"
+        });
+      }
+      continue;
+    }
+
+    const ordered = line.match(/^(\s*)(\d+)\.\s+(.+)$/);
+    if (ordered) {
+      const indent = " ".repeat(Math.min(6, Math.floor((ordered[1]?.length ?? 0) / 2) * 2));
+      const prefix = `${indent}${ordered[2]}. `;
+      for (const [index, chunk] of wrapWords(stripMarkdownInline(ordered[3] ?? ""), Math.max(20, contentWidth - prefix.length)).entries()) {
+        rendered.push({
+          text: `${index === 0 ? prefix : " ".repeat(prefix.length)}${chunk}`,
+          color: index === 0 ? undefined : "gray"
+        });
+      }
+      continue;
+    }
+
+    for (const chunk of wrapWords(stripMarkdownInline(line), contentWidth)) {
+      rendered.push({ text: chunk });
+    }
+  }
+
+  return rendered.length > 0 ? rendered : [{ text: "No answer returned." }];
+}
+
+function stripMarkdownInline(value: string): string {
+  return value
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
+}
+
+function wrapWords(value: string, width: number): string[] {
+  if (value.length <= width) {
+    return [value];
+  }
+
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const word of value.split(/\s+/)) {
+    if (word.length > width) {
+      if (current) {
+        chunks.push(current);
+        current = "";
+      }
+      chunks.push(...wrapHard(word, width));
+      continue;
+    }
+
+    const next = current ? `${current} ${word}` : word;
+    if (next.length > width) {
+      chunks.push(current);
+      current = word;
+    } else {
+      current = next;
+    }
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks.length > 0 ? chunks : [value];
 }
 
 function wrapHard(value: string, width: number): string[] {
