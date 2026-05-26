@@ -4,6 +4,7 @@ import type { AccessLogEntry } from "../parser/access-log.js";
 import {
   buildAggregateIncidents,
   detectRequestHits,
+  mergeRuleHit,
   querySignature,
   redactTarget
 } from "./local.js";
@@ -26,6 +27,17 @@ function entry(target: string, overrides: Partial<AccessLogEntry> = {}): AccessL
   };
 }
 
+function ipCounts(totalIps: number, totalRequests: number): Map<string, number> {
+  const counts = new Map<string, number>();
+
+  for (let index = 0; index < totalRequests; index += 1) {
+    const ip = `203.0.113.${index % totalIps}`;
+    counts.set(ip, (counts.get(ip) ?? 0) + 1);
+  }
+
+  return counts;
+}
+
 describe("local rules", () => {
   it("detects request attack payloads", () => {
     const hits = detectRequestHits(
@@ -40,6 +52,51 @@ describe("local rules", () => {
         })
       ])
     );
+  });
+
+  it("downgrades payload incidents when every response is 404", () => {
+    const incidents = new Map();
+    const first = entry("/search?q=1%20UNION%20SELECT%20password", { status: 404 });
+    const second = entry("/search?q=1%20UNION%20SELECT%20email", { status: 404 });
+    const [firstHit] = detectRequestHits(first);
+    const [secondHit] = detectRequestHits(second);
+
+    const incidentId = mergeRuleHit(incidents, firstHit!, first);
+    mergeRuleHit(incidents, secondHit!, second);
+
+    expect(incidents.get(incidentId)).toMatchObject({
+      severity: "medium",
+      score: 45,
+      evidence: expect.arrayContaining([
+        { key: "count", value: 2 },
+        { key: "outcome", value: "all_404" },
+        { key: "status4xx", value: 2 },
+        { key: "status404", value: 2 }
+      ])
+    });
+  });
+
+  it("keeps payload incidents critical when responses include a successful status", () => {
+    const incidents = new Map();
+    const notFound = entry("/search?q=1%20UNION%20SELECT%20password", { status: 404 });
+    const ok = entry("/search?q=1%20UNION%20SELECT%20email", { status: 200 });
+    const [notFoundHit] = detectRequestHits(notFound);
+    const [okHit] = detectRequestHits(ok);
+
+    const incidentId = mergeRuleHit(incidents, notFoundHit!, notFound);
+    mergeRuleHit(incidents, okHit!, ok);
+
+    expect(incidents.get(incidentId)).toMatchObject({
+      severity: "critical",
+      score: 95,
+      evidence: expect.arrayContaining([
+        { key: "count", value: 2 },
+        { key: "outcome", value: "mixed" },
+        { key: "status2xx", value: 1 },
+        { key: "status4xx", value: 1 },
+        { key: "status404", value: 1 }
+      ])
+    });
   });
 
   it("redacts sensitive query values in samples", () => {
@@ -58,15 +115,17 @@ describe("local rules", () => {
         path: "/hot",
         count: 1000,
         bytes: 50_000,
-        ips: new Set(Array.from({ length: 20 }, (_, index) => `203.0.113.${index}`)),
-        queryVariants: new Set(),
+        ipCounts: ipCounts(20, 1000),
+        queryVariants: new Set(
+          Array.from({ length: 250 }, (_, index) => `?page=${index}`)
+        ),
         postCount: 0
       },
       {
         path: "/login",
         count: 60,
         bytes: 1000,
-        ips: new Set(["203.0.113.10"]),
+        ipCounts: ipCounts(1, 60),
         queryVariants: new Set(),
         postCount: 60
       }
@@ -78,5 +137,22 @@ describe("local rules", () => {
         expect.objectContaining({ id: "post_hotspot:/login" })
       ])
     );
+  });
+
+  it("does not report entrypoint traffic as distributed crawling", () => {
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/",
+        count: 4355,
+        bytes: 201_149_997,
+        ipCounts: ipCounts(1056, 4355),
+        queryVariants: new Set(
+          Array.from({ length: 387 }, (_, index) => `?utm=${index}`)
+        ),
+        postCount: 0
+      }
+    ]);
+
+    expect(incidents).toEqual([]);
   });
 });

@@ -25,6 +25,8 @@ import type {
   IncidentMatchSet,
   TopItem
 } from "./types.js";
+import { BehaviorTracker } from "./behavior.js";
+import { parseAccessLogTimestamp } from "./timestamp.js";
 
 interface AnalyzeOptions {
   top: number;
@@ -32,7 +34,6 @@ interface AnalyzeOptions {
   formatConfig?: string;
   since?: Date;
   until?: Date;
-  incidentLines?: number;
   accessLogWriter?: AccessLogIndexWriter;
 }
 
@@ -62,8 +63,8 @@ interface Counters {
   ruleMatches: Map<string, MutableIncidentMatches>;
   pathMatches: Map<string, MutableIncidentMatches>;
   lineNumbers: Map<string, number>;
-  incidentLineLimit: number;
   accessLogWriter?: AccessLogIndexWriter;
+  behavior: BehaviorTracker;
 }
 
 interface MutableIncidentMatches {
@@ -111,8 +112,8 @@ export async function analyzeAccessLogSources(
     ruleMatches: new Map(),
     pathMatches: new Map(),
     lineNumbers: new Map(),
-    incidentLineLimit: options.incidentLines ?? 500,
-    accessLogWriter: options.accessLogWriter
+    accessLogWriter: options.accessLogWriter,
+    behavior: new BehaviorTracker()
   };
   const inputFormats: AnalyzeReport["inputFormats"] = [];
 
@@ -135,6 +136,8 @@ export async function analyzeAccessLogSources(
       await analyzeTextSource(source, customParsers, counters, inputFormats, options);
     }
   }
+
+  const behavior = counters.behavior.finalize();
 
   return {
     app: "citrx",
@@ -159,9 +162,12 @@ export async function analyzeAccessLogSources(
       totalLines: counters.parsedLines,
       indexedLines: counters.accessLogWriter?.index.totalRows ?? 0
     },
+    timeStats: behavior.timeStats,
+    ipBehaviorStats: behavior.ipBehaviorStats,
     incidents: sortIncidents([
       ...counters.ruleIncidents.values(),
-      ...buildAggregateIncidents(counters.pathStats.values())
+      ...buildAggregateIncidents(counters.pathStats.values()),
+      ...behavior.incidents
     ]),
     incidentMatches: incidentMatches(counters)
   };
@@ -323,16 +329,17 @@ function analyzeLine(
   };
 
   counters.accessLogWriter?.write(storedLine);
+  counters.behavior.observe(entry);
   increment(counters.ips, entry.ip);
   increment(counters.paths, entry.path);
   increment(counters.methods, entry.method);
   increment(counters.statuses, String(entry.status));
   updatePathStats(counters.pathStats, entry);
-  addIncidentLine(counters.pathMatches, entry.path, counters.incidentLineLimit, storedLine);
+  addIncidentLine(counters.pathMatches, entry.path, storedLine);
 
   for (const hit of detectRequestHits(entry)) {
-    const incidentId = mergeRuleHit(counters.ruleIncidents, hit, entry.path);
-    addIncidentLine(counters.ruleMatches, incidentId, counters.incidentLineLimit, storedLine);
+    const incidentId = mergeRuleHit(counters.ruleIncidents, hit, entry);
+    addIncidentLine(counters.ruleMatches, incidentId, storedLine);
   }
 }
 
@@ -383,8 +390,6 @@ function incidentMatches(counters: Counters): IncidentMatchSet[] {
     .map((matchSet) => ({
       incidentId: matchSet.incidentId,
       totalMatches: matchSet.totalMatches,
-      storedLines: matchSet.lines.length,
-      truncated: matchSet.totalMatches > matchSet.lines.length,
       lines: matchSet.lines
     }));
 }
@@ -392,7 +397,6 @@ function incidentMatches(counters: Counters): IncidentMatchSet[] {
 function addIncidentLine(
   matches: Map<string, MutableIncidentMatches>,
   incidentId: string,
-  limit: number,
   line: IncidentLogLine
 ): void {
   const current = matches.get(incidentId) ?? {
@@ -402,10 +406,7 @@ function addIncidentLine(
   };
 
   current.totalMatches += 1;
-
-  if (current.lines.length < limit) {
-    current.lines.push(line);
-  }
+  current.lines.push(line);
 
   matches.set(incidentId, current);
 }
@@ -434,7 +435,7 @@ function updatePathStats(
       path: entry.path,
       count: 0,
       bytes: 0,
-      ips: new Set(),
+      ipCounts: new Map(),
       queryVariants: new Set(),
       postCount: 0
     };
@@ -443,7 +444,7 @@ function updatePathStats(
 
   stats.count += 1;
   stats.bytes += entry.bytes ?? 0;
-  stats.ips.add(entry.ip);
+  stats.ipCounts.set(entry.ip, (stats.ipCounts.get(entry.ip) ?? 0) + 1);
 
   const signature = querySignature(entry.target);
   if (signature) {
@@ -510,46 +511,4 @@ function isInsideDateRange(timestamp: string, options: AnalyzeOptions): boolean 
   }
 
   return true;
-}
-
-function parseAccessLogTimestamp(timestamp: string): Date | null {
-  const match =
-    /^(?<day>\d{2})\/(?<month>[A-Za-z]{3})\/(?<year>\d{4}):(?<time>\d{2}:\d{2}:\d{2}) (?<offset>[+-]\d{4})$/.exec(
-      timestamp
-    );
-
-  if (!match?.groups) {
-    const fallback = new Date(timestamp);
-    return Number.isNaN(fallback.getTime()) ? null : fallback;
-  }
-
-  const month = monthNumber(match.groups.month);
-
-  if (month === null) {
-    return null;
-  }
-
-  const offset = match.groups.offset;
-  const iso = `${match.groups.year}-${month}-${match.groups.day}T${match.groups.time}${offset.slice(0, 3)}:${offset.slice(3)}`;
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function monthNumber(month: string): string | null {
-  const months = new Map([
-    ["Jan", "01"],
-    ["Feb", "02"],
-    ["Mar", "03"],
-    ["Apr", "04"],
-    ["May", "05"],
-    ["Jun", "06"],
-    ["Jul", "07"],
-    ["Aug", "08"],
-    ["Sep", "09"],
-    ["Oct", "10"],
-    ["Nov", "11"],
-    ["Dec", "12"]
-  ]);
-
-  return months.get(month) ?? null;
 }

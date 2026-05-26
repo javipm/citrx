@@ -38,14 +38,36 @@ export interface IncidentLogLine {
 export interface IncidentMatchSet {
   incidentId: string;
   totalMatches: number;
-  storedLines: number;
-  truncated: boolean;
   lines: IncidentLogLine[];
 }
 
 export interface AccessLogIndexSummary {
   totalLines: number;
   indexedLines: number;
+}
+
+export interface TimeStats {
+  firstSeen: string | null;
+  lastSeen: string | null;
+  peakGlobalRps: number;
+  peakGlobalRpsAt: string | null;
+  globalRpsP95: number;
+  invalidTimestampLines: number;
+  outOfOrderTimestamps: number;
+  droppedIpCount: number;
+}
+
+export interface IpBehaviorStats {
+  ip: string;
+  totalRequests: number;
+  firstSeen: string;
+  lastSeen: string;
+  peakRps: number;
+  peakRpsAt: string;
+  pathCount: number;
+  uaCount: number;
+  status4xxCount: number;
+  status5xxCount: number;
 }
 
 export interface AnalyzeSummary {
@@ -89,6 +111,8 @@ export interface AnalyzeReport {
   topMethods: TopItem[];
   topStatuses: TopItem[];
   accessLog: AccessLogIndexSummary;
+  timeStats: TimeStats;
+  ipBehaviorStats: IpBehaviorStats[];
   incidents: Incident[];
   incidentMatches: IncidentMatchSet[];
 }

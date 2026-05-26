@@ -451,7 +451,7 @@ function CitrxExplorer({
       return;
     }
 
-    if (inputValue === "d") {
+    if (inputValue === "d" || key.return) {
       const line = lines[lineIndex];
       if (line) {
         setDetailLine(line);
@@ -660,6 +660,7 @@ function SummaryPanel({ report }: { report: AnalyzeReport }) {
       `lines: ${report.summary.parsedLines}/${report.summary.totalLines} parsed | invalid: ${report.summary.invalidLines}`
     ),
     React.createElement(Text, null, `bytes: ${formatBytes(report.summary.totalBytes)}`),
+    React.createElement(Text, null, `peak rps: ${report.timeStats.peakGlobalRps}`),
     React.createElement(Text, null, `indexed lines: ${report.accessLog.indexedLines}`),
     React.createElement(Text, { color: "gray" }, "press t for global top values")
   );
@@ -753,9 +754,9 @@ function IncidentScreen({
       React.createElement(Text, { color: "gray", wrap: "truncate" }, fitText(incident.evidence.map((item) => `${item.key}=${item.value}`).join(" | "), headerWidth)),
       React.createElement(
         Text,
-        { color: matchSet?.truncated ? "yellow" : "gray", wrap: "truncate" },
+        { color: "gray", wrap: "truncate" },
         fitText(
-          `matches=${matchSet?.totalMatches ?? 0} stored=${matchSet?.storedLines ?? 0}${matchSet?.truncated ? " truncated: increase --incident-lines for more rows" : ""}`,
+          `matches=${matchSet?.totalMatches ?? 0} related requests`,
           headerWidth
         )
       )
@@ -822,7 +823,7 @@ function TopValuesScreen({
     : incidentTopValues;
   const sourceCount = scope === "summary"
     ? summaryTopValues?.count ?? 0
-    : matchSet?.storedLines ?? 0;
+    : matchSet?.totalMatches ?? 0;
 
   if (scope === "incident" && !incident) {
     return React.createElement(Text, null, "No incident selected");
@@ -831,7 +832,7 @@ function TopValuesScreen({
   const title = scope === "summary" ? "Global top values" : `Top values for ${incident?.id ?? "incident"}`;
   const subtitle = scope === "summary"
     ? `computed from ${sourceCount}/${report.accessLog.totalLines} parsed access-log rows`
-    : `computed from ${matchSet?.storedLines ?? 0}/${matchSet?.totalMatches ?? 0} stored matching requests${matchSet?.truncated ? " (sample truncated)" : ""}`;
+    : `computed from ${sourceCount} related requests`;
 
   return React.createElement(
     Box,
@@ -846,7 +847,7 @@ function TopValuesScreen({
       ),
       React.createElement(
         Text,
-        { color: matchSet?.truncated ? "yellow" : "gray", wrap: "truncate" },
+        { color: "gray", wrap: "truncate" },
         fitText(subtitle, headerWidth)
       )
     ),
@@ -923,7 +924,7 @@ function LineTable({
   totalLines,
   active = true,
   label = "Accesses",
-  emptyMessage = "No stored lines for this incident"
+  emptyMessage = "No related lines for this incident"
 }: {
   lines: IncidentLogLine[];
   pageLines: IncidentLogLine[];
@@ -1056,7 +1057,7 @@ function Footer({
       ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate | Enter/d open | f filter | s sort | S dir | t tops | a ask | e export | q quit`
       : screen === "tops"
         ? "t/b/Esc back | a ask about view | q quit"
-        : "↑/↓ PgUp/PgDn rows | d detail | t tops | Space select | A select visible | f filter | s sort | S dir | a ask | e export | b back | q quit";
+        : "↑/↓ PgUp/PgDn rows | Enter/d detail | t tops | Space select | A select visible | f filter | s sort | S dir | a ask | e export | b back | q quit";
   const status = `${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
 
   return React.createElement(

@@ -42,6 +42,17 @@ const report: AnalyzeReport = {
     totalLines: 2,
     indexedLines: 0
   },
+  timeStats: {
+    firstSeen: "2026-05-25T00:00:00.000Z",
+    lastSeen: "2026-05-25T00:00:01.000Z",
+    peakGlobalRps: 2,
+    peakGlobalRpsAt: "2026-05-25T00:00:00.000Z",
+    globalRpsP95: 2,
+    invalidTimestampLines: 0,
+    outOfOrderTimestamps: 0,
+    droppedIpCount: 0
+  },
+  ipBehaviorStats: [],
   incidents: [incident],
   incidentMatches: []
 };

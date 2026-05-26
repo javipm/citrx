@@ -22,6 +22,12 @@ export function renderTerminalReport(
   }
   lines.push(`Invalid: ${report.summary.invalidLines}`);
   lines.push(`Bytes served: ${report.summary.totalBytes}`);
+  if (report.timeStats.firstSeen && report.timeStats.lastSeen) {
+    lines.push(`Time range: ${report.timeStats.firstSeen} to ${report.timeStats.lastSeen}`);
+    lines.push(
+      `Peak global RPS: ${report.timeStats.peakGlobalRps} at ${report.timeStats.peakGlobalRpsAt ?? "unknown"}`
+    );
+  }
   lines.push(
     `Formats: ${[...new Set(report.inputFormats.map((input) => input.format))].join(", ")}`
   );

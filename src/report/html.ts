@@ -45,6 +45,8 @@ export function renderHtmlReport(report: AnalyzeReport): string {
       ${metric("Filtered", report.summary.filteredLines)}
       ${metric("Invalid", report.summary.invalidLines)}
       ${metric("Bytes", report.summary.totalBytes)}
+      ${metric("Peak RPS", report.timeStats.peakGlobalRps)}
+      ${metric("RPS p95", report.timeStats.globalRpsP95)}
       ${metric("Incidents", report.incidents.length)}
     </section>
     <section>

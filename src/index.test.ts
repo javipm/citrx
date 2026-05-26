@@ -173,7 +173,20 @@ describe("citrx CLI", () => {
         filteredLines: 0,
         invalidLines: 0,
         totalBytes: 165
-      }
+      },
+      timeStats: expect.objectContaining({
+        peakGlobalRps: 1,
+        invalidTimestampLines: 0,
+        outOfOrderTimestamps: 0,
+        droppedIpCount: 0
+      }),
+      ipBehaviorStats: expect.arrayContaining([
+        expect.objectContaining({
+          ip: "203.0.113.10",
+          totalRequests: 2,
+          peakRps: 1
+        })
+      ])
     });
     expect(report.topIps).toEqual(
       expect.arrayContaining([{ value: "203.0.113.10", count: 2 }])
@@ -216,8 +229,6 @@ describe("citrx CLI", () => {
       incidentMatches: Array<{
         incidentId: string;
         totalMatches: number;
-        storedLines: number;
-        truncated: boolean;
         lines: Array<{ raw: string; path: string; lineNumber: number }>;
       }>;
     };
@@ -242,8 +253,6 @@ describe("citrx CLI", () => {
         expect.objectContaining({
           incidentId: "sqli:/search",
           totalMatches: 1,
-          storedLines: 1,
-          truncated: false,
           lines: [
             expect.objectContaining({
               path: "/search",
@@ -261,6 +270,19 @@ describe("citrx CLI", () => {
         })
       ])
     );
+  });
+
+  it("rejects removed --incident-lines option", async () => {
+    const stderr = memoryStream();
+
+    const code = await runCli(["node", "citrx", "--incident-lines", "2"], {
+      stdout: memoryStream().stream,
+      stderr: stderr.stream,
+      stdinIsTTY: true
+    });
+
+    expect(code).toBe(1);
+    expect(stderr.output()).toContain("unknown option '--incident-lines'");
   });
 
   it("rejects removed --geo option", async () => {
@@ -287,86 +309,6 @@ describe("citrx CLI", () => {
 
     expect(code).toBe(1);
     expect(stderr.output()).toContain("unknown option '--no-session'");
-  });
-
-  it("limits stored incident lines with --incident-lines", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "citrx-incident-lines-"));
-    const logFile = join(directory, "access.log");
-    await writeFile(
-      logFile,
-      Array.from(
-        { length: 55 },
-        (_, index) =>
-          `203.0.113.10 - - [25/May/2026:03:12:${String(index % 60).padStart(2, "0")} +0200] "POST /login HTTP/1.1" 200 10 "-" "Mozilla/5.0"`
-      ).join("\n")
-    );
-    const stdout = memoryStream();
-
-    const code = await runCli(
-      ["node", "citrx", logFile, "--json", "--incident-lines", "2"],
-      {
-        stdout: stdout.stream,
-        stderr: memoryStream().stream,
-        stdinIsTTY: true
-      }
-    );
-
-    expect(code).toBe(0);
-    expect(JSON.parse(stdout.output())).toMatchObject({
-      incidentMatches: expect.arrayContaining([
-        expect.objectContaining({
-          incidentId: "post_hotspot:/login",
-          totalMatches: 55,
-          storedLines: 2,
-          truncated: true
-        })
-      ])
-    });
-  });
-
-  it("stores only incident counts when --incident-lines is 0", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "citrx-incident-lines-"));
-    const logFile = join(directory, "access.log");
-    await writeFile(
-      logFile,
-      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /.env HTTP/1.1" 404 10 "-" "Mozilla/5.0"\n'
-    );
-    const stdout = memoryStream();
-
-    const code = await runCli(
-      ["node", "citrx", logFile, "--json", "--incident-lines", "0"],
-      {
-        stdout: stdout.stream,
-        stderr: memoryStream().stream,
-        stdinIsTTY: true
-      }
-    );
-
-    expect(code).toBe(0);
-    expect(JSON.parse(stdout.output())).toMatchObject({
-      incidentMatches: [
-        expect.objectContaining({
-          incidentId: "recon_sensitive_file:/.env",
-          totalMatches: 1,
-          storedLines: 0,
-          truncated: true,
-          lines: []
-        })
-      ]
-    });
-  });
-
-  it("validates --incident-lines", async () => {
-    const stderr = memoryStream();
-
-    const code = await runCli(["node", "citrx", "--incident-lines", "-1"], {
-      stdout: memoryStream().stream,
-      stderr: stderr.stream,
-      stdinIsTTY: true
-    });
-
-    expect(code).toBe(1);
-    expect(stderr.output()).toContain("--incident-lines must be an integer");
   });
 
   it("writes Markdown and HTML reports", async () => {

@@ -21,11 +21,20 @@ interface RuleDefinition {
   patterns: RegExp[];
 }
 
+interface RuleOutcomeStats {
+  count: number;
+  status2xx: number;
+  status3xx: number;
+  status4xx: number;
+  status5xx: number;
+  status404: number;
+}
+
 export interface PathStats {
   path: string;
   count: number;
   bytes: number;
-  ips: Set<string>;
+  ipCounts: Map<string, number>;
   queryVariants: Set<string>;
   postCount: number;
 }
@@ -128,6 +137,13 @@ const RULES: RuleDefinition[] = [
   }
 ];
 const MAX_SAMPLE_LENGTH = 300;
+const CRAWL_MIN_REQUESTS = 1000;
+const CRAWL_MIN_UNIQUE_IPS = 20;
+const CRAWL_MIN_QUERY_VARIANTS = 100;
+const CRAWL_MIN_QUERY_VARIANT_RATIO = 0.2;
+const CRAWL_MIN_REPEATED_IPS = 10;
+const CRAWL_REPEATED_IP_REQUESTS = 5;
+const CRAWL_MIN_REPEATED_REQUEST_SHARE = 0.45;
 
 export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
   const target = normalizeForMatching(entry.target);
@@ -166,24 +182,33 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
   const incidents: Incident[] = [];
 
   for (const stats of pathStats) {
-    if (stats.count >= 1000 && stats.ips.size >= 20) {
+    const crawlSignal = highVolumeCrawlSignal(stats);
+
+    if (crawlSignal) {
       incidents.push({
         id: `abusive_crawl:${stats.path}`,
         category: "abusive_crawling",
         severity: "high",
         score: 80,
         title: "Distributed high-volume path crawling",
-        description: "Many unique IPs repeatedly requested the same path.",
+        description: "Many clients repeatedly requested a non-entrypoint path.",
         evidence: [
           { key: "path", value: stats.path },
           { key: "requests", value: stats.count },
-          { key: "uniqueIps", value: stats.ips.size },
+          { key: "uniqueIps", value: stats.ipCounts.size },
+          { key: "repeatedIps", value: crawlSignal.repeatedIps },
+          { key: "repeatedRequestShare", value: crawlSignal.repeatedRequestShare },
           { key: "queryVariants", value: stats.queryVariants.size },
+          { key: "queryVariantRatio", value: crawlSignal.queryVariantRatio },
           { key: "bytes", value: stats.bytes }
         ],
         samples: []
       });
-    } else if (stats.queryVariants.size >= 100 && stats.count >= 200) {
+    } else if (
+      !isLowSignalEntryPath(stats.path) &&
+      stats.queryVariants.size >= 100 &&
+      stats.count >= 200
+    ) {
       incidents.push({
         id: `query_explosion:${stats.path}`,
         category: "abusive_crawling",
@@ -220,20 +245,73 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
   return incidents;
 }
 
+function highVolumeCrawlSignal(
+  stats: PathStats
+): {
+  repeatedIps: number;
+  repeatedRequestShare: number;
+  queryVariantRatio: number;
+} | null {
+  if (
+    isLowSignalEntryPath(stats.path) ||
+    stats.count < CRAWL_MIN_REQUESTS ||
+    stats.ipCounts.size < CRAWL_MIN_UNIQUE_IPS
+  ) {
+    return null;
+  }
+
+  let repeatedIps = 0;
+  let repeatedRequests = 0;
+
+  for (const count of stats.ipCounts.values()) {
+    if (count >= CRAWL_REPEATED_IP_REQUESTS) {
+      repeatedIps += 1;
+      repeatedRequests += count;
+    }
+  }
+
+  const repeatedRequestShare = roundRatio(repeatedRequests / stats.count);
+  const queryVariantRatio = roundRatio(stats.queryVariants.size / stats.count);
+  const hasQueryChurn =
+    stats.queryVariants.size >= CRAWL_MIN_QUERY_VARIANTS &&
+    queryVariantRatio >= CRAWL_MIN_QUERY_VARIANT_RATIO;
+  const hasRepeatPressure =
+    repeatedIps >= CRAWL_MIN_REPEATED_IPS &&
+    repeatedRequestShare >= CRAWL_MIN_REPEATED_REQUEST_SHARE;
+
+  return hasQueryChurn || hasRepeatPressure
+    ? {
+        repeatedIps,
+        repeatedRequestShare,
+        queryVariantRatio
+      }
+    : null;
+}
+
+function isLowSignalEntryPath(path: string): boolean {
+  const normalized = path.toLowerCase().replace(/\/+$/, "") || "/";
+  return ["/", "/index", "/index.html", "/index.htm", "/index.php", "/home"].includes(
+    normalized
+  );
+}
+
+function roundRatio(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
 export function mergeRuleHit(
   incidents: Map<string, Incident>,
   hit: RuleHit,
-  path: string
+  entry: AccessLogEntry
 ): string {
+  const path = entry.path;
   const id = `${hit.ruleId}:${path}`;
   const existing = incidents.get(id);
 
   if (existing) {
-    const count = Number(existing.evidence.find((item) => item.key === "count")?.value ?? 0);
-    existing.evidence = [
-      { key: "path", value: path },
-      { key: "count", value: count + 1 }
-    ];
+    const stats = readOutcomeStats(existing.evidence);
+    applyStatus(stats, entry.status);
+    applyOutcomeScore(existing, hit, stats, path);
 
     if (existing.samples.length < 5 && !existing.samples.includes(hit.sample)) {
       existing.samples.push(hit.sample);
@@ -242,22 +320,134 @@ export function mergeRuleHit(
     return id;
   }
 
-  incidents.set(id, {
+  const stats = createOutcomeStats();
+  applyStatus(stats, entry.status);
+
+  const incident: Incident = {
     id,
     category: hit.category,
     severity: hit.severity,
     score: hit.score,
     title: hit.title,
     description: hit.description,
-    evidence: [
-      { key: "path", value: path },
-      { key: "count", value: 1 }
-    ],
+    evidence: [],
     samples: [hit.sample]
-  });
+  };
+  applyOutcomeScore(incident, hit, stats, path);
+  incidents.set(id, incident);
 
   return id;
 }
+
+function createOutcomeStats(): RuleOutcomeStats {
+  return {
+    count: 0,
+    status2xx: 0,
+    status3xx: 0,
+    status4xx: 0,
+    status5xx: 0,
+    status404: 0
+  };
+}
+
+function applyStatus(stats: RuleOutcomeStats, status: number): void {
+  stats.count += 1;
+
+  if (status >= 200 && status < 300) {
+    stats.status2xx += 1;
+  } else if (status >= 300 && status < 400) {
+    stats.status3xx += 1;
+  } else if (status >= 400 && status < 500) {
+    stats.status4xx += 1;
+  } else if (status >= 500 && status < 600) {
+    stats.status5xx += 1;
+  }
+
+  if (status === 404) {
+    stats.status404 += 1;
+  }
+}
+
+function readOutcomeStats(evidence: Incident["evidence"]): RuleOutcomeStats {
+  return {
+    count: numberEvidence(evidence, "count"),
+    status2xx: numberEvidence(evidence, "status2xx"),
+    status3xx: numberEvidence(evidence, "status3xx"),
+    status4xx: numberEvidence(evidence, "status4xx"),
+    status5xx: numberEvidence(evidence, "status5xx"),
+    status404: numberEvidence(evidence, "status404")
+  };
+}
+
+function numberEvidence(evidence: Incident["evidence"], key: string): number {
+  return Number(evidence.find((item) => item.key === key)?.value ?? 0);
+}
+
+function applyOutcomeScore(
+  incident: Incident,
+  hit: RuleHit,
+  stats: RuleOutcomeStats,
+  path: string
+): void {
+  const outcome = outcomeFor(hit.ruleId, stats);
+  incident.severity = outcome.severity ?? hit.severity;
+  incident.score = outcome.score ?? hit.score;
+  incident.evidence = buildRuleEvidence(path, stats, outcome.label);
+}
+
+function outcomeFor(
+  ruleId: string,
+  stats: RuleOutcomeStats
+): { label: string; severity?: IncidentSeverity; score?: number } {
+  if (!isPayloadRule(ruleId)) {
+    return { label: "mixed" };
+  }
+
+  if (stats.status404 === stats.count) {
+    return { label: "all_404", severity: "medium", score: 45 };
+  }
+
+  if (stats.status4xx === stats.count) {
+    return { label: "all_4xx", severity: "medium", score: 55 };
+  }
+
+  return { label: "mixed" };
+}
+
+function isPayloadRule(ruleId: string): boolean {
+  return ["sqli", "xss", "lfi_rfi", "ssrf", "command_injection"].includes(ruleId);
+}
+
+function buildRuleEvidence(
+  path: string,
+  stats: RuleOutcomeStats,
+  outcome: string
+): Incident["evidence"] {
+  const evidence: Incident["evidence"] = [
+    { key: "path", value: path },
+    { key: "count", value: stats.count },
+    { key: "outcome", value: outcome }
+  ];
+
+  if (stats.status2xx > 0) {
+    evidence.push({ key: "status2xx", value: stats.status2xx });
+  }
+  if (stats.status3xx > 0) {
+    evidence.push({ key: "status3xx", value: stats.status3xx });
+  }
+  if (stats.status4xx > 0) {
+    evidence.push({ key: "status4xx", value: stats.status4xx });
+  }
+  if (stats.status5xx > 0) {
+    evidence.push({ key: "status5xx", value: stats.status5xx });
+  }
+  if (stats.status404 > 0) {
+    evidence.push({ key: "status404", value: stats.status404 });
+  }
+
+  return evidence;
+}
+
 
 export function redactTarget(target: string): string {
   return truncateSample(redactSensitiveTarget(target));

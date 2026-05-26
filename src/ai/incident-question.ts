@@ -90,6 +90,8 @@ export function buildAiContext(
     question: input.question,
     scope: input.scope ?? (input.incident ? "incident" : "summary"),
     summary: input.report.summary,
+    time: input.report.timeStats,
+    ipBehavior: input.report.ipBehaviorStats.slice(0, 12),
     inputs: input.report.inputs,
     formats: input.report.inputFormats.map((item) => item.format),
     top: {
@@ -106,17 +108,39 @@ export function buildAiContext(
   let payload = JSON.stringify(context);
 
   if (payload.length > maxChars) {
-    const shortened = {
-      ...context,
-      lines: shrinkLinesForBudget(compactLines, payload.length, maxChars)
-    };
-    payload = JSON.stringify(shortened);
+    payload = shrinkContextForBudget(context, compactLines, maxChars);
   }
 
   return {
     payload,
     sentLines: JSON.parse(payload).lines?.length ?? 0
   };
+}
+
+function shrinkContextForBudget(
+  context: Record<string, unknown> & { lines: string[] },
+  lines: string[],
+  maxChars: number
+): string {
+  let keptLines = shrinkLinesForBudget(lines, JSON.stringify(context).length, maxChars);
+  let payload = JSON.stringify({ ...context, lines: keptLines });
+
+  while (payload.length > maxChars && keptLines.length > 1) {
+    keptLines = keptLines.slice(0, Math.max(1, Math.floor(keptLines.length * 0.75)));
+    payload = JSON.stringify({ ...context, lines: keptLines });
+  }
+
+  if (payload.length <= maxChars) {
+    return payload;
+  }
+
+  payload = JSON.stringify({ ...context, ipBehavior: [], lines: keptLines });
+
+  if (payload.length <= maxChars) {
+    return payload;
+  }
+
+  return JSON.stringify({ ...context, time: undefined, ipBehavior: [], lines: keptLines });
 }
 
 export function parseMaxLines(value: string | undefined): number {

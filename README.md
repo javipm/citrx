@@ -46,7 +46,6 @@ node dist/cli.js --version
 node dist/cli.js /path/to/access.log
 node dist/cli.js /path/to/access.log --no-interactive
 node dist/cli.js /path/to/access.log --json
-node dist/cli.js /path/to/access.log --incident-lines 1000
 node dist/cli.js /path/to/access.log --markdown --out report.md
 node dist/cli.js /path/to/access.log --html --out report.html
 node dist/cli.js /path/to/access.log.gz --json
@@ -78,7 +77,7 @@ Current report data:
 - top methods
 - top statuses
 - local security incidents
-- stored access-log lines per incident
+- related access-log lines per incident
 
 Built-in formats:
 
@@ -149,10 +148,9 @@ OpenAI follow-up is scoped to the current screen. From the summary it receives a
 compact global analysis. From an incident it receives only selected rows, or the
 currently visible filtered rows when nothing is selected.
 
-Use `--incident-lines <n>` to control how many parsed access-log lines are kept
-inside each incident sample. The default is `500`; `0` keeps counts only. The
-main summary table still uses the temporary global index so you can navigate the
-parsed access log without persisting runtime state.
+Incident details keep all related parsed lines for the current run. The main
+summary table uses the temporary global index so you can navigate the parsed
+access log without persisting runtime state.
 
 ## Compressed Logs
 

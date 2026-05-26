@@ -48,7 +48,6 @@ export function createProgram(runtime: CliRuntime): Command {
     )
     .option("--format-config <path>", "JSON file with custom access-log formats.")
     .option("--top <n>", "Limit top lists.", "20")
-    .option("--incident-lines <n>", "Stored log lines per incident.", "500")
     .option("--since <date>", "Include entries at or after this date.")
     .option("--until <date>", "Include entries at or before this date.")
     .option("--include <glob>", "Include paths matching this glob.")
@@ -76,7 +75,6 @@ async function runRootAnalysis(
 ): Promise<void> {
   let paths = initialPaths;
   let top = parseTopOption(options.top);
-  const incidentLines = parseIncidentLinesOption(options.incidentLines);
   let outputFormat = parseOutputFormat(options);
 
   if (paths[0] === "analyze") {
@@ -104,7 +102,6 @@ async function runRootAnalysis(
         typeof options.formatConfig === "string" ? options.formatConfig : undefined,
       since: parseDateOption(options.since, "--since"),
       until: parseDateOption(options.until, "--until"),
-      incidentLines,
       accessLogWriter
     });
     accessLogWriter.close();
@@ -185,16 +182,6 @@ function parseTopOption(value: unknown): number {
 
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw new Error("--top must be a positive integer.");
-  }
-
-  return parsed;
-}
-
-function parseIncidentLinesOption(value: unknown): number {
-  const parsed = Number.parseInt(String(value ?? "500"), 10);
-
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new Error("--incident-lines must be an integer greater than or equal to 0.");
   }
 
   return parsed;
