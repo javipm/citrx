@@ -1473,7 +1473,7 @@ function accessTableColumns(columns: number): AccessTableColumns {
   const fixed = {
     sel: 3,
     line: 6,
-    time: 8,
+    time: 15,
     ip: 15,
     method: 4,
     status: 3,
@@ -1524,7 +1524,7 @@ function accessTableRow(
     [
       [selected ? "*" : "", columns.sel],
       [String(line.lineNumber), columns.line, "right"],
-      [compactTime(line.timestamp), columns.time],
+      [compactDateTime(line.timestamp), columns.time],
       [line.ip, columns.ip],
       [line.method, columns.method],
       [String(line.status), columns.status, "right"],
@@ -1844,9 +1844,14 @@ function wrapHard(value: string, width: number): string[] {
   return chunks;
 }
 
-function compactTime(timestamp: string): string {
-  const match = timestamp.match(/:(\d{2}:\d{2}:\d{2})/);
-  return match?.[1] ?? timestamp.slice(0, 8);
+function compactDateTime(timestamp: string): string {
+  // Apache: "15/Jan/2024:14:30:00 +0000" → "15/Jan 14:30:00"
+  const apache = timestamp.match(/^(\d{2}\/\w{3})\/\d{4}:(\d{2}:\d{2}:\d{2})/);
+  if (apache) return `${apache[1]} ${apache[2]}`;
+  // ISO: "2024-01-15T14:30:00..." → "01-15 14:30:00"
+  const iso = timestamp.match(/^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/);
+  if (iso) return `${iso[1]} ${iso[2]}`;
+  return timestamp.slice(0, 15);
 }
 
 function userAgentLabel(userAgent: string | null): string {
