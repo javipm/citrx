@@ -63,10 +63,14 @@ function buildCorrelatedIps(incidents: Incident[]): Set<string> {
 
 function isPersistent(incident: Incident): boolean {
   const start = parseIso(
-    stringEvidence(incident, "burstStart") ?? stringEvidence(incident, "firstSeen")
+    stringEvidence(incident, "burstStart") ??
+      stringEvidence(incident, "spikeStart") ??
+      stringEvidence(incident, "firstSeen")
   );
   const end = parseIso(
-    stringEvidence(incident, "burstEnd") ?? stringEvidence(incident, "lastSeen")
+    stringEvidence(incident, "burstEnd") ??
+      stringEvidence(incident, "spikeEnd") ??
+      stringEvidence(incident, "lastSeen")
   );
 
   if (start === null || end === null) {

@@ -87,6 +87,17 @@ describe("scoring multipliers", () => {
     expect(scored).toMatchObject({ score: 75, severity: "high" });
   });
 
+  it("adds persistence bonus from global spike timestamps", () => {
+    const [scored] = applyScoringMultipliers([
+      incident("ddos_global_rps_spike", 80, [
+        { key: "spikeStart", value: "2026-05-25T00:00:00.000Z" },
+        { key: "spikeEnd", value: "2026-05-25T00:35:00.000Z" }
+      ])
+    ]);
+
+    expect(scored).toMatchObject({ score: 95, severity: "critical" });
+  });
+
   it("does not add persistence bonus below threshold or without timestamps", () => {
     const scored = applyScoringMultipliers([
       incident("ddos_rps_burst_single_ip:203.0.113.1", 60, [
