@@ -17,6 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "dev": "tsx src/cli.ts",
+    "update-bot-ranges": "tsx scripts/update-bot-ranges.ts",
     "prepack": "pnpm run build"
   },
   "keywords": [

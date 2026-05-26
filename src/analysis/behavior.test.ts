@@ -417,6 +417,97 @@ describe("behavior tracker", () => {
     );
   });
 
+  it("detects fake Googlebot claims outside official ranges", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ ip: "1.2.3.4", userAgent: "Googlebot/2.1" }));
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "fake_bot_googlebot:1.2.3.4" })
+      ])
+    );
+  });
+
+  it("does not flag Googlebot claims from official Googlebot ranges", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ ip: "66.249.64.10", userAgent: "Googlebot/2.1" }));
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "fake_bot_googlebot:66.249.64.10" })
+      ])
+    );
+  });
+
+  it("does not treat Googlebot sub-crawlers as core Googlebot claims", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ ip: "1.2.3.4", userAgent: "Googlebot-Image/1.0" }));
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "fake_bot_googlebot:1.2.3.4" })
+      ])
+    );
+  });
+
+  it("detects fake bingbot claims outside official ranges", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ ip: "1.2.3.4", userAgent: "bingbot/2.0" }));
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "fake_bot_bingbot:1.2.3.4" })
+      ])
+    );
+  });
+
+  it("does not flag bingbot claims from official Bing ranges", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ ip: "157.55.39.10", userAgent: "bingbot/2.0" }));
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "fake_bot_bingbot:157.55.39.10" })
+      ])
+    );
+  });
+
+  it("detects 5xx storms across adjacent minute buckets", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 100; index += 1) {
+      tracker.observe(entry({ timestamp: ts(59), status: 500 }));
+    }
+
+    for (let index = 0; index < 100; index += 1) {
+      tracker.observe(entry({ timestamp: ts(60), status: 503 }));
+    }
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "http_5xx_storm:203.0.113.10" })
+      ])
+    );
+  });
+
+  it("does not detect 5xx storms when most responses are successful", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 100; index += 1) {
+      tracker.observe(entry({ timestamp: ts(59), status: 500 }));
+    }
+
+    for (let index = 0; index < 100; index += 1) {
+      tracker.observe(entry({ timestamp: ts(60), status: 200 }));
+    }
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "http_5xx_storm:203.0.113.10" })
+      ])
+    );
+  });
+
   it("does not detect HEAD floods below the HEAD ratio", () => {
     const tracker = new BehaviorTracker();
 

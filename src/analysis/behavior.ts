@@ -1,8 +1,11 @@
 import type { AccessLogEntry } from "../parser/access-log.js";
 import { AI_BOT_PATTERNS } from "../rules/data/ai-bots.js";
+import { BINGBOT_RANGES } from "../rules/data/bingbot-ranges.js";
 import { FINGERPRINT_PATHS } from "../rules/data/scanner-fingerprint-paths.js";
+import { GOOGLEBOT_RANGES } from "../rules/data/googlebot-ranges.js";
 import { SCANNER_UA_PATTERNS } from "../rules/data/scanner-uas.js";
 import type { AiBotStats, Incident, IpBehaviorStats, TimeStats } from "./types.js";
+import { expandIPv6, ipInPreparedRanges, prepareRanges } from "./ip-ranges.js";
 import { accessLogTimestampToEpochSeconds } from "./timestamp.js";
 
 export const MAX_TRACKED_IPS = 100_000;
@@ -17,6 +20,10 @@ const GLOBAL_SPIKE_MULTIPLIER = 5;
 const GLOBAL_SPIKE_SECONDS = 10;
 const FOUR_XX_STORM_THRESHOLD = 200;
 const FOUR_XX_BUCKET_SECONDS = 60;
+const FIVE_XX_STORM_THRESHOLD = 200;
+const FIVE_XX_BUCKET_SECONDS = 60;
+const GOOGLEBOT_UA = /\bGooglebot\/\d/i;
+const BINGBOT_UA = /\bbingbot\/\d/i;
 const BOT_PATH_SENTINEL_LIMIT = 1001;
 const BOT_IP_SENTINEL_LIMIT = 5001;
 const AI_BOT_MEDIUM_REQUESTS = 500;
@@ -83,6 +90,15 @@ interface IpBehaviorState {
   previous4xxCount: number;
   max4xxTwoBucketCount: number;
   max4xxBucket: number | null;
+  current5xxBucket: number | null;
+  current5xxCount: number;
+  previous5xxBucket: number | null;
+  previous5xxCount: number;
+  max5xxTwoBucketCount: number;
+  max5xxBucket: number | null;
+  claimedGooglebot: boolean;
+  claimedBingbot: boolean;
+  claimedBotUserAgent: string | null;
 }
 
 interface SubnetState {
@@ -139,6 +155,8 @@ export class BehaviorTracker {
   private readonly maxTrackedSubnets: number;
   private readonly ips = new Map<string, IpBehaviorState>();
   private readonly subnets = new Map<string, SubnetState>();
+  private readonly googlebotRanges = prepareRanges(GOOGLEBOT_RANGES);
+  private readonly bingbotRanges = prepareRanges(BINGBOT_RANGES);
   private readonly globalRpsBySecond = new Map<number, number>();
   private readonly topIps = new Map<string, TopIpSnapshot>();
   private readonly botRollup = new Map<string, BotState>();
@@ -200,7 +218,9 @@ export class BehaviorTracker {
       ...this.buildSingleIpPathExplosionIncidents(),
       ...this.buildUaRotationIncidents(),
       ...this.buildHeadFloodIncidents(),
-      ...this.buildSubnetDdosIncidents()
+      ...this.buildSubnetDdosIncidents(),
+      ...this.buildFakeBotIncidents(),
+      ...this.build5xxStormIncidents()
     ].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 
     return {
@@ -286,7 +306,16 @@ export class BehaviorTracker {
       previous4xxBucket: null,
       previous4xxCount: 0,
       max4xxTwoBucketCount: 0,
-      max4xxBucket: null
+      max4xxBucket: null,
+      current5xxBucket: null,
+      current5xxCount: 0,
+      previous5xxBucket: null,
+      previous5xxCount: 0,
+      max5xxTwoBucketCount: 0,
+      max5xxBucket: null,
+      claimedGooglebot: false,
+      claimedBingbot: false,
+      claimedBotUserAgent: null
     };
 
     this.ips.set(ip, state);
@@ -396,6 +425,7 @@ export class BehaviorTracker {
       this.observe4xx(state, epochSecond);
     } else if (entry.status >= 500 && entry.status <= 599) {
       state.status5xxCount += 1;
+      this.observe5xx(state, epochSecond);
     }
 
     this.observeIpRps(state, epochSecond);
@@ -427,6 +457,16 @@ export class BehaviorTracker {
 
     if (FINGERPRINT_PATHS.has(entry.path)) {
       this.observeFingerprintPath(state, entry.path, epochSecond);
+    }
+
+    if (entry.userAgent && !state.claimedGooglebot && GOOGLEBOT_UA.test(entry.userAgent)) {
+      state.claimedGooglebot = true;
+      state.claimedBotUserAgent ??= entry.userAgent;
+    }
+
+    if (entry.userAgent && !state.claimedBingbot && BINGBOT_UA.test(entry.userAgent)) {
+      state.claimedBingbot = true;
+      state.claimedBotUserAgent ??= entry.userAgent;
     }
   }
 
@@ -726,6 +766,45 @@ export class BehaviorTracker {
     }
   }
 
+  private observe5xx(state: IpBehaviorState, epochSecond: number): void {
+    const bucket = Math.floor(epochSecond / FIVE_XX_BUCKET_SECONDS);
+
+    if (state.current5xxBucket === null) {
+      state.current5xxBucket = bucket;
+      state.current5xxCount = 1;
+      this.update5xxMax(state, bucket);
+      return;
+    }
+
+    if (bucket === state.current5xxBucket) {
+      state.current5xxCount += 1;
+      this.update5xxMax(state, bucket);
+      return;
+    }
+
+    if (bucket === state.current5xxBucket + 1) {
+      state.previous5xxBucket = state.current5xxBucket;
+      state.previous5xxCount = state.current5xxCount;
+    } else {
+      state.previous5xxBucket = null;
+      state.previous5xxCount = 0;
+    }
+
+    state.current5xxBucket = bucket;
+    state.current5xxCount = 1;
+    this.update5xxMax(state, bucket);
+  }
+
+  private update5xxMax(state: IpBehaviorState, bucket: number): void {
+    const previousIsAdjacent = state.previous5xxBucket === bucket - 1;
+    const total = state.current5xxCount + (previousIsAdjacent ? state.previous5xxCount : 0);
+
+    if (total > state.max5xxTwoBucketCount) {
+      state.max5xxTwoBucketCount = total;
+      state.max5xxBucket = bucket;
+    }
+  }
+
   private updateTopIps(state: IpBehaviorState): void {
     const snapshot = this.snapshotIp(state);
 
@@ -920,6 +999,65 @@ export class BehaviorTracker {
         ],
         samples: []
       });
+    }
+
+    return incidents;
+  }
+
+  private build5xxStormIncidents(): Incident[] {
+    const incidents: Incident[] = [];
+
+    for (const state of this.ips.values()) {
+      if (state.max5xxTwoBucketCount < FIVE_XX_STORM_THRESHOLD || state.max5xxBucket === null) {
+        continue;
+      }
+
+      incidents.push({
+        id: `http_5xx_storm:${state.ip}`,
+        category: "http_anomaly",
+        severity: "medium",
+        score: 60,
+        title: "5xx response storm",
+        description: "One IP generated many 5xx responses in adjacent minute buckets.",
+        evidence: [
+          { key: "ip", value: state.ip },
+          { key: "status5xx", value: state.max5xxTwoBucketCount },
+          { key: "window", value: "two adjacent 60s buckets" },
+          { key: "windowApproxSeconds", value: 120 },
+          { key: "windowEnd", value: formatEpoch((state.max5xxBucket + 1) * FIVE_XX_BUCKET_SECONDS - 1) }
+        ],
+        samples: []
+      });
+    }
+
+    return incidents;
+  }
+
+  private buildFakeBotIncidents(): Incident[] {
+    const incidents: Incident[] = [];
+
+    for (const state of this.ips.values()) {
+      if (state.claimedGooglebot && !ipInPreparedRanges(state.ip, this.googlebotRanges)) {
+        incidents.push(fakeBotIncident({
+          id: `fake_bot_googlebot:${state.ip}`,
+          ip: state.ip,
+          claimedBot: "Googlebot",
+          userAgent: state.claimedBotUserAgent ?? "",
+          requests: state.totalRequests,
+          pathsTouched: state.paths.size
+        }));
+      }
+
+      if (state.claimedBingbot && !ipInPreparedRanges(state.ip, this.bingbotRanges)) {
+        incidents.push(fakeBotIncident({
+          id: `fake_bot_bingbot:${state.ip}`,
+          ip: state.ip,
+          claimedBot: "bingbot",
+          userAgent: state.claimedBotUserAgent ?? "",
+          requests: state.totalRequests,
+          pathsTouched: state.paths.size
+        }));
+      }
     }
 
     return incidents;
@@ -1187,6 +1325,32 @@ function roundRatio(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function fakeBotIncident(input: {
+  id: string;
+  ip: string;
+  claimedBot: "Googlebot" | "bingbot";
+  userAgent: string;
+  requests: number;
+  pathsTouched: number;
+}): Incident {
+  return {
+    id: input.id,
+    category: "fake_bot",
+    severity: "high",
+    score: 80,
+    title: `Fake ${input.claimedBot} impersonation`,
+    description: `User-agent claims ${input.claimedBot} but IP is outside published crawler ranges.`,
+    evidence: [
+      { key: "ip", value: input.ip },
+      { key: "claimedBot", value: input.claimedBot },
+      { key: "userAgent", value: input.userAgent },
+      { key: "requests", value: input.requests },
+      { key: "pathsTouched", value: input.pathsTouched }
+    ],
+    samples: []
+  };
+}
+
 function matchUserAgent(
   userAgent: string,
   patterns: Array<{ name: string; regex: RegExp }>
@@ -1216,54 +1380,6 @@ export function extractSubnetPrefix(ip: string): string | null {
   }
 
   return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
-}
-
-function expandIPv6(ip: string): string | null {
-  if (!/^[0-9a-f:.]+$/i.test(ip)) {
-    return null;
-  }
-
-  const doubleColonCount = ip.split("::").length - 1;
-
-  if (doubleColonCount > 1) {
-    return null;
-  }
-
-  const [head = "", tail = ""] = ip.split("::");
-  const headGroups = head ? head.split(":") : [];
-  const tailGroups = tail ? tail.split(":") : [];
-
-  if (
-    [...headGroups, ...tailGroups].some(
-      (group) => !/^[0-9a-f]{1,4}$/i.test(group)
-    )
-  ) {
-    return null;
-  }
-
-  const missing = doubleColonCount === 1
-    ? 8 - headGroups.length - tailGroups.length
-    : 0;
-
-  if (
-    missing < 0 ||
-    (doubleColonCount === 0 && headGroups.length !== 8) ||
-    (doubleColonCount === 1 && headGroups.length + tailGroups.length >= 8)
-  ) {
-    return null;
-  }
-
-  const groups = [
-    ...headGroups,
-    ...Array.from({ length: missing }, () => "0"),
-    ...tailGroups
-  ];
-
-  if (groups.length !== 8) {
-    return null;
-  }
-
-  return groups.map((group) => Number.parseInt(group, 16).toString(16)).join(":");
 }
 
 function formatEpoch(epochSecond: number): string {

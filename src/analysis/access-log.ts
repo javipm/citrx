@@ -466,9 +466,22 @@ function behaviorIncidentPredicate(
     return (line) => line.ip === ip && line.status >= 400 && line.status <= 499;
   }
 
+  if (incident.id.startsWith("http_5xx_storm:")) {
+    const ip = String(evidenceValue(incident, "ip") ?? "");
+    return (line) => line.ip === ip && line.status >= 500 && line.status <= 599;
+  }
+
   if (incident.id.startsWith("http_head_flood:")) {
     const ip = String(evidenceValue(incident, "ip") ?? "");
     return (line) => line.ip === ip && line.method === "HEAD";
+  }
+
+  if (
+    incident.id.startsWith("fake_bot_googlebot:") ||
+    incident.id.startsWith("fake_bot_bingbot:")
+  ) {
+    const ip = String(evidenceValue(incident, "ip") ?? "");
+    return (line) => line.ip === ip;
   }
 
   if (incident.id.startsWith("ddos_distributed_subnet:")) {
