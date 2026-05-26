@@ -7,7 +7,7 @@ export type IncidentSeverity = "info" | "low" | "medium" | "high" | "critical";
 
 export interface IncidentEvidence {
   key: string;
-  value: string | number;
+  value: string | number | boolean;
 }
 
 export interface Incident {
@@ -70,6 +70,16 @@ export interface IpBehaviorStats {
   status5xxCount: number;
 }
 
+export interface AiBotStats {
+  botName: string;
+  requests: number;
+  ipCount: number;
+  pathCount: number;
+  requestedRobotsTxt: boolean;
+  firstSeen: string;
+  lastSeen: string;
+}
+
 export interface AnalyzeSummary {
   files: number;
   totalLines: number;
@@ -113,6 +123,7 @@ export interface AnalyzeReport {
   accessLog: AccessLogIndexSummary;
   timeStats: TimeStats;
   ipBehaviorStats: IpBehaviorStats[];
+  aiBotStats: AiBotStats[];
   incidents: Incident[];
   incidentMatches: IncidentMatchSet[];
 }

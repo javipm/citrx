@@ -92,6 +92,7 @@ export function buildAiContext(
     summary: input.report.summary,
     time: input.report.timeStats,
     ipBehavior: input.report.ipBehaviorStats.slice(0, 12),
+    aiBots: input.report.aiBotStats.slice(0, 12),
     inputs: input.report.inputs,
     formats: input.report.inputFormats.map((item) => item.format),
     top: {

@@ -67,6 +67,7 @@ export function renderHtmlReport(report: AnalyzeReport): string {
       ${topTable("Methods", report.topMethods)}
       ${topTable("Statuses", report.topStatuses)}
     </section>
+    ${report.aiBotStats.length > 0 ? `<section><h2>Known AI Bots</h2>${aiBotTable(report)}</section>` : ""}
     <section>
       <h2>Incidents</h2>
       ${incidentTable(report.incidents)}
@@ -75,6 +76,18 @@ export function renderHtmlReport(report: AnalyzeReport): string {
 </body>
 </html>
 `;
+}
+
+function aiBotTable(report: AnalyzeReport): string {
+  return `<table>
+    <thead><tr><th>Bot</th><th>Requests</th><th>IPs</th><th>Paths</th><th>Robots.txt</th></tr></thead>
+    <tbody>${report.aiBotStats
+      .map(
+        (bot) =>
+          `<tr><td>${escapeHtml(bot.botName)}</td><td>${bot.requests}</td><td>${bot.ipCount}</td><td>${bot.pathCount}</td><td>${bot.requestedRobotsTxt ? "yes" : "no"}</td></tr>`
+      )
+      .join("")}</tbody>
+  </table>`;
 }
 
 function metric(label: string, value: string | number): string {
@@ -124,7 +137,7 @@ function incidentRow(incident: Incident): string {
   </tr>`;
 }
 
-function escapeHtml(value: string | number): string {
+function escapeHtml(value: string | number | boolean): string {
   return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")

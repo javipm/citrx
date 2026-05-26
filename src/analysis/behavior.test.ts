@@ -4,6 +4,36 @@ import type { AccessLogEntry } from "../parser/access-log.js";
 import { BehaviorTracker } from "./behavior.js";
 import { accessLogTimestampToEpochSeconds } from "./timestamp.js";
 
+const FINGERPRINT_FIXTURE_PATHS = [
+  "/HNAP1",
+  "/boaform/admin/formLogin",
+  "/manager/html",
+  "/jenkins",
+  "/actuator",
+  "/actuator/health",
+  "/actuator/env",
+  "/actuator/metrics",
+  "/owa/auth/logon.aspx",
+  "/cgi-sys/defaultwebpage.cgi",
+  "/wp-config.php.bak",
+  "/wp-config.php.old",
+  "/server-status",
+  "/server-info",
+  "/phpmyadmin",
+  "/admin.php",
+  "/console",
+  "/api/swagger",
+  "/swagger",
+  "/swagger-ui.html",
+  "/swagger.json",
+  "/openapi.json",
+  "/.aws/credentials",
+  "/.docker/config.json",
+  "/sftp-config.json",
+  "/web.config",
+  "/elmah.axd"
+];
+
 describe("behavior tracker", () => {
   it("parses Apache timestamps to UTC epoch seconds", () => {
     expect(accessLogTimestampToEpochSeconds("25/May/2026:03:12:49 +0200")).toBe(
@@ -139,6 +169,223 @@ describe("behavior tracker", () => {
 
     expect(tracker.finalize().ipBehaviorStats[0]).toEqual(
       expect.objectContaining({ ip: "203.0.113.1", totalRequests: 10 })
+    );
+  });
+
+  it("detects known AI crawlers below the medium threshold as info", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ userAgent: "GPTBot/1.0", path: "/a", target: "/a" }));
+
+    const result = tracker.finalize();
+    expect(result.aiBotStats).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ botName: "GPTBot", requests: 1, ipCount: 1 })
+      ])
+    );
+    expect(result.incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "ai_scraper_known:GPTBot",
+          severity: "info"
+        })
+      ])
+    );
+  });
+
+  it("raises known AI crawlers above five thousand requests to high", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 5001; index += 1) {
+      tracker.observe(entry({ userAgent: "ClaudeBot/1.0", timestamp: ts(index) }));
+    }
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "ai_scraper_known:ClaudeBot",
+          severity: "high"
+        })
+      ])
+    );
+  });
+
+  it("groups known AI crawler incidents by bot across IPs", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ ip: "203.0.113.1", userAgent: "GPTBot/1.0" }));
+    tracker.observe(entry({ ip: "203.0.113.2", userAgent: "GPTBot/1.0" }));
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "ai_scraper_known:GPTBot",
+          evidence: expect.arrayContaining([{ key: "ipCount", value: 2 }])
+        })
+      ])
+    );
+  });
+
+  it("propagates robots.txt visits to the AI crawler rollup", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(
+      entry({ userAgent: "PerplexityBot/1.0", path: "/robots.txt", target: "/robots.txt" })
+    );
+
+    expect(tracker.finalize().aiBotStats[0]).toEqual(
+      expect.objectContaining({ botName: "PerplexityBot", requestedRobotsTxt: true })
+    );
+  });
+
+  it("detects known scanner user-agents", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ userAgent: "sqlmap/1.7.2" }));
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "scanner_ua_known:sqlmap:203.0.113.10",
+          severity: "high"
+        })
+      ])
+    );
+  });
+
+  it("detects known AI crawlers when an IP changes user-agent mid-stream", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ userAgent: "Mozilla/5.0", timestamp: ts(0) }));
+    tracker.observe(entry({ userAgent: "GPTBot/1.0", timestamp: ts(1) }));
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "ai_scraper_known:GPTBot" })])
+    );
+  });
+
+  it("detects known scanners when an IP changes user-agent mid-stream", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ userAgent: "Mozilla/5.0", timestamp: ts(0) }));
+    tracker.observe(entry({ userAgent: "sqlmap/1.7.2", timestamp: ts(1) }));
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "scanner_ua_known:sqlmap:203.0.113.10" })
+      ])
+    );
+  });
+
+  it("detects scanner fingerprint paths in one minute bucket", () => {
+    const tracker = new BehaviorTracker();
+
+    for (const [index, path] of FINGERPRINT_FIXTURE_PATHS.entries()) {
+      tracker.observe(entry({ path, target: path, timestamp: ts(index) }));
+    }
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "scanner_signature_paths:203.0.113.10" })
+      ])
+    );
+  });
+
+  it("detects scanner fingerprint paths split across adjacent minute buckets", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 10; index += 1) {
+      const path = FINGERPRINT_FIXTURE_PATHS[index]!;
+      tracker.observe(entry({ path, target: path, timestamp: ts(55 + index) }));
+    }
+
+    for (let index = 10; index < 20; index += 1) {
+      const path = FINGERPRINT_FIXTURE_PATHS[index]!;
+      tracker.observe(entry({ path, target: path, timestamp: ts(60 + index) }));
+    }
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "scanner_signature_paths:203.0.113.10",
+          evidence: expect.arrayContaining([{ key: "fingerprintHits", value: 20 }])
+        })
+      ])
+    );
+  });
+
+  it("detects single-IP path explosion at five hundred paths", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 500; index += 1) {
+      const path = `/path-${index}`;
+      tracker.observe(entry({ path, target: path, timestamp: ts(index) }));
+    }
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "single_ip_path_explosion:203.0.113.10" })
+      ])
+    );
+  });
+
+  it("does not detect single-IP path explosion below five hundred paths", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 499; index += 1) {
+      const path = `/path-${index}`;
+      tracker.observe(entry({ path, target: path, timestamp: ts(index) }));
+    }
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "single_ip_path_explosion:203.0.113.10" })
+      ])
+    );
+  });
+
+  it("detects user-agent rotation from one IP", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 100; index += 1) {
+      tracker.observe(entry({ userAgent: `Browser/${index % 8}`, timestamp: ts(index) }));
+    }
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "ua_rotation_same_ip:203.0.113.10" })
+      ])
+    );
+  });
+
+  it("does not detect user-agent rotation below the request threshold", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 50; index += 1) {
+      tracker.observe(entry({ userAgent: `Browser/${index % 8}`, timestamp: ts(index) }));
+    }
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "ua_rotation_same_ip:203.0.113.10" })
+      ])
+    );
+  });
+
+  it("emits AI crawler and path explosion incidents for the same IP", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 500; index += 1) {
+      const path = `/path-${index}`;
+      tracker.observe(
+        entry({
+          path,
+          target: path,
+          userAgent: "GPTBot/1.0",
+          timestamp: ts(index)
+        })
+      );
+    }
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "ai_scraper_known:GPTBot" }),
+        expect.objectContaining({ id: "single_ip_path_explosion:203.0.113.10" })
+      ])
     );
   });
 });

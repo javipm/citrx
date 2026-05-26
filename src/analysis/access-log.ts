@@ -9,6 +9,9 @@ import {
 } from "../parser/access-log.js";
 import type { AccessLogEntry, AccessLogParser, FormatChoice } from "../parser/access-log.js";
 import type { AccessLogIndexWriter } from "../run/access-index.js";
+import { AI_BOT_PATTERNS } from "../rules/data/ai-bots.js";
+import { FINGERPRINT_PATHS } from "../rules/data/scanner-fingerprint-paths.js";
+import { SCANNER_UA_PATTERNS } from "../rules/data/scanner-uas.js";
 import {
   buildAggregateIncidents,
   detectRequestHits,
@@ -164,12 +167,13 @@ export async function analyzeAccessLogSources(
     },
     timeStats: behavior.timeStats,
     ipBehaviorStats: behavior.ipBehaviorStats,
+    aiBotStats: behavior.aiBotStats,
     incidents: sortIncidents([
       ...counters.ruleIncidents.values(),
       ...buildAggregateIncidents(counters.pathStats.values()),
       ...behavior.incidents
     ]),
-    incidentMatches: incidentMatches(counters)
+    incidentMatches: incidentMatches(counters, behavior.incidents)
   };
 }
 
@@ -362,7 +366,10 @@ function topItems(map: Map<string, number>, limit: number): TopItem[] {
     .map(([value, count]) => ({ value, count }));
 }
 
-function incidentMatches(counters: Counters): IncidentMatchSet[] {
+function incidentMatches(
+  counters: Counters,
+  behaviorIncidents: Incident[]
+): IncidentMatchSet[] {
   const aggregateIncidents = buildAggregateIncidents(counters.pathStats.values());
   const matches = new Map<string, MutableIncidentMatches>();
 
@@ -385,6 +392,14 @@ function incidentMatches(counters: Counters): IncidentMatchSet[] {
     }
   }
 
+  for (const incident of behaviorIncidents) {
+    const matchSet = behaviorIncidentMatches(incident, counters);
+
+    if (matchSet.totalMatches > 0) {
+      matches.set(incident.id, matchSet);
+    }
+  }
+
   return [...matches.values()]
     .sort((a, b) => a.incidentId.localeCompare(b.incidentId))
     .map((matchSet) => ({
@@ -392,6 +407,79 @@ function incidentMatches(counters: Counters): IncidentMatchSet[] {
       totalMatches: matchSet.totalMatches,
       lines: matchSet.lines
     }));
+}
+
+function behaviorIncidentMatches(
+  incident: Incident,
+  counters: Counters
+): MutableIncidentMatches {
+  const matchSet: MutableIncidentMatches = {
+    incidentId: incident.id,
+    totalMatches: 0,
+    lines: []
+  };
+  const predicate = behaviorIncidentPredicate(incident);
+
+  if (!predicate) {
+    return matchSet;
+  }
+
+  for (const pathMatchSet of counters.pathMatches.values()) {
+    for (const line of pathMatchSet.lines) {
+      if (predicate(line)) {
+        matchSet.totalMatches += 1;
+        matchSet.lines.push(line);
+      }
+    }
+  }
+
+  return matchSet;
+}
+
+function behaviorIncidentPredicate(
+  incident: Incident
+): ((line: IncidentLogLine) => boolean) | null {
+  if (incident.id.startsWith("ai_scraper_known:")) {
+    const botName = String(evidenceValue(incident, "botName") ?? "");
+    const pattern = AI_BOT_PATTERNS.find((item) => item.name === botName);
+    return pattern
+      ? (line) => Boolean(line.userAgent && pattern.regex.test(line.userAgent))
+      : null;
+  }
+
+  if (incident.id.startsWith("scanner_ua_known:")) {
+    const scanner = String(evidenceValue(incident, "scanner") ?? "");
+    const ip = String(evidenceValue(incident, "ip") ?? "");
+    const pattern = SCANNER_UA_PATTERNS.find((item) => item.name === scanner);
+    return pattern
+      ? (line) => line.ip === ip && Boolean(line.userAgent && pattern.regex.test(line.userAgent))
+      : null;
+  }
+
+  if (incident.id.startsWith("scanner_signature_paths:")) {
+    const ip = String(evidenceValue(incident, "ip") ?? "");
+    return (line) => line.ip === ip && FINGERPRINT_PATHS.has(line.path);
+  }
+
+  if (incident.id.startsWith("http_4xx_storm:")) {
+    const ip = String(evidenceValue(incident, "ip") ?? "");
+    return (line) => line.ip === ip && line.status >= 400 && line.status <= 499;
+  }
+
+  if (
+    incident.id.startsWith("ddos_rps_burst_single_ip:") ||
+    incident.id.startsWith("single_ip_path_explosion:") ||
+    incident.id.startsWith("ua_rotation_same_ip:")
+  ) {
+    const ip = String(evidenceValue(incident, "ip") ?? "");
+    return (line) => line.ip === ip;
+  }
+
+  return null;
+}
+
+function evidenceValue(incident: Incident, key: string): Incident["evidence"][number]["value"] | undefined {
+  return incident.evidence.find((item) => item.key === key)?.value;
 }
 
 function addIncidentLine(

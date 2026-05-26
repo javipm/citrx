@@ -1,5 +1,8 @@
 import type { AccessLogEntry } from "../parser/access-log.js";
-import type { Incident, IpBehaviorStats, TimeStats } from "./types.js";
+import { AI_BOT_PATTERNS } from "../rules/data/ai-bots.js";
+import { FINGERPRINT_PATHS } from "../rules/data/scanner-fingerprint-paths.js";
+import { SCANNER_UA_PATTERNS } from "../rules/data/scanner-uas.js";
+import type { AiBotStats, Incident, IpBehaviorStats, TimeStats } from "./types.js";
 import { accessLogTimestampToEpochSeconds } from "./timestamp.js";
 
 export const MAX_TRACKED_IPS = 100_000;
@@ -14,6 +17,16 @@ const GLOBAL_SPIKE_MULTIPLIER = 5;
 const GLOBAL_SPIKE_SECONDS = 10;
 const FOUR_XX_STORM_THRESHOLD = 200;
 const FOUR_XX_BUCKET_SECONDS = 60;
+const BOT_PATH_SENTINEL_LIMIT = 1001;
+const BOT_IP_SENTINEL_LIMIT = 5001;
+const AI_BOT_MEDIUM_REQUESTS = 500;
+const AI_BOT_HIGH_REQUESTS = 5000;
+const AI_BOT_HIGH_PATH_MINUTES = 3;
+const FINGERPRINT_BUCKET_SECONDS = 60;
+const FINGERPRINT_PATH_THRESHOLD = 20;
+const SINGLE_IP_PATH_EXPLOSION_THRESHOLD = 500;
+const UA_ROTATION_THRESHOLD = 8;
+const UA_ROTATION_MIN_REQUESTS = 100;
 
 interface BehaviorTrackerOptions {
   maxTrackedIps?: number;
@@ -38,12 +51,36 @@ interface IpBehaviorState {
   methods: Map<string, number>;
   paths: Set<string>;
   userAgents: Set<string>;
+  requestedRobotsTxt: boolean;
+  botMatch: string | null;
+  scannerMatch: string | null;
+  scannerUserAgent: string | null;
+  currentFingerprintBucket: number | null;
+  currentFingerprintPaths: Set<string>;
+  previousFingerprintBucket: number | null;
+  previousFingerprintPaths: Set<string>;
+  maxFingerprintHits: number;
+  maxFingerprintBucket: number | null;
+  maxFingerprintSamplePaths: string[];
   current4xxBucket: number | null;
   current4xxCount: number;
   previous4xxBucket: number | null;
   previous4xxCount: number;
   max4xxTwoBucketCount: number;
   max4xxBucket: number | null;
+}
+
+interface BotState {
+  botName: string;
+  requests: number;
+  ips: Set<string>;
+  paths: Set<string>;
+  requestedRobotsTxt: boolean;
+  firstSeen: number;
+  lastSeen: number;
+  pathMinuteBuckets: Map<number, Set<string>>;
+  maxPathsPerMinute: number;
+  highPathMinuteCount: number;
 }
 
 interface TopIpSnapshot {
@@ -62,6 +99,7 @@ interface TopIpSnapshot {
 export interface BehaviorAnalysis {
   timeStats: TimeStats;
   ipBehaviorStats: IpBehaviorStats[];
+  aiBotStats: AiBotStats[];
   incidents: Incident[];
 }
 
@@ -70,6 +108,7 @@ export class BehaviorTracker {
   private readonly ips = new Map<string, IpBehaviorState>();
   private readonly globalRpsBySecond = new Map<number, number>();
   private readonly topIps = new Map<string, TopIpSnapshot>();
+  private readonly botRollup = new Map<string, BotState>();
   private firstSeen: number | null = null;
   private lastSeen: number | null = null;
   private streamNow: number | null = null;
@@ -116,7 +155,12 @@ export class BehaviorTracker {
     const incidents = [
       ...this.buildSingleIpBurstIncidents(),
       ...this.buildGlobalSpikeIncidents(timeStats.globalRpsP95),
-      ...this.build4xxStormIncidents()
+      ...this.build4xxStormIncidents(),
+      ...this.buildAiScraperIncidents(),
+      ...this.buildScannerUaIncidents(),
+      ...this.buildScannerFingerprintIncidents(),
+      ...this.buildSingleIpPathExplosionIncidents(),
+      ...this.buildUaRotationIncidents()
     ].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 
     return {
@@ -135,6 +179,7 @@ export class BehaviorTracker {
           status4xxCount: snapshot.status4xxCount,
           status5xxCount: snapshot.status5xxCount
         })),
+      aiBotStats: this.buildAiBotStats(),
       incidents
     };
   }
@@ -180,6 +225,17 @@ export class BehaviorTracker {
       methods: new Map(),
       paths: new Set(),
       userAgents: new Set(),
+      requestedRobotsTxt: false,
+      botMatch: null,
+      scannerMatch: null,
+      scannerUserAgent: null,
+      currentFingerprintBucket: null,
+      currentFingerprintPaths: new Set(),
+      previousFingerprintBucket: null,
+      previousFingerprintPaths: new Set(),
+      maxFingerprintHits: 0,
+      maxFingerprintBucket: null,
+      maxFingerprintSamplePaths: [],
       current4xxBucket: null,
       current4xxCount: 0,
       previous4xxBucket: null,
@@ -241,6 +297,135 @@ export class BehaviorTracker {
     }
 
     this.observeIpRps(state, epochSecond);
+    this.observeKnownActors(state, entry, epochSecond);
+  }
+
+  private observeKnownActors(
+    state: IpBehaviorState,
+    entry: AccessLogEntry,
+    epochSecond: number
+  ): void {
+    if (entry.path === "/robots.txt") {
+      state.requestedRobotsTxt = true;
+    }
+
+    if (!state.botMatch && entry.userAgent) {
+      state.botMatch = matchUserAgent(entry.userAgent, AI_BOT_PATTERNS);
+    }
+
+    if (state.botMatch) {
+      this.observeBotRollup(state.botMatch, state.ip, entry, epochSecond);
+    }
+
+    if (!state.scannerMatch && entry.userAgent) {
+      state.scannerMatch = matchUserAgent(entry.userAgent, SCANNER_UA_PATTERNS);
+      state.scannerUserAgent = state.scannerMatch ? entry.userAgent : null;
+    }
+
+    if (FINGERPRINT_PATHS.has(entry.path)) {
+      this.observeFingerprintPath(state, entry.path, epochSecond);
+    }
+  }
+
+  private observeBotRollup(
+    botName: string,
+    ip: string,
+    entry: AccessLogEntry,
+    epochSecond: number
+  ): void {
+    const bot = this.botRollup.get(botName) ?? {
+      botName,
+      requests: 0,
+      ips: new Set<string>(),
+      paths: new Set<string>(),
+      requestedRobotsTxt: false,
+      firstSeen: epochSecond,
+      lastSeen: epochSecond,
+      pathMinuteBuckets: new Map<number, Set<string>>(),
+      maxPathsPerMinute: 0,
+      highPathMinuteCount: 0
+    };
+
+    bot.requests += 1;
+    bot.firstSeen = Math.min(bot.firstSeen, epochSecond);
+    bot.lastSeen = Math.max(bot.lastSeen, epochSecond);
+    bot.requestedRobotsTxt = bot.requestedRobotsTxt || entry.path === "/robots.txt";
+
+    if (bot.ips.size < BOT_IP_SENTINEL_LIMIT) {
+      bot.ips.add(ip);
+    }
+
+    if (bot.paths.size < BOT_PATH_SENTINEL_LIMIT) {
+      bot.paths.add(entry.path);
+    }
+
+    const minute = Math.floor(epochSecond / 60);
+    const paths = bot.pathMinuteBuckets.get(minute) ?? new Set<string>();
+    const previousSize = paths.size;
+    paths.add(entry.path);
+    bot.pathMinuteBuckets.set(minute, paths);
+    bot.maxPathsPerMinute = Math.max(bot.maxPathsPerMinute, paths.size);
+
+    if (previousSize <= 10 && paths.size > 10) {
+      bot.highPathMinuteCount += 1;
+    }
+
+    for (const bucket of bot.pathMinuteBuckets.keys()) {
+      if (bucket < minute - 1) {
+        bot.pathMinuteBuckets.delete(bucket);
+      }
+    }
+
+    this.botRollup.set(botName, bot);
+  }
+
+  private observeFingerprintPath(
+    state: IpBehaviorState,
+    path: string,
+    epochSecond: number
+  ): void {
+    const bucket = Math.floor(epochSecond / FINGERPRINT_BUCKET_SECONDS);
+
+    if (state.currentFingerprintBucket === null) {
+      state.currentFingerprintBucket = bucket;
+      state.currentFingerprintPaths.add(path);
+      this.updateFingerprintMax(state, bucket);
+      return;
+    }
+
+    if (bucket === state.currentFingerprintBucket) {
+      state.currentFingerprintPaths.add(path);
+      this.updateFingerprintMax(state, bucket);
+      return;
+    }
+
+    if (bucket === state.currentFingerprintBucket + 1) {
+      state.previousFingerprintBucket = state.currentFingerprintBucket;
+      state.previousFingerprintPaths = state.currentFingerprintPaths;
+    } else {
+      state.previousFingerprintBucket = null;
+      state.previousFingerprintPaths = new Set();
+    }
+
+    state.currentFingerprintBucket = bucket;
+    state.currentFingerprintPaths = new Set([path]);
+    this.updateFingerprintMax(state, bucket);
+  }
+
+  private updateFingerprintMax(state: IpBehaviorState, bucket: number): void {
+    const paths = new Set(state.currentFingerprintPaths);
+
+    if (state.previousFingerprintBucket === bucket - 1) {
+      for (const path of state.previousFingerprintPaths) {
+        paths.add(path);
+      }
+    }
+
+    if (paths.size > state.maxFingerprintHits) {
+      state.maxFingerprintHits = paths.size;
+      state.maxFingerprintBucket = bucket;
+      state.maxFingerprintSamplePaths = [...paths].slice(0, 10);
+    }
   }
 
   private observeIpRps(state: IpBehaviorState, epochSecond: number): void {
@@ -528,6 +713,168 @@ export class BehaviorTracker {
     return incidents;
   }
 
+  private buildAiBotStats(): AiBotStats[] {
+    return [...this.botRollup.values()]
+      .sort((a, b) => b.requests - a.requests || a.botName.localeCompare(b.botName))
+      .map((bot) => ({
+        botName: bot.botName,
+        requests: bot.requests,
+        ipCount: bot.ips.size,
+        pathCount: bot.paths.size,
+        requestedRobotsTxt: bot.requestedRobotsTxt,
+        firstSeen: formatEpoch(bot.firstSeen),
+        lastSeen: formatEpoch(bot.lastSeen)
+      }));
+  }
+
+  private buildAiScraperIncidents(): Incident[] {
+    return [...this.botRollup.values()].map((bot) => {
+      const high =
+        bot.requests > AI_BOT_HIGH_REQUESTS ||
+        bot.highPathMinuteCount >= AI_BOT_HIGH_PATH_MINUTES;
+      const medium = bot.requests >= AI_BOT_MEDIUM_REQUESTS;
+
+      return {
+        id: `ai_scraper_known:${bot.botName}`,
+        category: "ai_scraper",
+        severity: high ? "high" : medium ? "medium" : "info",
+        score: high ? 75 : medium ? 55 : 25,
+        title: "Known AI crawler",
+        description: "Requests came from a known AI crawler or AI assistant user-agent.",
+        evidence: [
+          { key: "botName", value: bot.botName },
+          { key: "requests", value: bot.requests },
+          { key: "ipCount", value: bot.ips.size },
+          { key: "pathsTouched", value: bot.paths.size },
+          { key: "requestedRobotsTxt", value: bot.requestedRobotsTxt },
+          { key: "maxPathsPerMinute", value: bot.maxPathsPerMinute },
+          { key: "highPathMinutes", value: bot.highPathMinuteCount },
+          { key: "firstSeen", value: formatEpoch(bot.firstSeen) },
+          { key: "lastSeen", value: formatEpoch(bot.lastSeen) }
+        ],
+        samples: []
+      } satisfies Incident;
+    });
+  }
+
+  private buildScannerUaIncidents(): Incident[] {
+    const incidents: Incident[] = [];
+
+    for (const state of this.ips.values()) {
+      if (!state.scannerMatch) {
+        continue;
+      }
+
+      incidents.push({
+        id: `scanner_ua_known:${state.scannerMatch}:${state.ip}`,
+        category: "scanner",
+        severity: "high",
+        score: 85,
+        title: "Known scanner user-agent",
+        description: "One IP used a known scanner or offensive tooling user-agent.",
+        evidence: [
+          { key: "scanner", value: state.scannerMatch },
+          { key: "ip", value: state.ip },
+          { key: "requests", value: state.totalRequests },
+          { key: "pathsTouched", value: state.paths.size },
+          { key: "userAgent", value: state.scannerUserAgent ?? state.scannerMatch }
+        ],
+        samples: []
+      });
+    }
+
+    return incidents;
+  }
+
+  private buildScannerFingerprintIncidents(): Incident[] {
+    const incidents: Incident[] = [];
+
+    for (const state of this.ips.values()) {
+      if (state.maxFingerprintHits < FINGERPRINT_PATH_THRESHOLD || state.maxFingerprintBucket === null) {
+        continue;
+      }
+
+      incidents.push({
+        id: `scanner_signature_paths:${state.ip}`,
+        category: "scanner",
+        severity: "high",
+        score: 75,
+        title: "Scanner fingerprint paths",
+        description: "One IP touched many known scanner fingerprint paths in adjacent minute buckets.",
+        evidence: [
+          { key: "ip", value: state.ip },
+          { key: "fingerprintHits", value: state.maxFingerprintHits },
+          { key: "samplePaths", value: state.maxFingerprintSamplePaths.join(", ") },
+          { key: "windowSeconds", value: 120 },
+          { key: "windowEnd", value: formatEpoch((state.maxFingerprintBucket + 1) * FINGERPRINT_BUCKET_SECONDS - 1) }
+        ],
+        samples: state.maxFingerprintSamplePaths
+      });
+    }
+
+    return incidents;
+  }
+
+  private buildSingleIpPathExplosionIncidents(): Incident[] {
+    const incidents: Incident[] = [];
+
+    for (const state of this.ips.values()) {
+      if (state.paths.size < SINGLE_IP_PATH_EXPLOSION_THRESHOLD) {
+        continue;
+      }
+
+      incidents.push({
+        id: `single_ip_path_explosion:${state.ip}`,
+        category: "abusive_crawling",
+        severity: "high",
+        score: 75,
+        title: "Single IP path explosion",
+        description: "One IP touched hundreds of unique paths.",
+        evidence: [
+          { key: "ip", value: state.ip },
+          { key: "pathCount", value: state.paths.size },
+          { key: "totalRequests", value: state.totalRequests },
+          { key: "firstSeen", value: formatEpoch(state.firstSeen) },
+          { key: "lastSeen", value: formatEpoch(state.lastSeen) }
+        ],
+        samples: [...state.paths].slice(0, 5)
+      });
+    }
+
+    return incidents;
+  }
+
+  private buildUaRotationIncidents(): Incident[] {
+    const incidents: Incident[] = [];
+
+    for (const state of this.ips.values()) {
+      if (
+        state.userAgents.size < UA_ROTATION_THRESHOLD ||
+        state.totalRequests < UA_ROTATION_MIN_REQUESTS
+      ) {
+        continue;
+      }
+
+      incidents.push({
+        id: `ua_rotation_same_ip:${state.ip}`,
+        category: "http_anomaly",
+        severity: "high",
+        score: 70,
+        title: "User-agent rotation from one IP",
+        description: "One IP used many different user-agents across a sizeable request volume.",
+        evidence: [
+          { key: "ip", value: state.ip },
+          { key: "uaCount", value: state.userAgents.size },
+          { key: "totalRequests", value: state.totalRequests },
+          { key: "sampleUserAgents", value: [...state.userAgents].slice(0, 3).join(" | ") }
+        ],
+        samples: [...state.userAgents].slice(0, 3)
+      });
+    }
+
+    return incidents;
+  }
+
   private closeAllIpSeconds(): void {
     for (const state of this.ips.values()) {
       this.closeIpSecond(state);
@@ -537,6 +884,13 @@ export class BehaviorTracker {
 
 function incrementMap(map: Map<string, number>, key: string): void {
   map.set(key, (map.get(key) ?? 0) + 1);
+}
+
+function matchUserAgent(
+  userAgent: string,
+  patterns: Array<{ name: string; regex: RegExp }>
+): string | null {
+  return patterns.find((pattern) => pattern.regex.test(userAgent))?.name ?? null;
 }
 
 function formatEpoch(epochSecond: number): string {

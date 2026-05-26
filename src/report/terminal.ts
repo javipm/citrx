@@ -36,9 +36,27 @@ export function renderTerminalReport(
   lines.push(section("Top paths", report.topPaths, colors));
   lines.push(section("Methods", report.topMethods, colors));
   lines.push(section("Statuses", report.topStatuses, colors));
+  if (report.aiBotStats.length > 0) {
+    lines.push(aiBotSection(report, colors));
+  }
   lines.push(incidentSection(report.incidents, colors));
 
   return `${lines.join("\n")}\n`;
+}
+
+function aiBotSection(
+  report: AnalyzeReport,
+  colors: ReturnType<typeof pc.createColors>
+): string {
+  const lines = [colors.bold("Known AI bots")];
+
+  for (const bot of report.aiBotStats.slice(0, 10)) {
+    lines.push(
+      `  ${bot.requests.toString().padStart(6, " ")}  ${bot.botName} ips=${bot.ipCount} paths=${bot.pathCount} robots=${bot.requestedRobotsTxt ? "yes" : "no"}`
+    );
+  }
+
+  return lines.join("\n");
 }
 
 function section(

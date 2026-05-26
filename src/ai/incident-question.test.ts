@@ -53,6 +53,7 @@ const report: AnalyzeReport = {
     droppedIpCount: 0
   },
   ipBehaviorStats: [],
+  aiBotStats: [],
   incidents: [incident],
   incidentMatches: []
 };

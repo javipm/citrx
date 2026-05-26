@@ -33,10 +33,33 @@ export function renderMarkdownReport(report: AnalyzeReport): string {
     topSection("Top Paths", report.topPaths),
     topSection("Methods", report.topMethods),
     topSection("Statuses", report.topStatuses),
+    aiBotSection(report),
     incidentSection(report.incidents)
   ];
 
   return `${lines.join("\n")}\n`;
+}
+
+function aiBotSection(report: AnalyzeReport): string {
+  const lines = [
+    "## Known AI Bots",
+    "",
+    "| Bot | Requests | IPs | Paths | Robots.txt |",
+    "| --- | ---: | ---: | ---: | --- |"
+  ];
+
+  if (report.aiBotStats.length === 0) {
+    lines.push("| none | 0 | 0 | 0 | no |");
+  } else {
+    lines.push(
+      ...report.aiBotStats.map(
+        (bot) =>
+          `| ${escapeCell(bot.botName)} | ${bot.requests} | ${bot.ipCount} | ${bot.pathCount} | ${bot.requestedRobotsTxt ? "yes" : "no"} |`
+      )
+    );
+  }
+
+  return lines.join("\n");
 }
 
 function topSection(title: string, items: TopItem[]): string {
@@ -80,6 +103,6 @@ function incidentSection(incidents: Incident[]): string {
   return lines.join("\n");
 }
 
-function escapeCell(value: string | number): string {
+function escapeCell(value: string | number | boolean): string {
   return String(value).replaceAll("|", "\\|").replaceAll("\n", " ");
 }
