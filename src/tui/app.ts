@@ -1856,7 +1856,7 @@ function userAgentLabel(userAgent: string | null): string {
 
   const normalized = userAgent.replace(/\s+/g, " ").trim();
   const bot = normalized.match(
-    /(Googlebot\/[^\s;)]+|Claude-SearchBot\/[^\s;)]+|MJ12bot\/[^\s;)]+|bingbot\/[^\s;)]+|AhrefsBot\/[^\s;)]+|SemrushBot\/[^\s;)]+)/i
+    /([A-Za-z0-9_.-]*(?:bot|crawler|spider|slurp|searchbot)[A-Za-z0-9_.-]*\/[^\s;)]+)/i
   );
 
   if (bot) {
@@ -1873,7 +1873,11 @@ function userAgentLabel(userAgent: string | null): string {
     normalized.match(/Mac OS X [^;)]+/)?.[0] ??
     normalized.match(/Linux [^;)]+/)?.[0];
 
-  return os ? `${browser} ${os}` : browser;
+  if (browser !== "UA") {
+    return os ? `${browser} ${os}` : browser;
+  }
+
+  return truncate(normalized, 42);
 }
 
 function formatBytes(value: number): string {

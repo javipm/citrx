@@ -27,9 +27,19 @@ const FINGERPRINT_PATH_THRESHOLD = 20;
 const SINGLE_IP_PATH_EXPLOSION_THRESHOLD = 500;
 const UA_ROTATION_THRESHOLD = 8;
 const UA_ROTATION_MIN_REQUESTS = 100;
+const HEAD_FLOOD_MIN_REQUESTS = 500;
+const HEAD_FLOOD_RATIO = 0.7;
+const HEAD_FLOOD_PEAK_RPS = 25;
+const SUBNET_RPS_THRESHOLD = 200;
+const SUBNET_MIN_IPS = 10;
+const SUBNET_BURST_SECONDS = 5;
+const SUBNET_IPS_SENTINEL = 5001;
+const MAX_TRACKED_SUBNETS = 50_000;
+const STALE_SUBNET_SECONDS = 900;
 
 interface BehaviorTrackerOptions {
   maxTrackedIps?: number;
+  maxTrackedSubnets?: number;
 }
 
 interface IpBehaviorState {
@@ -48,6 +58,11 @@ interface IpBehaviorState {
   longestBurstEnd: number | null;
   status4xxCount: number;
   status5xxCount: number;
+  headCount: number;
+  currentHeadSecond: number | null;
+  currentHeadCount: number;
+  peakHeadRps: number;
+  peakHeadRpsAt: number;
   methods: Map<string, number>;
   paths: Set<string>;
   userAgents: Set<string>;
@@ -68,6 +83,22 @@ interface IpBehaviorState {
   previous4xxCount: number;
   max4xxTwoBucketCount: number;
   max4xxBucket: number | null;
+}
+
+interface SubnetState {
+  prefix: string;
+  currentSecond: number | null;
+  currentCount: number;
+  currentIps: Set<string>;
+  peakSubnetRps: number;
+  peakSubnetRpsAt: number;
+  peakIpCount: number;
+  burstRunLen: number;
+  burstStart: number | null;
+  longestBurstLen: number;
+  longestBurstStart: number | null;
+  longestBurstEnd: number | null;
+  lastSeen: number;
 }
 
 interface BotState {
@@ -105,7 +136,9 @@ export interface BehaviorAnalysis {
 
 export class BehaviorTracker {
   private readonly maxTrackedIps: number;
+  private readonly maxTrackedSubnets: number;
   private readonly ips = new Map<string, IpBehaviorState>();
+  private readonly subnets = new Map<string, SubnetState>();
   private readonly globalRpsBySecond = new Map<number, number>();
   private readonly topIps = new Map<string, TopIpSnapshot>();
   private readonly botRollup = new Map<string, BotState>();
@@ -117,9 +150,11 @@ export class BehaviorTracker {
   private invalidTimestampLines = 0;
   private outOfOrderTimestamps = 0;
   private droppedIpCount = 0;
+  private droppedSubnetCount = 0;
 
   constructor(options: BehaviorTrackerOptions = {}) {
     this.maxTrackedIps = options.maxTrackedIps ?? MAX_TRACKED_IPS;
+    this.maxTrackedSubnets = options.maxTrackedSubnets ?? MAX_TRACKED_SUBNETS;
   }
 
   observe(entry: AccessLogEntry): void {
@@ -138,6 +173,7 @@ export class BehaviorTracker {
     this.firstSeen = Math.min(this.firstSeen ?? epochSecond, epochSecond);
     this.lastSeen = Math.max(this.lastSeen ?? epochSecond, epochSecond);
     this.observeGlobalRps(epochSecond);
+    this.observeSubnet(entry, epochSecond);
 
     const state = this.getOrCreateIp(entry.ip, epochSecond);
 
@@ -151,6 +187,8 @@ export class BehaviorTracker {
 
   finalize(): BehaviorAnalysis {
     this.closeAllIpSeconds();
+    this.closeAllHeadSeconds();
+    this.closeAllSubnetSeconds();
     const timeStats = this.buildTimeStats();
     const incidents = [
       ...this.buildSingleIpBurstIncidents(),
@@ -160,7 +198,9 @@ export class BehaviorTracker {
       ...this.buildScannerUaIncidents(),
       ...this.buildScannerFingerprintIncidents(),
       ...this.buildSingleIpPathExplosionIncidents(),
-      ...this.buildUaRotationIncidents()
+      ...this.buildUaRotationIncidents(),
+      ...this.buildHeadFloodIncidents(),
+      ...this.buildSubnetDdosIncidents()
     ].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 
     return {
@@ -222,6 +262,11 @@ export class BehaviorTracker {
       longestBurstEnd: null,
       status4xxCount: 0,
       status5xxCount: 0,
+      headCount: 0,
+      currentHeadSecond: null,
+      currentHeadCount: 0,
+      peakHeadRps: 0,
+      peakHeadRpsAt: epochSecond,
       methods: new Map(),
       paths: new Set(),
       userAgents: new Set(),
@@ -273,6 +318,63 @@ export class BehaviorTracker {
     return true;
   }
 
+  private getOrCreateSubnet(prefix: string, epochSecond: number): SubnetState | null {
+    const existing = this.subnets.get(prefix);
+
+    if (existing) {
+      return existing;
+    }
+
+    if (this.subnets.size >= this.maxTrackedSubnets && !this.evictStaleSubnet(epochSecond)) {
+      this.droppedSubnetCount += 1;
+      return null;
+    }
+
+    const state: SubnetState = {
+      prefix,
+      currentSecond: null,
+      currentCount: 0,
+      currentIps: new Set(),
+      peakSubnetRps: 0,
+      peakSubnetRpsAt: epochSecond,
+      peakIpCount: 0,
+      burstRunLen: 0,
+      burstStart: null,
+      longestBurstLen: 0,
+      longestBurstStart: null,
+      longestBurstEnd: null,
+      lastSeen: epochSecond
+    };
+
+    this.subnets.set(prefix, state);
+    return state;
+  }
+
+  private evictStaleSubnet(epochSecond: number): boolean {
+    let candidate: SubnetState | undefined;
+
+    for (const subnet of this.subnets.values()) {
+      if (subnet.lastSeen >= epochSecond - STALE_SUBNET_SECONDS) {
+        continue;
+      }
+
+      if (
+        !candidate ||
+        subnet.peakSubnetRps < candidate.peakSubnetRps ||
+        (subnet.peakSubnetRps === candidate.peakSubnetRps && subnet.lastSeen < candidate.lastSeen)
+      ) {
+        candidate = subnet;
+      }
+    }
+
+    if (!candidate) {
+      return false;
+    }
+
+    this.subnets.delete(candidate.prefix);
+    return true;
+  }
+
   private observeIp(state: IpBehaviorState, entry: AccessLogEntry, epochSecond: number): void {
     state.totalRequests += 1;
     state.firstSeen = Math.min(state.firstSeen, epochSecond);
@@ -297,6 +399,7 @@ export class BehaviorTracker {
     }
 
     this.observeIpRps(state, epochSecond);
+    this.observeHead(state, entry, epochSecond);
     this.observeKnownActors(state, entry, epochSecond);
   }
 
@@ -324,6 +427,114 @@ export class BehaviorTracker {
 
     if (FINGERPRINT_PATHS.has(entry.path)) {
       this.observeFingerprintPath(state, entry.path, epochSecond);
+    }
+  }
+
+  private observeHead(
+    state: IpBehaviorState,
+    entry: AccessLogEntry,
+    epochSecond: number
+  ): void {
+    if (entry.method !== "HEAD") {
+      return;
+    }
+
+    state.headCount += 1;
+
+    if (state.currentHeadSecond === null) {
+      state.currentHeadSecond = epochSecond;
+      state.currentHeadCount = 1;
+      return;
+    }
+
+    if (state.currentHeadSecond === epochSecond) {
+      state.currentHeadCount += 1;
+      return;
+    }
+
+    this.closeHeadSecond(state);
+    state.currentHeadSecond = epochSecond;
+    state.currentHeadCount = 1;
+  }
+
+  private closeHeadSecond(state: IpBehaviorState): void {
+    if (state.currentHeadSecond === null) {
+      return;
+    }
+
+    if (state.currentHeadCount > state.peakHeadRps) {
+      state.peakHeadRps = state.currentHeadCount;
+      state.peakHeadRpsAt = state.currentHeadSecond;
+    }
+  }
+
+  private observeSubnet(entry: AccessLogEntry, epochSecond: number): void {
+    const prefix = extractSubnetPrefix(entry.ip);
+
+    if (!prefix) {
+      return;
+    }
+
+    const state = this.getOrCreateSubnet(prefix, epochSecond);
+
+    if (!state) {
+      return;
+    }
+
+    state.lastSeen = Math.max(state.lastSeen, epochSecond);
+
+    if (state.currentSecond === null) {
+      state.currentSecond = epochSecond;
+      state.currentCount = 1;
+      addSubnetIp(state, entry.ip);
+      return;
+    }
+
+    if (state.currentSecond === epochSecond) {
+      state.currentCount += 1;
+      addSubnetIp(state, entry.ip);
+      return;
+    }
+
+    const previousSecond = state.currentSecond;
+    this.closeSubnetSecond(state);
+
+    if (epochSecond !== previousSecond + 1) {
+      state.burstRunLen = 0;
+      state.burstStart = null;
+    }
+
+    state.currentSecond = epochSecond;
+    state.currentCount = 1;
+    state.currentIps = new Set([entry.ip]);
+  }
+
+  private closeSubnetSecond(state: SubnetState): void {
+    if (state.currentSecond === null) {
+      return;
+    }
+
+    if (state.currentCount > state.peakSubnetRps) {
+      state.peakSubnetRps = state.currentCount;
+      state.peakSubnetRpsAt = state.currentSecond;
+      state.peakIpCount = state.currentIps.size;
+    }
+
+    if (
+      state.currentCount >= SUBNET_RPS_THRESHOLD &&
+      state.currentIps.size >= SUBNET_MIN_IPS
+    ) {
+      state.burstRunLen += 1;
+      state.burstStart ??= state.currentSecond;
+
+      if (state.burstRunLen > state.longestBurstLen) {
+        state.longestBurstLen = state.burstRunLen;
+        state.longestBurstStart = state.burstStart;
+        state.longestBurstEnd = state.currentSecond;
+      }
+    } else {
+      state.burstRunLen = 0;
+      state.burstStart = null;
     }
   }
 
@@ -577,7 +788,8 @@ export class BehaviorTracker {
       globalRpsP95,
       invalidTimestampLines: this.invalidTimestampLines,
       outOfOrderTimestamps: this.outOfOrderTimestamps,
-      droppedIpCount: this.droppedIpCount
+      droppedIpCount: this.droppedIpCount,
+      droppedSubnetCount: this.droppedSubnetCount
     };
   }
 
@@ -875,9 +1087,88 @@ export class BehaviorTracker {
     return incidents;
   }
 
+  private buildHeadFloodIncidents(): Incident[] {
+    const incidents: Incident[] = [];
+
+    for (const state of this.ips.values()) {
+      if (state.totalRequests < HEAD_FLOOD_MIN_REQUESTS) {
+        continue;
+      }
+
+      const headRatio = state.headCount / state.totalRequests;
+
+      if (headRatio < HEAD_FLOOD_RATIO || state.peakHeadRps < HEAD_FLOOD_PEAK_RPS) {
+        continue;
+      }
+
+      incidents.push({
+        id: `http_head_flood:${state.ip}`,
+        category: "ddos",
+        severity: "high",
+        score: 70,
+        title: "HEAD request flood",
+        description: "One IP sent a high ratio of HEAD requests with a sustained peak rate.",
+        evidence: [
+          { key: "ip", value: state.ip },
+          { key: "totalRequests", value: state.totalRequests },
+          { key: "headCount", value: state.headCount },
+          { key: "headRatio", value: roundRatio(headRatio) },
+          { key: "peakHeadRps", value: state.peakHeadRps },
+          { key: "peakHeadRpsAt", value: formatEpoch(state.peakHeadRpsAt) }
+        ],
+        samples: []
+      });
+    }
+
+    return incidents;
+  }
+
+  private buildSubnetDdosIncidents(): Incident[] {
+    const incidents: Incident[] = [];
+
+    for (const subnet of this.subnets.values()) {
+      if (subnet.longestBurstLen < SUBNET_BURST_SECONDS) {
+        continue;
+      }
+
+      incidents.push({
+        id: `ddos_distributed_subnet:${subnet.prefix}`,
+        category: "ddos",
+        severity: "critical",
+        score: 90,
+        title: "Distributed DDoS from subnet",
+        description: "Subnet exceeded the per-second request threshold with many unique IPs for consecutive seconds.",
+        evidence: [
+          { key: "prefix", value: subnet.prefix },
+          { key: "peakSubnetRps", value: subnet.peakSubnetRps },
+          { key: "peakSubnetRpsAt", value: formatEpoch(subnet.peakSubnetRpsAt) },
+          { key: "peakIpCount", value: subnet.peakIpCount },
+          { key: "burstSeconds", value: subnet.longestBurstLen },
+          { key: "burstStart", value: formatEpoch(subnet.longestBurstStart ?? subnet.peakSubnetRpsAt) },
+          { key: "burstEnd", value: formatEpoch(subnet.longestBurstEnd ?? subnet.peakSubnetRpsAt) }
+        ],
+        samples: []
+      });
+    }
+
+    return incidents;
+  }
+
   private closeAllIpSeconds(): void {
     for (const state of this.ips.values()) {
       this.closeIpSecond(state);
+    }
+  }
+
+  private closeAllHeadSeconds(): void {
+    for (const state of this.ips.values()) {
+      this.closeHeadSecond(state);
+    }
+  }
+
+  private closeAllSubnetSeconds(): void {
+    for (const state of this.subnets.values()) {
+      this.closeSubnetSecond(state);
     }
   }
 }
@@ -886,11 +1177,93 @@ function incrementMap(map: Map<string, number>, key: string): void {
   map.set(key, (map.get(key) ?? 0) + 1);
 }
 
+function addSubnetIp(state: SubnetState, ip: string): void {
+  if (state.currentIps.size < SUBNET_IPS_SENTINEL) {
+    state.currentIps.add(ip);
+  }
+}
+
+function roundRatio(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function matchUserAgent(
   userAgent: string,
   patterns: Array<{ name: string; regex: RegExp }>
 ): string | null {
   return patterns.find((pattern) => pattern.regex.test(userAgent))?.name ?? null;
+}
+
+export function extractSubnetPrefix(ip: string): string | null {
+  if (ip.includes(":")) {
+    const expanded = expandIPv6(ip);
+
+    if (!expanded) {
+      return null;
+    }
+
+    const groups = expanded.split(":");
+    return `${groups.slice(0, 3).join(":")}::/48`;
+  }
+
+  const parts = ip.split(".");
+
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)
+  ) {
+    return null;
+  }
+
+  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+}
+
+function expandIPv6(ip: string): string | null {
+  if (!/^[0-9a-f:.]+$/i.test(ip)) {
+    return null;
+  }
+
+  const doubleColonCount = ip.split("::").length - 1;
+
+  if (doubleColonCount > 1) {
+    return null;
+  }
+
+  const [head = "", tail = ""] = ip.split("::");
+  const headGroups = head ? head.split(":") : [];
+  const tailGroups = tail ? tail.split(":") : [];
+
+  if (
+    [...headGroups, ...tailGroups].some(
+      (group) => !/^[0-9a-f]{1,4}$/i.test(group)
+    )
+  ) {
+    return null;
+  }
+
+  const missing = doubleColonCount === 1
+    ? 8 - headGroups.length - tailGroups.length
+    : 0;
+
+  if (
+    missing < 0 ||
+    (doubleColonCount === 0 && headGroups.length !== 8) ||
+    (doubleColonCount === 1 && headGroups.length + tailGroups.length >= 8)
+  ) {
+    return null;
+  }
+
+  const groups = [
+    ...headGroups,
+    ...Array.from({ length: missing }, () => "0"),
+    ...tailGroups
+  ];
+
+  if (groups.length !== 8) {
+    return null;
+  }
+
+  return groups.map((group) => Number.parseInt(group, 16).toString(16)).join(":");
 }
 
 function formatEpoch(epochSecond: number): string {

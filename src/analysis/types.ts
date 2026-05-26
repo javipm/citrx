@@ -55,6 +55,7 @@ export interface TimeStats {
   invalidTimestampLines: number;
   outOfOrderTimestamps: number;
   droppedIpCount: number;
+  droppedSubnetCount: number;
 }
 
 export interface IpBehaviorStats {

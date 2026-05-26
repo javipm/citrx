@@ -178,7 +178,8 @@ describe("citrx CLI", () => {
         peakGlobalRps: 1,
         invalidTimestampLines: 0,
         outOfOrderTimestamps: 0,
-        droppedIpCount: 0
+        droppedIpCount: 0,
+        droppedSubnetCount: 0
       }),
       ipBehaviorStats: expect.arrayContaining([
         expect.objectContaining({

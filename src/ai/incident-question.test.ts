@@ -50,7 +50,8 @@ const report: AnalyzeReport = {
     globalRpsP95: 2,
     invalidTimestampLines: 0,
     outOfOrderTimestamps: 0,
-    droppedIpCount: 0
+    droppedIpCount: 0,
+    droppedSubnetCount: 0
   },
   ipBehaviorStats: [],
   aiBotStats: [],

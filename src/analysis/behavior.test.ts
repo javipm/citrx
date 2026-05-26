@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AccessLogEntry } from "../parser/access-log.js";
-import { BehaviorTracker } from "./behavior.js";
+import { BehaviorTracker, extractSubnetPrefix } from "./behavior.js";
 import { accessLogTimestampToEpochSeconds } from "./timestamp.js";
 
 const FINGERPRINT_FIXTURE_PATHS = [
@@ -35,6 +35,16 @@ const FINGERPRINT_FIXTURE_PATHS = [
 ];
 
 describe("behavior tracker", () => {
+  it("extracts IPv4 subnet prefixes", () => {
+    expect(extractSubnetPrefix("203.0.113.42")).toBe("203.0.113.0/24");
+    expect(extractSubnetPrefix("1.2.3")).toBeNull();
+  });
+
+  it("extracts IPv6 /48 prefixes from compact addresses", () => {
+    expect(extractSubnetPrefix("2001:db8::1")).toBe("2001:db8:0::/48");
+    expect(extractSubnetPrefix("not-an-ip")).toBeNull();
+  });
+
   it("parses Apache timestamps to UTC epoch seconds", () => {
     expect(accessLogTimestampToEpochSeconds("25/May/2026:03:12:49 +0200")).toBe(
       Date.parse("2026-05-25T01:12:49.000Z") / 1000
@@ -388,6 +398,225 @@ describe("behavior tracker", () => {
       ])
     );
   });
+
+  it("detects HEAD floods", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 350; index += 1) {
+      tracker.observe(entry({ method: "HEAD", timestamp: ts(Math.floor(index / 25)) }));
+    }
+
+    for (let index = 0; index < 150; index += 1) {
+      tracker.observe(entry({ method: "GET", timestamp: ts(100 + index) }));
+    }
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "http_head_flood:203.0.113.10" })
+      ])
+    );
+  });
+
+  it("does not detect HEAD floods below the HEAD ratio", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 200; index += 1) {
+      tracker.observe(entry({ method: "HEAD", timestamp: ts(Math.floor(index / 25)) }));
+    }
+
+    for (let index = 0; index < 300; index += 1) {
+      tracker.observe(entry({ method: "GET", timestamp: ts(100 + index) }));
+    }
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "http_head_flood:203.0.113.10" })
+      ])
+    );
+  });
+
+  it("does not detect HEAD floods below the request minimum", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 100; index += 1) {
+      tracker.observe(entry({ method: "HEAD", timestamp: ts(Math.floor(index / 25)) }));
+    }
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "http_head_flood:203.0.113.10" })
+      ])
+    );
+  });
+
+  it("does not detect HEAD floods below the peak RPS threshold", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 350; index += 1) {
+      tracker.observe(entry({ method: "HEAD", timestamp: ts(Math.floor(index / 20)) }));
+    }
+
+    for (let index = 0; index < 150; index += 1) {
+      tracker.observe(entry({ method: "GET", timestamp: ts(100 + index) }));
+    }
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "http_head_flood:203.0.113.10" })
+      ])
+    );
+  });
+
+  it("detects distributed DDoS from an IPv4 subnet", () => {
+    const tracker = new BehaviorTracker();
+
+    observeSubnetBurst(tracker, {
+      secondCount: 5,
+      rps: 200,
+      ipCount: 10,
+      ipForIndex: (index) => `203.0.113.${index % 10}`
+    });
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "ddos_distributed_subnet:203.0.113.0/24",
+          severity: "critical"
+        })
+      ])
+    );
+  });
+
+  it("keeps subnet DDoS tracking when per-IP tracking drops new IPs", () => {
+    const tracker = new BehaviorTracker({ maxTrackedIps: 1 });
+
+    observeSubnetBurst(tracker, {
+      secondCount: 5,
+      rps: 200,
+      ipCount: 10,
+      ipForIndex: (index) => `203.0.113.${index % 10}`
+    });
+
+    const result = tracker.finalize();
+    expect(result.timeStats.droppedIpCount).toBeGreaterThan(0);
+    expect(result.incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "ddos_distributed_subnet:203.0.113.0/24" })
+      ])
+    );
+  });
+
+  it("does not detect subnet DDoS below the IP threshold", () => {
+    const tracker = new BehaviorTracker();
+
+    observeSubnetBurst(tracker, {
+      secondCount: 5,
+      rps: 200,
+      ipCount: 5,
+      ipForIndex: (index) => `203.0.113.${index % 5}`
+    });
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "ddos_distributed_subnet:203.0.113.0/24" })
+      ])
+    );
+  });
+
+  it("does not detect subnet DDoS below the RPS threshold", () => {
+    const tracker = new BehaviorTracker();
+
+    observeSubnetBurst(tracker, {
+      secondCount: 5,
+      rps: 150,
+      ipCount: 10,
+      ipForIndex: (index) => `203.0.113.${index % 10}`
+    });
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "ddos_distributed_subnet:203.0.113.0/24" })
+      ])
+    );
+  });
+
+  it("does not detect subnet DDoS below the burst threshold", () => {
+    const tracker = new BehaviorTracker();
+
+    observeSubnetBurst(tracker, {
+      secondCount: 4,
+      rps: 200,
+      ipCount: 10,
+      ipForIndex: (index) => `203.0.113.${index % 10}`
+    });
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "ddos_distributed_subnet:203.0.113.0/24" })
+      ])
+    );
+  });
+
+  it("detects distributed DDoS from an IPv6 /48", () => {
+    const tracker = new BehaviorTracker();
+
+    observeSubnetBurst(tracker, {
+      secondCount: 5,
+      rps: 200,
+      ipCount: 10,
+      ipForIndex: (index) => `2001:db8:abcd::${index % 10}`
+    });
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "ddos_distributed_subnet:2001:db8:abcd::/48" })
+      ])
+    );
+  });
+
+  it("breaks subnet DDoS bursts when a second has no traffic", () => {
+    const tracker = new BehaviorTracker();
+
+    observeSubnetBurst(tracker, {
+      secondCount: 3,
+      rps: 200,
+      ipCount: 10,
+      ipForIndex: (index) => `203.0.113.${index % 10}`
+    });
+    observeSubnetBurst(tracker, {
+      startSecond: 4,
+      secondCount: 2,
+      rps: 200,
+      ipCount: 10,
+      ipForIndex: (index) => `203.0.113.${index % 10}`
+    });
+
+    expect(tracker.finalize().incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "ddos_distributed_subnet:203.0.113.0/24" })
+      ])
+    );
+  });
+
+  it("counts dropped subnets when cap is full and no stale subnet exists", () => {
+    const tracker = new BehaviorTracker({ maxTrackedSubnets: 1 });
+    tracker.observe(entry({ ip: "203.0.113.1", timestamp: ts(0) }));
+    tracker.observe(entry({ ip: "198.51.100.1", timestamp: ts(1) }));
+
+    expect(tracker.finalize().timeStats.droppedSubnetCount).toBe(1);
+  });
+
+  it("evicts stale lower-peak subnets before higher-peak stale subnets", () => {
+    const tracker = new BehaviorTracker({ maxTrackedSubnets: 2 });
+
+    tracker.observe(entry({ ip: "203.0.113.1", timestamp: ts(0) }));
+    for (let index = 0; index < 5; index += 1) {
+      tracker.observe(entry({ ip: `198.51.100.${index}`, timestamp: ts(0) }));
+    }
+    tracker.observe(entry({ ip: "192.0.2.1", timestamp: ts(901) }));
+
+    expect(tracker.finalize().timeStats.droppedSubnetCount).toBe(0);
+  });
 });
 
 function entry(overrides: Partial<AccessLogEntry> = {}): AccessLogEntry {
@@ -409,4 +638,28 @@ function entry(overrides: Partial<AccessLogEntry> = {}): AccessLogEntry {
 function ts(secondOffset: number): string {
   const date = new Date(Date.parse("2026-05-25T00:00:00.000Z") + secondOffset * 1000);
   return date.toISOString();
+}
+
+function observeSubnetBurst(
+  tracker: BehaviorTracker,
+  options: {
+    startSecond?: number;
+    secondCount: number;
+    rps: number;
+    ipCount: number;
+    ipForIndex: (index: number) => string;
+  }
+): void {
+  const startSecond = options.startSecond ?? 0;
+
+  for (let second = startSecond; second < startSecond + options.secondCount; second += 1) {
+    for (let index = 0; index < options.rps; index += 1) {
+      tracker.observe(
+        entry({
+          ip: options.ipForIndex(index % options.ipCount),
+          timestamp: ts(second)
+        })
+      );
+    }
+  }
 }

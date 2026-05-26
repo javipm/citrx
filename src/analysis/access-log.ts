@@ -28,7 +28,7 @@ import type {
   IncidentMatchSet,
   TopItem
 } from "./types.js";
-import { BehaviorTracker } from "./behavior.js";
+import { BehaviorTracker, extractSubnetPrefix } from "./behavior.js";
 import { parseAccessLogTimestamp } from "./timestamp.js";
 
 interface AnalyzeOptions {
@@ -464,6 +464,16 @@ function behaviorIncidentPredicate(
   if (incident.id.startsWith("http_4xx_storm:")) {
     const ip = String(evidenceValue(incident, "ip") ?? "");
     return (line) => line.ip === ip && line.status >= 400 && line.status <= 499;
+  }
+
+  if (incident.id.startsWith("http_head_flood:")) {
+    const ip = String(evidenceValue(incident, "ip") ?? "");
+    return (line) => line.ip === ip && line.method === "HEAD";
+  }
+
+  if (incident.id.startsWith("ddos_distributed_subnet:")) {
+    const prefix = String(evidenceValue(incident, "prefix") ?? "");
+    return (line) => extractSubnetPrefix(line.ip) === prefix;
   }
 
   if (
