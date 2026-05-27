@@ -172,6 +172,10 @@ function CitrxExplorer({
     sortDirection: SortDirection;
     focus: SortMenuFocus;
   }>();
+  const [exportNotice, setExportNotice] = useState<{
+    file: string;
+    lines: number;
+  }>();
   const [message, setMessage] = useState("Ready");
   const [busy, setBusy] = useState(false);
   const [indexLoading, setIndexLoading] = useState(false);
@@ -196,7 +200,7 @@ function CitrxExplorer({
     () => summaryPageLines.filter((line) => selectedLineKeys.has(lineKey(line))),
     [summaryPageLines, selectedLineKeys]
   );
-  const controlRows = prompt ? 3 : 0;
+  const controlRows = (prompt ? 3 : 0) + (exportNotice ? 4 : 0);
   const pageSize = screen === "incident" ? Math.max(4, rows - 13 - controlRows) : Math.max(4, rows - 16 - controlRows);
   const summaryPageSize = Math.max(4, rows - 15 - controlRows);
   const detailRows = Math.max(4, rows - 6 - controlRows);
@@ -553,9 +557,15 @@ function CitrxExplorer({
 
       if (inputValue === "e") {
         const exportable = selectedGlobalLines.length > 0 ? selectedGlobalLines : summaryPageLines;
-        void exportContext(run.id, undefined, exportable).then((file) => {
-          setMessage(`Exported ${exportable.length} lines to ${file}`);
-        });
+        setMessage("Exporting JSON...");
+        void exportContext(run.id, undefined, exportable)
+          .then((file) => {
+            setExportNotice({ file, lines: exportable.length });
+            setMessage(`Export OK: ${exportable.length} rows saved`);
+          })
+          .catch((error) => {
+            setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+          });
         return;
       }
 
@@ -687,9 +697,15 @@ function CitrxExplorer({
 
     if (inputValue === "e") {
       const exportable = selectedLines.length > 0 ? selectedLines : lines;
-      void exportContext(run.id, incident, exportable).then((file) => {
-        setMessage(`Exported ${exportable.length} lines to ${file}`);
-      });
+      setMessage("Exporting JSON...");
+      void exportContext(run.id, incident, exportable)
+        .then((file) => {
+          setExportNotice({ file, lines: exportable.length });
+          setMessage(`Export OK: ${exportable.length} rows saved`);
+        })
+        .catch((error) => {
+          setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
       return;
     }
 
@@ -781,6 +797,7 @@ function CitrxExplorer({
     ),
     sortMenu ? React.createElement(SortMenuOverlay, { sortMenu, columns, rows }) : null,
     prompt ? React.createElement(PromptBar, { prompt, columns }) : null,
+    exportNotice ? React.createElement(ExportNoticeBar, { notice: exportNotice, columns }) : null,
     React.createElement(Footer, {
       screen,
       summaryFocus,
@@ -1673,6 +1690,32 @@ function SortMenuOverlay({
       Text,
       { color: "gray", backgroundColor: "black", wrap: "truncate" },
       fitText("Arrows move | Space select | Enter apply | Esc cancel", innerWidth).padEnd(innerWidth)
+    )
+  );
+}
+
+function ExportNoticeBar({
+  notice,
+  columns
+}: {
+  notice: {
+    file: string;
+    lines: number;
+  };
+  columns: number;
+}) {
+  return React.createElement(
+    Box,
+    { flexDirection: "column", borderStyle: "single", borderColor: "green", paddingX: 1 },
+    React.createElement(
+      Text,
+      { bold: true, color: "green", wrap: "truncate" },
+      fitText(`Export OK: ${notice.lines} rows saved as JSON`, columns - 4)
+    ),
+    React.createElement(
+      Text,
+      { color: "green", wrap: "truncate" },
+      fitText(`Saved to: ${notice.file}`, columns - 4)
     )
   );
 }
