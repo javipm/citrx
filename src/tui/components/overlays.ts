@@ -248,6 +248,18 @@ export function ExportNoticeBar({
   );
 }
 
+export function QuitConfirmBar({ columns }: { columns: number }): React.ReactElement {
+  return React.createElement(
+    Box,
+    { borderStyle: "single", borderColor: "yellow", paddingX: 1 },
+    React.createElement(
+      Text,
+      { bold: true, color: "yellow", wrap: "truncate" },
+      fitText("Exit citrx? y/Enter quit | Esc/n stay", columns - 4)
+    )
+  );
+}
+
 export function Footer({
   screen,
   summaryFocus,

@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useWindowSize } from "ink";
 
 import { writeFile } from "node:fs/promises";
@@ -39,7 +39,13 @@ import { accessQueryKey } from "./hooks/useAccessLogQuery.js";
 import { createAccessLogLineFilter } from "./filter.js";
 
 // Components
-import { PromptBar, SortMenuOverlay, ExportNoticeBar, Footer } from "./components/overlays.js";
+import {
+  PromptBar,
+  SortMenuOverlay,
+  ExportNoticeBar,
+  QuitConfirmBar,
+  Footer
+} from "./components/overlays.js";
 
 // Screens
 import { SummaryScreen } from "./screens/summary.js";
@@ -51,7 +57,7 @@ import { TopValuesScreen } from "./screens/tops.js";
  * Launch the interactive TUI for a completed citrx run.
  *
  * Renders the {@link CitrxExplorer} React/Ink application into the provided
- * runtime streams and blocks until the user quits (q / Escape).
+ * runtime streams and blocks until the user confirms quit (q / Escape, then y / Enter).
  *
  * @param run     The completed `CitrxRun` whose report and logs to explore.
  * @param runtime I/O streams and optional OpenAI client for AI features.
@@ -156,6 +162,7 @@ function Header({ run, columns }: { run: CitrxRun; columns: number }) {
 function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime }) {
   const { exit } = useApp();
   const { rows, columns } = useWindowSize();
+  const [quitConfirm, setQuitConfirm] = useState(false);
 
   const {
     screen,
@@ -268,7 +275,28 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     selectedLineKeys
   });
 
+  const requestExit = () => {
+    setQuitConfirm(true);
+    setMessage("Exit citrx? Press y/Enter to quit, Esc/n to stay");
+  };
+
   useInput((inputValue, key) => {
+    if (quitConfirm) {
+      if (inputValue === "y" || inputValue === "Y" || key.return) {
+        exit();
+        return;
+      }
+
+      if (inputValue === "n" || inputValue === "N" || inputValue === "b" || key.escape) {
+        setQuitConfirm(false);
+        setMessage("Exit cancelled");
+        return;
+      }
+
+      setMessage("Exit citrx? Press y/Enter to quit, Esc/n to stay");
+      return;
+    }
+
     if (sortMenu) {
       handleSortMenuInput({
         inputValue,
@@ -328,7 +356,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
         key,
         openAiAnswerLines,
         answerRows,
-        exit,
+        exit: requestExit,
         setOpenAiAnswer,
         setOpenAiAnswerScroll,
         setMessage
@@ -343,7 +371,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
         screen,
         detailLines,
         detailRows,
-        exit,
+        exit: requestExit,
         setDetailLine,
         setDetailScroll,
         setMessage
@@ -352,7 +380,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     }
 
     if (inputValue === "q" || (screen === "summary" && key.escape)) {
-      exit();
+      requestExit();
       return;
     }
 
@@ -544,6 +572,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     sortMenu ? React.createElement(SortMenuOverlay, { sortMenu, columns, rows }) : null,
     prompt ? React.createElement(PromptBar, { prompt, columns }) : null,
     exportNotice ? React.createElement(ExportNoticeBar, { notice: exportNotice, columns }) : null,
+    quitConfirm ? React.createElement(QuitConfirmBar, { columns }) : null,
     React.createElement(Footer, {
       screen,
       summaryFocus,

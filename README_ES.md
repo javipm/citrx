@@ -207,7 +207,7 @@ Space            selecciona fila actual
 A                selecciona filas visibles
 a                pregunta a OpenAI sobre vista/selección
 e                exporta contexto actual a JSON
-q                salir
+q                pide confirmación para salir
 ```
 
 ### Pantalla De Incidencia
@@ -228,7 +228,7 @@ s o S            abre menú de ordenación
 a                pregunta a OpenAI sobre esta incidencia/selección
 e                exporta contexto actual a JSON
 b                vuelve al resumen
-q                salir
+q                pide confirmación para salir
 ```
 
 El export de incidencia sólo aparece cuando todos los requests relacionados han
@@ -273,7 +273,7 @@ Tab              cambia panel
 Enter            aplica filtro usando el valor seleccionado
 a                pregunta a OpenAI sobre los tops visibles
 t / b / Esc      volver
-q                salir
+q                pide confirmación para salir
 ```
 
 Si hay un filtro activo, los tops se calculan sobre el subconjunto filtrado.
@@ -286,7 +286,7 @@ método, status, bytes, path, target, user-agent y línea raw con wrapping.
 ```text
 ↑/↓ PgUp/PgDn    scroll
 d / b / Esc      cerrar
-q                salir
+q                pide confirmación para salir
 ```
 
 ## Filtros

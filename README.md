@@ -206,7 +206,7 @@ Space            select current row
 A                select visible rows
 a                ask OpenAI about current view/selection
 e                export current context to JSON
-q                quit
+q                ask before quit
 ```
 
 ### Incident Screen
@@ -227,7 +227,7 @@ s or S           open sort menu
 a                ask OpenAI about this incident/selection
 e                export current context to JSON
 b                back to summary
-q                quit
+q                ask before quit
 ```
 
 Incident export is shown only after all related rows have finished loading, so
@@ -271,7 +271,7 @@ Tab              switch panel
 Enter            apply a filter using selected value
 a                ask OpenAI about the visible top values
 t / b / Esc      back
-q                quit
+q                ask before quit
 ```
 
 If a filter is active, top values are computed from the filtered subset.
@@ -284,7 +284,7 @@ method, status, bytes, path, target, user-agent, and raw line with wrapping.
 ```text
 ↑/↓ PgUp/PgDn    scroll
 d / b / Esc      close
-q                quit
+q                ask before quit
 ```
 
 ## Filtering
