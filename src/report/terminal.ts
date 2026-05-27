@@ -2,10 +2,22 @@ import pc from "picocolors";
 
 import type { AnalyzeReport, Incident, TopItem } from "../analysis/types.js";
 
+/** Options for controlling terminal report rendering. */
 export interface TerminalReportOptions {
+  /** Force color output on or off. Defaults to auto-detection via picocolors. */
   color?: boolean;
 }
 
+/**
+ * Renders a full analysis report as a colored terminal string.
+ *
+ * Outputs summary stats, top lists (IPs, paths, user agents, etc.), AI bot
+ * activity, and incident panels separated by kind ("compromise" vs "saturation").
+ *
+ * @param report - The analysis report produced by the analysis pipeline.
+ * @param options - Optional rendering options (e.g. force color on/off).
+ * @returns A newline-terminated string ready to print to stdout.
+ */
 export function renderTerminalReport(
   report: AnalyzeReport,
   options: TerminalReportOptions = {}
@@ -58,6 +70,14 @@ export function renderTerminalReport(
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * Renders the "Known AI bots" section, listing up to 10 bots with request
+ * counts, unique IP/path counts, and whether they requested `robots.txt`.
+ *
+ * @param report - The full analysis report.
+ * @param colors - A picocolors instance (may have color disabled).
+ * @returns A newline-joined string block for the AI bot section.
+ */
 function aiBotSection(
   report: AnalyzeReport,
   colors: ReturnType<typeof pc.createColors>
@@ -73,6 +93,14 @@ function aiBotSection(
   return lines.join("\n");
 }
 
+/**
+ * Renders a titled list of top-N items with right-aligned counts.
+ *
+ * @param title - Section heading (e.g. `"Top IPs"`).
+ * @param items - Array of `{ value, count }` items to display.
+ * @param colors - A picocolors instance.
+ * @returns A newline-joined string block, showing "none" when the list is empty.
+ */
 function section(
   title: string,
   items: TopItem[],
@@ -92,6 +120,18 @@ function section(
   return lines.join("\n");
 }
 
+/**
+ * Renders a titled panel of incidents, capped at 15 entries.
+ *
+ * Each entry shows a color-coded severity label, score, title, and optional
+ * evidence fields (ip, path, topPaths, prefix, request samples). Appends a
+ * "… and N more" line when the list exceeds 15.
+ *
+ * @param title - Panel heading (e.g. `"Security incidents (attacks)"`).
+ * @param incidents - Array of incidents to display.
+ * @param colors - A picocolors instance.
+ * @returns A newline-joined string block for the incident panel.
+ */
 function incidentPanel(
   title: string,
   incidents: Incident[],
@@ -144,6 +184,16 @@ function incidentPanel(
   return lines.join("\n");
 }
 
+/**
+ * Returns a color-coded, fixed-width (8 chars) severity label string.
+ *
+ * Color mapping: critical → red, high → magenta, medium → yellow,
+ * low → cyan, info → dim.
+ *
+ * @param value - Severity level from the incident.
+ * @param colors - A picocolors instance.
+ * @returns A padded, colored severity string.
+ */
 function severity(
   value: Incident["severity"],
   colors: ReturnType<typeof pc.createColors>

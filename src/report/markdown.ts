@@ -1,5 +1,13 @@
 import type { AnalyzeReport, Incident, TopItem } from "../analysis/types.js";
 
+/**
+ * Renders a GitHub-Flavored Markdown report from an `AnalyzeReport`.
+ * Sections: summary metrics, inputs, top-N tables, AI bot stats, incidents.
+ * The returned string always ends with a trailing newline.
+ *
+ * @param report - The analysis result produced by the detection pipeline.
+ * @returns A Markdown string ready to be written to a `.md` file.
+ */
 export function renderMarkdownReport(report: AnalyzeReport): string {
   const lines: string[] = [
     "# citrx access log analysis",
@@ -43,6 +51,14 @@ export function renderMarkdownReport(report: AnalyzeReport): string {
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * Builds the "Known AI Bots" Markdown section as a pipe table.
+ * Columns: Bot, Requests, IPs, Paths, Robots.txt.
+ * Renders a zero-row placeholder when no AI bot stats are present.
+ *
+ * @param report - Full analysis report; only `aiBotStats` is consumed.
+ * @returns A Markdown string for the AI bots section (no trailing newline).
+ */
 function aiBotSection(report: AnalyzeReport): string {
   const lines = [
     "## Known AI Bots",
@@ -65,6 +81,14 @@ function aiBotSection(report: AnalyzeReport): string {
   return lines.join("\n");
 }
 
+/**
+ * Builds a Markdown `##` section with a two-column (Count / Value) pipe table
+ * for a ranked list of top items. Renders a "none" row when the list is empty.
+ *
+ * @param title - Section heading text (rendered as `## title`).
+ * @param items - Ranked items, each with a `count` and a `value` string.
+ * @returns A Markdown string for the section (no trailing newline).
+ */
 function topSection(title: string, items: TopItem[]): string {
   const lines = [`## ${title}`, "", "| Count | Value |", "| ---: | --- |"];
 
@@ -77,6 +101,15 @@ function topSection(title: string, items: TopItem[]): string {
   return lines.join("\n");
 }
 
+/**
+ * Builds the "Incidents" Markdown section as a pipe table.
+ * Each incident row is followed by up to 3 sample sub-rows (severity cell empty,
+ * category cell `sample`, evidence cell contains the backtick-wrapped request line).
+ * Renders a placeholder row when there are no incidents.
+ *
+ * @param incidents - Array of incidents from the analysis report.
+ * @returns A Markdown string for the incidents section (no trailing newline).
+ */
 function incidentSection(incidents: Incident[]): string {
   const lines = [
     "## Incidents",
@@ -106,6 +139,13 @@ function incidentSection(incidents: Incident[]): string {
   return lines.join("\n");
 }
 
+/**
+ * Escapes a value for safe insertion into a Markdown pipe table cell.
+ * Replaces literal `|` with `\|` and collapses newlines to a single space.
+ *
+ * @param value - Raw string, number, or boolean to escape.
+ * @returns The Markdown-safe string representation.
+ */
 function escapeCell(value: string | number | boolean): string {
   return String(value).replaceAll("|", "\\|").replaceAll("\n", " ");
 }

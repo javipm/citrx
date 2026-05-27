@@ -6,28 +6,67 @@ const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", 
 const SPINNER_INTERVAL_MS = 80;
 const CLEAR_LINE = "\r[2K";
 
+/** Options accepted by {@link createProgressReporter}. */
 export interface ProgressReporterOptions {
+  /** Output stream to write progress text to (e.g. `process.stderr`). */
   stream: Writable;
+  /** When `false`, a no-op reporter is returned and nothing is written to `stream`. */
   enabled: boolean;
+  /** When `true`, ANSI colour codes are applied to output. */
   color: boolean;
+  /** When `true`, a spinning TTY reporter is used; otherwise a plain line-per-event reporter. */
   isTty: boolean;
 }
 
+/** Public API returned by {@link createProgressReporter}. */
 export interface ProgressReporter {
+  /** Starts a new progress indicator with the given label, replacing any active one. */
   start(label: string): void;
+  /** Updates the label of the currently active progress indicator. */
   update(label: string): void;
+  /**
+   * Marks the current step as succeeded.
+   * @param label Override label; defaults to the label passed to {@link start}.
+   */
   succeed(label?: string): void;
+  /**
+   * Marks the current step as failed.
+   * @param label Override label; defaults to the label passed to {@link start}.
+   */
   fail(label?: string): void;
+  /**
+   * Convenience wrapper: calls {@link start}, awaits `work()`, then calls
+   * {@link succeed} on resolution or {@link fail} on rejection before re-throwing.
+   *
+   * @param label Label shown during and after execution.
+   * @param work Async function to execute.
+   * @returns The resolved value of `work`.
+   */
   withStep<T>(label: string, work: () => Promise<T>): Promise<T>;
 }
 
+/** Internal state for the currently running TTY spinner. */
 interface ActiveSpinner {
+  /** Currently displayed label text. */
   label: string;
+  /** `Date.now()` timestamp when the spinner was started. */
   startedAt: number;
+  /** Interval handle returned by `setInterval`. */
   timer: NodeJS.Timeout;
+  /** Current frame index into {@link SPINNER_FRAMES}. */
   frame: number;
 }
 
+/**
+ * Creates a {@link ProgressReporter} appropriate for the runtime environment.
+ *
+ * - `enabled: false` → no-op reporter (silent).
+ * - `isTty: true`    → animated spinner that redraws on the same line every 80 ms.
+ * - `isTty: false`   → plain reporter that emits one line per event with elapsed time.
+ *
+ * @param options Configuration for the reporter.
+ * @returns A {@link ProgressReporter} instance.
+ */
 export function createProgressReporter(
   options: ProgressReporterOptions
 ): ProgressReporter {
@@ -42,6 +81,7 @@ export function createProgressReporter(
   return plainReporter(options);
 }
 
+/** Returns a {@link ProgressReporter} whose every method is a no-op. Used when `enabled` is `false`. */
 function noopReporter(): ProgressReporter {
   return {
     start() {},
@@ -54,6 +94,11 @@ function noopReporter(): ProgressReporter {
   };
 }
 
+/**
+ * Plain-text reporter for non-TTY outputs (e.g. CI logs, piped streams).
+ * Writes one line per event prefixed with `…`, `✓`, or `✗`, including elapsed
+ * time on completion.
+ */
 function plainReporter(options: ProgressReporterOptions): ProgressReporter {
   const dim = options.color ? pc.dim : (text: string) => text;
   const green = options.color ? pc.green : (text: string) => text;
@@ -101,6 +146,11 @@ function plainReporter(options: ProgressReporterOptions): ProgressReporter {
   };
 }
 
+/**
+ * Animated spinner reporter for interactive TTY sessions.
+ * Uses `\r\x1b[2K` to overwrite the current line at {@link SPINNER_INTERVAL_MS} ms intervals.
+ * Finalises each step with a `✓` or `✗` line including elapsed time.
+ */
 function ttyReporter(options: ProgressReporterOptions): ProgressReporter {
   const dim = options.color ? pc.dim : (text: string) => text;
   const yellow = options.color ? pc.yellow : (text: string) => text;
@@ -186,6 +236,15 @@ function ttyReporter(options: ProgressReporterOptions): ProgressReporter {
   };
 }
 
+/**
+ * Formats a millisecond duration as a human-readable string.
+ * - `< 1 000 ms` → `"NNNms"`
+ * - `< 60 s`     → `"N.Ns"`
+ * - `≥ 60 s`     → `"NmNs"`
+ *
+ * @param ms Duration in milliseconds.
+ * @returns Formatted string, e.g. `"450ms"`, `"3.2s"`, `"1m5s"`.
+ */
 function formatElapsed(ms: number): string {
   if (ms < 1000) {
     return `${ms}ms`;

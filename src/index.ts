@@ -19,17 +19,46 @@ import { APP_NAME, VERSION } from "./version.js";
 
 type OutputFormat = "terminal" | "json" | "markdown" | "html";
 
+/**
+ * Callback that opens the interactive TUI for a completed analysis run.
+ * Receives a fully-populated {@link CitrxRun} and resolves when the UI exits.
+ */
 export type InteractiveLauncher = (run: CitrxRun) => Promise<void>;
 
+/**
+ * I/O dependencies and environment context injected into the CLI.
+ * Decouples the program from `process.*` globals, enabling testability
+ * and custom embedding scenarios.
+ */
 export interface CliRuntime {
+  /** Destination for normal program output. */
   stdout: Writable;
+  /** Destination for progress messages, banners, and error text. */
   stderr: Writable;
+  /** Source used when `-` is passed as an input path. */
   stdin: Readable;
+  /** Whether stdin is a TTY; controls automatic stdin-as-source fallback. */
   stdinIsTTY: boolean;
+  /** Process environment variables (e.g. `NO_COLOR`, `CITRX_QUIET`). */
   env: NodeJS.ProcessEnv;
+  /**
+   * Optional override for launching the interactive TUI.
+   * When omitted, the default `openRunTui` implementation is used.
+   */
   openInteractive?: InteractiveLauncher;
 }
 
+/**
+ * Builds and returns a configured Commander.js {@link Command} instance.
+ *
+ * Registers all CLI options and flags, wires output streams to `runtime`,
+ * and attaches the root action that delegates to `runRootAnalysis`.
+ * The program uses `exitOverride()` so Commander errors are thrown rather
+ * than calling `process.exit`.
+ *
+ * @param runtime - I/O context and environment to bind to the program.
+ * @returns Configured Commander program ready for `parseAsync`.
+ */
 export function createProgram(runtime: CliRuntime): Command {
   const program = new Command();
 
@@ -221,6 +250,13 @@ function parseFormatOption(value: unknown): FormatChoice {
   );
 }
 
+/**
+ * Parses the `--top <n>` option value into a positive integer.
+ *
+ * @param value - Raw option value from Commander (string or undefined).
+ * @returns Parsed positive integer to use as the top-N list limit.
+ * @throws {Error} If the value is not a valid positive integer.
+ */
 function parseTopOption(value: unknown): number {
   const parsed = Number.parseInt(String(value ?? "20"), 10);
 
@@ -231,6 +267,14 @@ function parseTopOption(value: unknown): number {
   return parsed;
 }
 
+/**
+ * Parses a `--since` or `--until` option value into a `Date`.
+ *
+ * @param value - Raw option value from Commander (string or undefined).
+ * @param flag - Flag name used in the error message (e.g. `"--since"`).
+ * @returns Parsed `Date`, or `undefined` when the option was not provided.
+ * @throws {Error} If the value is present but cannot be parsed as a valid date.
+ */
 function parseDateOption(value: unknown, flag: string): Date | undefined {
   if (value === undefined) {
     return undefined;
@@ -310,6 +354,20 @@ function renderReport(
   }
 }
 
+/**
+ * Main async entry point for the CLI.
+ *
+ * Creates a fully-resolved {@link CliRuntime} (falling back to `process.*`
+ * globals for any omitted fields), builds the Commander program, and runs it
+ * against `argv`. Commander and analysis errors are caught and written to
+ * stderr rather than propagating.
+ *
+ * @param argv - Argument vector, typically `process.argv`.
+ * @param runtime - Optional partial runtime overrides; unset fields default to
+ *   their `process.*` equivalents.
+ * @returns Exit code: `0` on success, `1` on unhandled error, or the
+ *   Commander-supplied exit code on a usage/version event.
+ */
 export async function runCli(
   argv: string[],
   runtime: Partial<CliRuntime> = {}

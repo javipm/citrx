@@ -1,5 +1,12 @@
 import type { AnalyzeReport, Incident, TopItem } from "../analysis/types.js";
 
+/**
+ * Renders a complete, self-contained HTML report from an `AnalyzeReport`.
+ * Embeds all CSS inline; the returned string is a full `<!doctype html>` document.
+ *
+ * @param report - The analysis result produced by the detection pipeline.
+ * @returns A UTF-8 HTML string ready to be written to a file or served over HTTP.
+ */
 export function renderHtmlReport(report: AnalyzeReport): string {
   return `<!doctype html>
 <html lang="en">
@@ -81,6 +88,13 @@ export function renderHtmlReport(report: AnalyzeReport): string {
 `;
 }
 
+/**
+ * Builds an HTML `<table>` summarising per-bot AI crawler statistics.
+ * Columns: Bot name, total requests, unique IPs, unique paths, robots.txt hit.
+ *
+ * @param report - Full analysis report; only `aiBotStats` is consumed.
+ * @returns An HTML table string (no surrounding `<section>` wrapper).
+ */
 function aiBotTable(report: AnalyzeReport): string {
   return `<table>
     <thead><tr><th>Bot</th><th>Requests</th><th>IPs</th><th>Paths</th><th>Robots.txt</th></tr></thead>
@@ -93,10 +107,25 @@ function aiBotTable(report: AnalyzeReport): string {
   </table>`;
 }
 
+/**
+ * Renders a single summary metric card `<div>` with a label and a bold value.
+ *
+ * @param label - Short human-readable label (e.g. `"Files"`).
+ * @param value - Numeric or string value to display prominently.
+ * @returns An HTML `<div class="metric">` string.
+ */
 function metric(label: string, value: string | number): string {
   return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
 }
 
+/**
+ * Builds a titled `<div>` containing a two-column (Count / Value) HTML table
+ * for a ranked list of top items. Renders "none" when the list is empty.
+ *
+ * @param title - Section heading rendered as an `<h2>`.
+ * @param items - Ranked items, each with a `count` and a `value` string.
+ * @returns An HTML `<div>` wrapping the heading and table.
+ */
 function topTable(title: string, items: TopItem[]): string {
   const rows =
     items.length === 0
@@ -111,6 +140,14 @@ function topTable(title: string, items: TopItem[]): string {
   return `<div><h2>${escapeHtml(title)}</h2><table><thead><tr><th>Count</th><th>Value</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
+/**
+ * Builds a full HTML `<table>` for all detected incidents.
+ * Returns a `<p>` message when there are no incidents.
+ * Delegates each row to {@link incidentRow}.
+ *
+ * @param incidents - Array of incidents from the analysis report.
+ * @returns An HTML table string, or a "No incidents" paragraph.
+ */
 function incidentTable(incidents: Incident[]): string {
   if (incidents.length === 0) {
     return "<p>No incidents detected.</p>";
@@ -122,6 +159,14 @@ function incidentTable(incidents: Incident[]): string {
   </table>`;
 }
 
+/**
+ * Renders a single incident as an HTML `<tr>`.
+ * Severity gets a CSS class (`severity-critical`, `severity-high`, etc.) for colour coding.
+ * Up to 3 sample request lines are shown as `<code>` blocks in the last cell.
+ *
+ * @param incident - A single detected incident.
+ * @returns An HTML `<tr>` string.
+ */
 function incidentRow(incident: Incident): string {
   const evidence = incident.evidence
     .map((item) => `${item.key}=${item.value}`)
@@ -140,6 +185,13 @@ function incidentRow(incident: Incident): string {
   </tr>`;
 }
 
+/**
+ * Escapes a value for safe inline HTML insertion.
+ * Replaces `&`, `<`, `>`, and `"` with their HTML entity equivalents.
+ *
+ * @param value - Raw string, number, or boolean to escape.
+ * @returns The HTML-safe string representation.
+ */
 function escapeHtml(value: string | number | boolean): string {
   return String(value)
     .replaceAll("&", "&amp;")

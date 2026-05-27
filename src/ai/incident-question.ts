@@ -2,22 +2,35 @@ import OpenAI from "openai";
 
 import type { AnalyzeReport, Incident, IncidentLogLine, TopItem } from "../analysis/types.js";
 
+/** Input parameters for asking an AI question about an incident or report. */
 export interface AskIncidentQuestionInput {
+  /** Full analysis report providing summary, stats, and incident list. */
   report: AnalyzeReport;
+  /** Specific incident to focus on; omit for a report-level question. */
   incident?: Incident;
+  /** Log lines associated with the report or incident. */
   lines: IncidentLogLine[];
+  /** The question to send to the AI. */
   question: string;
+  /** Process environment supplying API keys and config vars. */
   env: NodeJS.ProcessEnv;
+  /** Whether the question targets the overall summary or a single incident. Defaults to "incident" when `incident` is set, otherwise "summary". */
   scope?: "summary" | "incident";
 }
 
+/** Result returned after the AI answers an incident question. */
 export interface AskIncidentQuestionResult {
+  /** The AI-generated answer text. */
   answer: string;
+  /** OpenAI model name used for the request. */
   model: string;
+  /** Number of log lines included in the payload sent to the AI. */
   sentLines: number;
+  /** Total character count of the payload sent to the AI. */
   sentChars: number;
 }
 
+/** Contract for a client that can answer questions about incidents using AI. */
 export interface IncidentQuestionClient {
   ask(input: AskIncidentQuestionInput): Promise<AskIncidentQuestionResult>;
 }
@@ -28,6 +41,18 @@ type ResponseCreate = (body: {
   input: string;
 }) => Promise<{ output_text: string }>;
 
+/**
+ * OpenAI-backed implementation of {@link IncidentQuestionClient}.
+ *
+ * Reads `OPENAI_API_KEY` from `input.env`. Optionally accepts a custom
+ * `createResponse` factory (useful for testing without hitting the API).
+ *
+ * Env vars consumed:
+ * - `OPENAI_API_KEY` — required; the OpenAI secret key.
+ * - `CITRX_OPENAI_MODEL` — model to use (default: `gpt-5.4-mini`).
+ * - `CITRX_AI_MAX_LINES` — max log lines to include (default: 200).
+ * - `CITRX_AI_MAX_CHARS` — max payload character budget (default: 60 000).
+ */
 export class OpenAiIncidentQuestionClient implements IncidentQuestionClient {
   constructor(private readonly createResponse?: ResponseCreate) {}
 
@@ -66,6 +91,20 @@ export class OpenAiIncidentQuestionClient implements IncidentQuestionClient {
   }
 }
 
+/**
+ * Serializes the report, incident, and log lines from `input` into a compact
+ * JSON string suitable for sending to the OpenAI responses API.
+ *
+ * Log lines are pipe-delimited and user-agents are pooled into a reference map
+ * to reduce token usage. If the resulting payload exceeds `maxChars` it is
+ * progressively shrunk: lines are trimmed first, then optional fields
+ * (`ipBehavior`, `time`) are dropped.
+ *
+ * @param input - The question input containing report data and log lines.
+ * @param maxLines - Maximum number of log lines to include before truncating. Defaults to `CITRX_AI_MAX_LINES` or 200.
+ * @param maxChars - Character budget for the final payload. Defaults to `CITRX_AI_MAX_CHARS` or 60 000.
+ * @returns The serialized payload string and the number of log lines it contains.
+ */
 export function buildAiContext(
   input: AskIncidentQuestionInput,
   maxLines = parseMaxLines(input.env.CITRX_AI_MAX_LINES),
@@ -144,6 +183,10 @@ function shrinkContextForBudget(
   return JSON.stringify({ ...context, time: undefined, ipBehavior: [], lines: keptLines });
 }
 
+/**
+ * Parses the `CITRX_AI_MAX_LINES` env var string into a positive integer.
+ * Returns 200 if the value is missing, non-numeric, or less than 1.
+ */
 export function parseMaxLines(value: string | undefined): number {
   const parsed = Number.parseInt(value ?? "200", 10);
 
@@ -154,6 +197,10 @@ export function parseMaxLines(value: string | undefined): number {
   return parsed;
 }
 
+/**
+ * Parses the `CITRX_AI_MAX_CHARS` env var string into a positive integer.
+ * Returns 60 000 if the value is missing, non-numeric, or less than 1 000.
+ */
 export function parseMaxChars(value: string | undefined): number {
   const parsed = Number.parseInt(value ?? "60000", 10);
 
