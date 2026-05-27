@@ -5,6 +5,13 @@ const CORRELATION_BONUS = 10;
 const PERSISTENCE_BONUS = 15;
 const AI_LEGIT_PENALTY = -10;
 const AI_LEGIT_MAX_REQUESTS = 5000;
+const PERSISTENCE_EXCLUDED_CATEGORIES = new Set(["abusive_crawling", "ai_scraper", "post_hotspot"]);
+const PERSISTENCE_EXCLUDED_ID_PREFIXES = [
+  "ai_scraper_known:",
+  "abusive_crawl:",
+  "query_explosion:",
+  "post_hotspot:"
+];
 
 export function applyScoringMultipliers(incidents: Incident[]): Incident[] {
   const correlatedIps = buildCorrelatedIps(incidents);
@@ -18,15 +25,9 @@ export function applyScoringMultipliers(incidents: Incident[]): Incident[] {
     }
 
     // Persistence bonus rewards attacks/abuse that go on for a long time.
-    // AI scrapers/crawlers naturally run for weeks — exclude them so legit
-    // bots don't auto-inflate to high severity.
-    if (
-      !incident.id.startsWith("ai_scraper_known:") &&
-      !incident.id.startsWith("abusive_crawl:") &&
-      !incident.id.startsWith("query_explosion:") &&
-      !incident.id.startsWith("post_hotspot:") &&
-      isPersistent(incident)
-    ) {
+    // Aggregate/crawler panels naturally span long windows, so do not let
+    // persistence alone inflate their severity.
+    if (!excludesPersistenceBonus(incident) && isPersistent(incident)) {
       score += PERSISTENCE_BONUS;
     }
 
@@ -42,6 +43,13 @@ export function applyScoringMultipliers(incidents: Incident[]): Incident[] {
       severity: severityFromScore(score)
     };
   });
+}
+
+function excludesPersistenceBonus(incident: Incident): boolean {
+  return (
+    PERSISTENCE_EXCLUDED_CATEGORIES.has(incident.category) ||
+    PERSISTENCE_EXCLUDED_ID_PREFIXES.some((prefix) => incident.id.startsWith(prefix))
+  );
 }
 
 export function severityFromScore(score: number): IncidentSeverity {

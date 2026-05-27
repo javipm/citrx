@@ -557,6 +557,36 @@ describe("local rules", () => {
     );
   });
 
+  it("does not let 5xx distress override a dominant 4xx block outcome", () => {
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/catalog/blocked-but-crashing",
+        count: 11_000,
+        bytes: 100_000_000,
+        ipCounts: ipCounts(500, 11_000),
+        queryVariants: new Set(Array.from({ length: 10_500 }, (_, index) => `?q=facet-${index}`)),
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 900,
+        status3xx: 0,
+        status4xx: 10_000,
+        status5xx: 100,
+        maxServedPerMinute: 100,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "abusive_crawl:/catalog/blocked-but-crashing",
+          kind: "noise"
+        })
+      ])
+    );
+  });
+
   it("promotes to saturation at lower volume when query-variant signal is very strong", () => {
     // Real case: /calzado-trekking-hombre-goretex with 1160 req, 1034 unique variants (~89%).
     // Ratio ≥ 0.75 (high-signal threshold) → saturation applies even below 10k served.
@@ -729,5 +759,39 @@ describe("local rules", () => {
     ]);
 
     expect(incidents).toEqual([]);
+  });
+
+  it("does report exact index.php when server distress shows real app impact", () => {
+    const counts = new Map<string, number>();
+    for (let index = 0; index < 20; index += 1) {
+      counts.set(`203.0.113.${index}`, 600);
+    }
+
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/index.php",
+        count: 12_000,
+        bytes: 250_000_000,
+        ipCounts: counts,
+        queryVariants: new Set(),
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 11_900,
+        status3xx: 0,
+        status4xx: 0,
+        status5xx: 100,
+        maxServedPerMinute: 20,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual([
+      expect.objectContaining({
+        id: "abusive_crawl:/index.php",
+        kind: "saturation",
+        title: "Concentrated URL pressure"
+      })
+    ]);
   });
 });

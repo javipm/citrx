@@ -195,6 +195,7 @@ const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REQUESTS = 5_000;
 const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REPEATED_IPS = 10;
 const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_SHARE = 0.75;
 const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_PEAK = 20;
+const CRAWL_SATURATION_MAX_BLOCKED_RATIO = 5;
 const CRAWL_SATURATION_MIN_5XX_DISTRESS = 100;
 const POST_HOTSPOT_MIN_REQUESTS = 200;
 const QUERY_EXPLOSION_MIN_REQUESTS = 500;
@@ -256,27 +257,18 @@ const PAYLOAD_PREFIXES = [
   ".old"
 ];
 
+const COMMON_METHODS = new Set(["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "PATCH"]);
+
 export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
   const rawLower = entry.target.toLowerCase();
 
   // Fast path: skip expensive decode + regex if no known payload prefix present
   if (!PAYLOAD_PREFIXES.some((prefix) => rawLower.includes(prefix))) {
     // Still check rare method (PUT/DELETE/PATCH are standard REST and excluded).
-    if (["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "PATCH"].includes(entry.method)) {
+    if (COMMON_METHODS.has(entry.method)) {
       return [];
     }
-    return [
-      {
-        ruleId: "rare_method",
-        category: "http_anomaly",
-        kind: "noise" as IncidentKind,
-        severity: "medium" as IncidentSeverity,
-        score: 55,
-        title: "Rare HTTP method",
-        description: "Request uses an uncommon HTTP method for public web traffic.",
-        sample: `${entry.method} ${redactTarget(entry.target)}`
-      }
-    ];
+    return [buildRareMethodHit(entry)];
   }
 
   const target = normalizeForMatching(entry.target);
@@ -298,20 +290,24 @@ export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
   }
 
   // PUT/DELETE/PATCH are standard REST methods. Truly rare = TRACE/CONNECT/DEBUG.
-  if (!["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "PATCH"].includes(entry.method)) {
-    hits.push({
-      ruleId: "rare_method",
-      category: "http_anomaly",
-      kind: "noise" as IncidentKind,
-      severity: "medium" as IncidentSeverity,
-      score: 55,
-      title: "Rare HTTP method",
-      description: "Request uses an uncommon HTTP method for public web traffic.",
-      sample: `${entry.method} ${redactTarget(entry.target)}`
-    });
+  if (!COMMON_METHODS.has(entry.method)) {
+    hits.push(buildRareMethodHit(entry));
   }
 
   return hits;
+}
+
+function buildRareMethodHit(entry: AccessLogEntry): RuleHit {
+  return {
+    ruleId: "rare_method",
+    category: "http_anomaly",
+    kind: "noise" as IncidentKind,
+    severity: "medium" as IncidentSeverity,
+    score: 55,
+    title: "Rare HTTP method",
+    description: "Request uses an uncommon HTTP method for public web traffic.",
+    sample: `${entry.method} ${redactTarget(entry.target)}`
+  };
 }
 
 /** Static asset paths produce huge query/path counts naturally (cache-busters,
@@ -544,6 +540,10 @@ function materialPathSaturationSignal(
     return null;
   }
 
+  if (blockedDominates(stats, servedCount)) {
+    return null;
+  }
+
   if (stats.status5xx >= CRAWL_SATURATION_MIN_5XX_DISTRESS) {
     return crawlSignal.queryVariantRatio >= CRAWL_SATURATION_MIN_QUERY_VARIANT_RATIO
       ? "query_churn"
@@ -607,8 +607,7 @@ function hasSustainedQuerySaturation(
     servedCount < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_REQUESTS ||
     stats.queryVariants.size < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_VARIANTS ||
     crawlSignal.queryVariantRatio < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_RATIO ||
-    stats.status4xx > servedCount * 5 ||
-    stats.status3xx > servedCount * 5
+    blockedDominates(stats, servedCount)
   ) {
     return false;
   }
@@ -635,8 +634,14 @@ function hasSustainedRepeatSaturation(
     crawlSignal.repeatedIps >= CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REPEATED_IPS &&
     crawlSignal.repeatedRequestShare >= CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_SHARE &&
     maxServedPerMinute >= CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_PEAK &&
-    stats.status4xx <= servedCount * 5 &&
-    stats.status3xx <= servedCount * 5
+    !blockedDominates(stats, servedCount)
+  );
+}
+
+function blockedDominates(stats: PathStats, servedCount: number): boolean {
+  return (
+    stats.status4xx > servedCount * CRAWL_SATURATION_MAX_BLOCKED_RATIO ||
+    stats.status3xx > servedCount * CRAWL_SATURATION_MAX_BLOCKED_RATIO
   );
 }
 

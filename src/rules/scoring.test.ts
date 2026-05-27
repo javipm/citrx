@@ -7,11 +7,12 @@ function incident(
   id: string,
   score: number,
   evidence: IncidentEvidence[] = [],
-  severity: Incident["severity"] = severityFromScore(score)
+  severity: Incident["severity"] = severityFromScore(score),
+  category = "test"
 ): Incident {
   return {
     id,
-    category: "test",
+    category,
     severity,
     score,
     title: id,
@@ -124,6 +125,23 @@ describe("scoring multipliers", () => {
     ]);
 
     expect(scored).toMatchObject({ score: 75, severity: "high" });
+  });
+
+  it("does not add persistence bonus to future abusive crawling aggregate ids", () => {
+    const [scored] = applyScoringMultipliers([
+      incident(
+        "future_route_abuse:/hot",
+        70,
+        [
+          { key: "firstSeen", value: "2026-05-25T00:00:00.000Z" },
+          { key: "lastSeen", value: "2026-05-25T01:00:00.000Z" }
+        ],
+        "medium",
+        "abusive_crawling"
+      )
+    ]);
+
+    expect(scored).toMatchObject({ score: 70, severity: "medium" });
   });
 
   it("penalizes moderate AI bots that requested robots.txt", () => {
