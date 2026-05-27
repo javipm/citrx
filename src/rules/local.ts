@@ -154,6 +154,11 @@ const CRAWL_MIN_QUERY_VARIANT_RATIO = 0.2;
 const CRAWL_MIN_REPEATED_IPS = 10;
 const CRAWL_REPEATED_IP_REQUESTS = 5;
 const CRAWL_MIN_REPEATED_REQUEST_SHARE = 0.45;
+const CRAWL_SATURATION_MIN_REQUESTS = 10_000;
+const CRAWL_SATURATION_MIN_QUERY_VARIANTS = 1_000;
+const CRAWL_SATURATION_MIN_QUERY_VARIANT_RATIO = 0.5;
+const CRAWL_SATURATION_MIN_REPEATED_IPS = 20;
+const CRAWL_SATURATION_MIN_REPEATED_REQUEST_SHARE = 0.8;
 const POST_HOTSPOT_MIN_REQUESTS = 200;
 const QUERY_EXPLOSION_MIN_REQUESTS = 500;
 const QUERY_EXPLOSION_MIN_VARIANTS = 150;
@@ -298,18 +303,20 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
     const crawlSignal = highVolumeCrawlSignal(stats);
 
     if (crawlSignal) {
-      // Distributed multi-IP crawling on popular pages is indistinguishable from
-      // normal high-traffic e-commerce browsing (cart, category, search). Keep
-      // the data for forensics but classify as noise so it stays out of the
-      // saturation panel.
+      const saturationSignal = materialPathSaturationSignal(stats, crawlSignal);
+
       incidents.push({
         id: `abusive_crawl:${stats.path}`,
         category: "abusive_crawling",
-        kind: "noise",
-        severity: "medium",
-        score: 55,
-        title: "Distributed high-volume path crawling",
-        description: "Many clients repeatedly requested a non-entrypoint path.",
+        kind: saturationSignal ? "saturation" : "noise",
+        severity: saturationSignal ? "high" : "medium",
+        score: saturationSignal ? 75 : 55,
+        title: saturationSignal
+          ? "Distributed URL saturation"
+          : "Distributed high-volume path crawling",
+        description: saturationSignal
+          ? "A non-entrypoint URL received material distributed request pressure."
+          : "Many clients repeatedly requested a non-entrypoint path.",
         evidence: [
           { key: "path", value: stats.path },
           { key: "requests", value: stats.count },
@@ -405,6 +412,28 @@ function highVolumeCrawlSignal(stats: PathStats): {
         queryVariantRatio
       }
     : null;
+}
+
+function materialPathSaturationSignal(
+  stats: PathStats,
+  crawlSignal: {
+    repeatedIps: number;
+    repeatedRequestShare: number;
+    queryVariantRatio: number;
+  }
+): boolean {
+  if (stats.count < CRAWL_SATURATION_MIN_REQUESTS) {
+    return false;
+  }
+
+  const hasMaterialQueryChurn =
+    stats.queryVariants.size >= CRAWL_SATURATION_MIN_QUERY_VARIANTS &&
+    crawlSignal.queryVariantRatio >= CRAWL_SATURATION_MIN_QUERY_VARIANT_RATIO;
+  const hasMaterialRepeatPressure =
+    crawlSignal.repeatedIps >= CRAWL_SATURATION_MIN_REPEATED_IPS &&
+    crawlSignal.repeatedRequestShare >= CRAWL_SATURATION_MIN_REPEATED_REQUEST_SHARE;
+
+  return hasMaterialQueryChurn || hasMaterialRepeatPressure;
 }
 
 function isLowSignalEntryPath(path: string): boolean {

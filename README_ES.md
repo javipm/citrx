@@ -412,11 +412,11 @@ del 10%** para evitar alertar sobre scanners de 404 típicos.
 
 ### Reglas Agregadas Por Path
 
-| Prefijo ID         | Categoría          | Kind       | Qué significa                                                    |
-| ------------------ | ------------------ | ---------- | ---------------------------------------------------------------- |
-| `abusive_crawl:`   | `abusive_crawling` | noise      | path no entrypoint con alto volumen repetido por muchos clientes |
-| `query_explosion:` | `abusive_crawling` | noise      | un path con muchas variantes de query string                     |
-| `post_hotspot:`    | `post_hotspot`     | saturation | endpoint con muchas peticiones POST                              |
+| Prefijo ID         | Categoría          | Kind             | Qué significa                                                  |
+| ------------------ | ------------------ | ---------------- | -------------------------------------------------------------- |
+| `abusive_crawl:`   | `abusive_crawling` | saturation/noise | path no entrypoint con presión material o crawling distribuido |
+| `query_explosion:` | `abusive_crawling` | noise            | un path con muchas variantes de query string                   |
+| `post_hotspot:`    | `post_hotspot`     | saturation       | endpoint con muchas peticiones POST                            |
 
 ### Rate Y DDoS
 

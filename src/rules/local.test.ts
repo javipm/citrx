@@ -130,10 +130,33 @@ describe("local rules", () => {
 
     expect(incidents).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: "abusive_crawl:/hot" }),
+        expect.objectContaining({ id: "abusive_crawl:/hot", kind: "noise" }),
         expect.objectContaining({ id: "post_hotspot:/login" })
       ])
     );
+  });
+
+  it("promotes material distributed URL pressure to saturation", () => {
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/zapatillas-mujer-trail",
+        count: 10_000,
+        bytes: 520_508_800,
+        ipCounts: ipCounts(50, 10_000),
+        queryVariants: new Set(Array.from({ length: 5_000 }, (_, index) => `?fbclid=${index}`)),
+        postCount: 0
+      }
+    ]);
+
+    expect(incidents).toEqual([
+      expect.objectContaining({
+        id: "abusive_crawl:/zapatillas-mujer-trail",
+        kind: "saturation",
+        severity: "high",
+        score: 75,
+        title: "Distributed URL saturation"
+      })
+    ]);
   });
 
   it("does not report entrypoint traffic as distributed crawling", () => {

@@ -409,11 +409,11 @@ ratio** to avoid flagging typical 404 scanners.
 
 ### Aggregate Path Rules
 
-| ID prefix          | Category           | Kind       | Meaning                                                              |
-| ------------------ | ------------------ | ---------- | -------------------------------------------------------------------- |
-| `abusive_crawl:`   | `abusive_crawling` | noise      | high-volume non-entrypoint path repeatedly requested by many clients |
-| `query_explosion:` | `abusive_crawling` | noise      | one path requested with many query variants                          |
-| `post_hotspot:`    | `post_hotspot`     | saturation | endpoint receives unusually many POST requests                       |
+| ID prefix          | Category           | Kind             | Meaning                                                                 |
+| ------------------ | ------------------ | ---------------- | ----------------------------------------------------------------------- |
+| `abusive_crawl:`   | `abusive_crawling` | saturation/noise | material path pressure or distributed crawling on a non-entrypoint path |
+| `query_explosion:` | `abusive_crawling` | noise            | one path requested with many query variants                             |
+| `post_hotspot:`    | `post_hotspot`     | saturation       | endpoint receives unusually many POST requests                          |
 
 ### Rate And DDoS Rules
 
