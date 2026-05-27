@@ -202,8 +202,7 @@ Tab              switch focus between access log and incident panels
 PgUp/PgDn        page through rows
 Enter / d        open incident or request detail
 f or /           filter access-log rows
-s                cycle sort column
-S                toggle sort direction
+s or S           open sort menu
 t                open global top values
 Space            select current row
 A                select visible rows
@@ -226,13 +225,30 @@ t                open top values for this incident
 Space            select current row
 A                select visible rows
 f or /           filter rows
-s                cycle sort column
-S                toggle sort direction
+s or S           open sort menu
 a                ask OpenAI about this incident/selection
 e                export current context to JSON
 b                back to summary
 q                quit
 ```
+
+### Sort Menu
+
+Press `s` or `S` from the summary or incident screen to open a centered sort
+menu over the log. The menu lets you choose the sort field and direction before
+any expensive re-indexing happens.
+
+```text
+←/→              switch between field and direction columns
+↑/↓              choose field or direction
+Space            select current column and move to the next step
+Enter            apply sort and close the menu
+Esc / Backspace  cancel
+```
+
+Selected values are highlighted in the menu. When a large filtered/sorted view
+or top-value set is being computed, the TUI shows a loading status instead of
+appearing frozen.
 
 ### Top Values Screen
 

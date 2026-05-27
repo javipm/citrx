@@ -203,8 +203,7 @@ Tab              cambia foco entre access log y paneles de incidencias
 PgUp/PgDn        navega por páginas
 Enter / d        abre incidencia o detalle de request
 f o /            filtra filas del access log
-s                cambia columna de ordenación
-S                cambia dirección de ordenación
+s o S            abre menú de ordenación
 t                abre tops globales
 Space            selecciona fila actual
 A                selecciona filas visibles
@@ -227,13 +226,30 @@ t                abre tops de esta incidencia
 Space            selecciona fila actual
 A                selecciona filas visibles
 f o /            filtra filas
-s                cambia columna de ordenación
-S                cambia dirección de ordenación
+s o S            abre menú de ordenación
 a                pregunta a OpenAI sobre esta incidencia/selección
 e                exporta contexto actual a JSON
 b                vuelve al resumen
 q                salir
 ```
+
+### Menú De Ordenación
+
+Pulsa `s` o `S` desde la pantalla principal o de incidencia para abrir un menú
+centrado sobre el log. El menú permite elegir el campo y el sentido antes de
+lanzar cualquier reindexado costoso.
+
+```text
+←/→              cambia entre columnas de campo y dirección
+↑/↓              elige campo o dirección
+Space            selecciona la columna actual y avanza al siguiente paso
+Enter            aplica ordenación y cierra el menú
+Esc / Backspace  cancela
+```
+
+Los valores seleccionados aparecen resaltados en el menú. Cuando una vista
+filtrada/ordenada grande o unos tops se están recalculando, la TUI muestra un
+estado de carga para que no parezca bloqueada.
 
 ### Pantalla De Tops
 

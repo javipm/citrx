@@ -58,6 +58,7 @@ type TopScope = "summary" | "incident";
 type TopPanelKey = "ips" | "paths" | "userAgents" | "params" | "paramValues";
 type SortKey = "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
 type SortDirection = "asc" | "desc";
+type SortMenuFocus = "key" | "direction" | "apply";
 interface PromptInputState {
   value: string;
   cursor: number;
@@ -106,6 +107,7 @@ interface AccessTableColumns {
 }
 
 const TOP_PANEL_KEYS: TopPanelKey[] = ["ips", "paths", "userAgents", "params", "paramValues"];
+const SORT_KEYS: SortKey[] = ["timestamp", "ip", "status", "method", "path", "bytes"];
 const SPINNER_FRAMES = ["-", "\\", "|", "/"];
 
 export async function openRunTui(
@@ -165,6 +167,11 @@ function CitrxExplorer({
   const [openAiAnswer, setOpenAiAnswer] = useState<OpenAiAnswerState | undefined>();
   const [openAiAnswerScroll, setOpenAiAnswerScroll] = useState(0);
   const [prompt, setPrompt] = useState<PromptState | undefined>();
+  const [sortMenu, setSortMenu] = useState<{
+    sortKey: SortKey;
+    sortDirection: SortDirection;
+    focus: SortMenuFocus;
+  }>();
   const [message, setMessage] = useState("Ready");
   const [busy, setBusy] = useState(false);
   const [indexLoading, setIndexLoading] = useState(false);
@@ -189,16 +196,17 @@ function CitrxExplorer({
     () => summaryPageLines.filter((line) => selectedLineKeys.has(lineKey(line))),
     [summaryPageLines, selectedLineKeys]
   );
-  const pageSize = screen === "incident" ? Math.max(8, rows - 13) : Math.max(6, rows - 16);
-  const summaryPageSize = Math.max(8, rows - 15);
-  const detailRows = Math.max(6, rows - 6);
+  const controlRows = prompt ? 3 : 0;
+  const pageSize = screen === "incident" ? Math.max(4, rows - 13 - controlRows) : Math.max(4, rows - 16 - controlRows);
+  const summaryPageSize = Math.max(4, rows - 15 - controlRows);
+  const detailRows = Math.max(4, rows - 6 - controlRows);
   const detailWidth = Math.max(40, columns - 10);
   const detailLines = useMemo(
     () => (detailLine ? requestDetailLines(detailLine, detailWidth) : []),
     [detailLine, detailWidth]
   );
   const visibleDetailLines = detailLines.slice(detailScroll, detailScroll + detailRows);
-  const answerRows = Math.max(8, rows - 7);
+  const answerRows = Math.max(4, rows - 7 - controlRows);
   const answerWidth = Math.max(40, columns - 10);
   const openAiAnswerLines = useMemo(
     () => (openAiAnswer ? renderMarkdownAnswer(openAiAnswer.answer, answerWidth) : []),
@@ -267,6 +275,29 @@ function CitrxExplorer({
   }, [accessQueryCache, filter, run.accessIndex, sortDirection, sortKey, summaryPageSize, summaryPageStart]);
 
   useInput((inputValue, key) => {
+    if (sortMenu) {
+      handleSortMenuInput({
+        inputValue,
+        key,
+        sortMenu,
+        setSortMenu,
+        applySort: (nextSortKey, nextSortDirection) => {
+          setSortMenu(undefined);
+          setSortKey(nextSortKey);
+          setSortDirection(nextSortDirection);
+          if (screen === "summary") {
+            setSummaryLineIndex(0);
+          } else {
+            setLineIndex(0);
+          }
+          setSelectedLineKeys(new Set());
+          setMessage(`Sort: ${sortLabel(nextSortKey)} ${nextSortDirection}`);
+        },
+        setMessage
+      });
+      return;
+    }
+
     if (prompt) {
       handlePromptInput({
         inputValue,
@@ -464,14 +495,14 @@ function CitrxExplorer({
       }
 
       if (inputValue === "s") {
-        setSortKey(nextSort(sortKey));
-        setSummaryLineIndex(0);
+        setSortMenu({ sortKey, sortDirection, focus: "key" });
+        setMessage("Choose sort field and direction");
         return;
       }
 
       if (inputValue === "S") {
-        setSortDirection((value) => (value === "desc" ? "asc" : "desc"));
-        setSummaryLineIndex(0);
+        setSortMenu({ sortKey, sortDirection, focus: "key" });
+        setMessage("Choose sort field and direction");
         return;
       }
 
@@ -596,8 +627,8 @@ function CitrxExplorer({
     }
 
     if (inputValue === "s") {
-      setSortKey(nextSort(sortKey));
-      setLineIndex(0);
+      setSortMenu({ sortKey, sortDirection, focus: "key" });
+      setMessage("Choose sort field and direction");
       return;
     }
 
@@ -606,8 +637,8 @@ function CitrxExplorer({
     }
 
     if (inputValue === "S") {
-      setSortDirection((value) => (value === "desc" ? "asc" : "desc"));
-      setLineIndex(0);
+      setSortMenu({ sortKey, sortDirection, focus: "key" });
+      setMessage("Choose sort field and direction");
       return;
     }
 
@@ -748,6 +779,7 @@ function CitrxExplorer({
               columns
             })
     ),
+    sortMenu ? React.createElement(SortMenuOverlay, { sortMenu, columns, rows }) : null,
     prompt ? React.createElement(PromptBar, { prompt, columns }) : null,
     React.createElement(Footer, {
       screen,
@@ -1531,6 +1563,120 @@ function PromptBar({ prompt, columns }: { prompt: PromptState; columns: number }
   );
 }
 
+function SortMenuOverlay({
+  sortMenu,
+  columns,
+  rows
+}: {
+  sortMenu: {
+    sortKey: SortKey;
+    sortDirection: SortDirection;
+    focus: SortMenuFocus;
+  };
+  columns: number;
+  rows: number;
+}) {
+  const width = Math.min(62, Math.max(42, columns - 6));
+  const innerWidth = width - 6;
+  const fieldWidth = Math.floor((width - 10) * 0.58);
+  const directionWidth = Math.floor((width - 10) * 0.3);
+  const top = Math.max(1, Math.floor((rows - 13) / 2));
+  const left = Math.max(0, Math.floor((columns - width) / 2));
+  const blankLine = " ".repeat(innerWidth);
+
+  return React.createElement(
+    Box,
+    {
+      position: "absolute",
+      top,
+      left,
+      width,
+      flexDirection: "column",
+      borderStyle: "double",
+      borderColor: "cyan",
+      backgroundColor: "black",
+      paddingX: 2,
+      paddingY: 1
+    },
+    React.createElement(
+      Text,
+      { bold: true, color: "cyan", backgroundColor: "black", wrap: "truncate" },
+      fitText("Sort log", innerWidth).padEnd(innerWidth)
+    ),
+    React.createElement(Text, { backgroundColor: "black" }, blankLine),
+    React.createElement(
+      Box,
+      { flexDirection: "row", gap: 4, backgroundColor: "black" },
+      React.createElement(
+        Box,
+        { flexDirection: "column", width: fieldWidth, backgroundColor: "black" },
+        React.createElement(
+          Text,
+          { bold: true, color: sortMenu.focus === "key" ? "cyan" : "gray", backgroundColor: "black" },
+          "Field".padEnd(fieldWidth)
+        ),
+        ...SORT_KEYS.map((key) => {
+          const active = sortMenu.sortKey === key;
+          const focused = sortMenu.focus === "key" && active;
+          return React.createElement(
+            Text,
+            {
+              key,
+              bold: active,
+              color: focused ? "black" : active ? "yellow" : undefined,
+              backgroundColor: focused ? "yellow" : "black",
+              wrap: "truncate"
+            },
+            fitText(`${active ? ">" : " "} ${sortLabel(key)}`, fieldWidth).padEnd(fieldWidth)
+          );
+        })
+      ),
+      React.createElement(
+        Box,
+        { flexDirection: "column", width: directionWidth, backgroundColor: "black" },
+        React.createElement(
+          Text,
+          { bold: true, color: sortMenu.focus === "direction" ? "cyan" : "gray", backgroundColor: "black" },
+          "Direction".padEnd(directionWidth)
+        ),
+        ...(["desc", "asc"] as const).map((direction) => {
+          const active = sortMenu.sortDirection === direction;
+          const focused = sortMenu.focus === "direction" && active;
+          return React.createElement(
+            Text,
+            {
+              key: direction,
+              bold: active,
+              color: focused ? "black" : active ? "yellow" : undefined,
+              backgroundColor: focused ? "yellow" : "black"
+            },
+            `${active ? ">" : " "} ${direction}`.padEnd(directionWidth)
+          );
+        })
+      )
+    ),
+    React.createElement(Text, { backgroundColor: "black" }, blankLine),
+    React.createElement(
+      Box,
+      { justifyContent: "center", backgroundColor: "black" },
+      React.createElement(
+        Text,
+        {
+          bold: true,
+          color: sortMenu.focus === "apply" ? "black" : "yellow",
+          backgroundColor: sortMenu.focus === "apply" ? "yellow" : "black"
+        },
+        "  Filter  "
+      )
+    ),
+    React.createElement(
+      Text,
+      { color: "gray", backgroundColor: "black", wrap: "truncate" },
+      fitText("Arrows move | Space select | Enter apply | Esc cancel", innerWidth).padEnd(innerWidth)
+    )
+  );
+}
+
 function Footer({
   screen,
   summaryFocus,
@@ -1558,10 +1704,10 @@ function Footer({
     : detailOpen
     ? "↑/↓ PgUp/PgDn scroll | d/b/Esc close | q quit"
     : screen === "summary"
-      ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate panel | Enter/d open | f filter | s sort | S dir | t tops | a ask | e export | q quit`
+      ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate panel | Enter/d open | f filter | s sort menu | t tops | a ask | e export | q quit`
       : screen === "tops"
         ? "Tab panel | ↑/↓ row | Enter filter by value | a ask about tops | t/b/Esc back | q quit"
-        : "↑/↓ PgUp/PgDn rows | Enter/d detail | t tops | Space select | A select visible | f filter | s sort | S dir | a ask | e export | b back | q quit";
+        : "↑/↓ PgUp/PgDn rows | Enter/d detail | t tops | Space select | A select visible | f filter | s sort menu | a ask | e export | b back | q quit";
   const prefix = loading || busy ? `${spinner} ` : "";
   const status = `${prefix}${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
 
@@ -1846,9 +1992,21 @@ function compareLine(
   return String(a[sortKey]).localeCompare(String(b[sortKey])) * multiplier;
 }
 
-function nextSort(sortKey: SortKey): SortKey {
-  const keys: SortKey[] = ["timestamp", "ip", "status", "method", "path", "bytes"];
-  return keys[(keys.indexOf(sortKey) + 1) % keys.length] ?? "timestamp";
+function sortLabel(sortKey: SortKey): string {
+  switch (sortKey) {
+    case "timestamp":
+      return "time";
+    case "ip":
+      return "ip";
+    case "status":
+      return "status";
+    case "method":
+      return "method";
+    case "path":
+      return "path";
+    case "bytes":
+      return "bytes";
+  }
 }
 
 async function exportContext(
@@ -1861,6 +2019,150 @@ async function exportContext(
   const file = path.join(process.cwd(), `citrx-${safeRunId}-${safeIncidentId}.json`);
   await writeFile(file, `${JSON.stringify({ incident, lines }, null, 2)}\n`, "utf8");
   return file;
+}
+
+function handleSortMenuInput({
+  inputValue,
+  key,
+  sortMenu,
+  setSortMenu,
+  applySort,
+  setMessage
+}: {
+  inputValue: string;
+  key: {
+    return?: boolean;
+    escape?: boolean;
+    backspace?: boolean;
+    tab?: boolean;
+    upArrow?: boolean;
+    downArrow?: boolean;
+    leftArrow?: boolean;
+    rightArrow?: boolean;
+  };
+  sortMenu: {
+    sortKey: SortKey;
+    sortDirection: SortDirection;
+    focus: SortMenuFocus;
+  };
+  setSortMenu: (value: typeof sortMenu | undefined) => void;
+  applySort: (sortKey: SortKey, sortDirection: SortDirection) => void;
+  setMessage: (value: string) => void;
+}): void {
+  if (key.escape || key.backspace) {
+    setSortMenu(undefined);
+    setMessage("Sort cancelled");
+    return;
+  }
+
+  if (key.return) {
+    applySort(sortMenu.sortKey, sortMenu.sortDirection);
+    return;
+  }
+
+  if (inputValue === " ") {
+    if (sortMenu.focus === "apply") {
+      applySort(sortMenu.sortKey, sortMenu.sortDirection);
+      return;
+    }
+
+    setSortMenu({
+      ...sortMenu,
+      focus: sortMenu.focus === "key" ? "direction" : "apply"
+    });
+    return;
+  }
+
+  if (key.tab) {
+    setSortMenu({
+      ...sortMenu,
+      focus: sortMenu.focus === "key" ? "direction" : sortMenu.focus === "direction" ? "apply" : "key"
+    });
+    return;
+  }
+
+  if (key.leftArrow || key.rightArrow) {
+    if (sortMenu.focus === "apply") {
+      setSortMenu({
+        ...sortMenu,
+        focus: key.leftArrow ? "key" : "direction"
+      });
+      return;
+    }
+
+    if (sortMenu.focus === "key") {
+      setSortMenu({
+        ...sortMenu,
+        focus: "direction"
+      });
+      return;
+    }
+
+    setSortMenu({
+      ...sortMenu,
+      focus: "key"
+    });
+    return;
+  }
+
+  if (key.upArrow || key.downArrow) {
+    const step = key.upArrow ? -1 : 1;
+
+    if (sortMenu.focus === "apply") {
+      setSortMenu({
+        ...sortMenu,
+        focus: step < 0 ? "key" : "apply"
+      });
+      return;
+    }
+
+    if (sortMenu.focus === "key") {
+      const currentIndex = SORT_KEYS.indexOf(sortMenu.sortKey);
+
+      if (step > 0 && currentIndex === SORT_KEYS.length - 1) {
+        setSortMenu({
+          ...sortMenu,
+          focus: "apply"
+        });
+        return;
+      }
+
+      if (step < 0 && currentIndex === 0) {
+        return;
+      }
+
+      setSortMenu({
+        ...sortMenu,
+        sortKey: SORT_KEYS[currentIndex + step] ?? sortMenu.sortKey
+      });
+      return;
+    }
+
+    if (step > 0 && sortMenu.sortDirection === "asc") {
+      setSortMenu({
+        ...sortMenu,
+        focus: "apply"
+      });
+      return;
+    }
+
+    if (step < 0 && sortMenu.sortDirection === "desc") {
+      return;
+    }
+
+    setSortMenu({
+      ...sortMenu,
+      sortDirection: sortMenu.sortDirection === "desc" ? "asc" : "desc"
+    });
+    return;
+  }
+
+  if (inputValue === "S") {
+    setSortMenu({
+      ...sortMenu,
+      focus: "direction"
+    });
+  }
 }
 
 function handlePromptInput({
