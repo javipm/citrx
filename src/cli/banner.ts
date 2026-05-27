@@ -4,7 +4,7 @@ import pc from "picocolors";
 
 import { VERSION } from "../version.js";
 
-const LEMON_LINES = [
+const FULL_LEMON_LINES = [
   "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣄⣀⣀⣀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
   "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣤⡶⠞⢦⡉⠉⠣⠄⠈⠹⢿⡱⡠⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
   "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⡇⣴⡼⠤⠄⠈⠧⠀⠀⠀⠀⠀⠀⠻⣵⡬⡂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
@@ -37,13 +37,24 @@ const LEMON_LINES = [
   "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠀⠹⢷⣤⡐⠀⠀⠀⠀⢠⣴⠿⠋⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
 ];
 
-const TITLE_LINES = [
-  "  ██████ ██ ████████ ██████  ██   ██",
-  " ██      ██    ██    ██   ██  ██ ██ ",
-  " ██      ██    ██    ██████    ███  ",
-  " ██      ██    ██    ██   ██  ██ ██ ",
-  "  ██████ ██    ██    ██   ██ ██   ██"
+const LEMON_LINES = FULL_LEMON_LINES.filter((_, index) => index % 2 === 0).map(compactColumns);
+
+const TITLE_LINES: Array<[string, string]> = [
+  ["  ██████ ██ ████████ ██████  ", "██   ██"],
+  [" ██      ██    ██    ██   ██ ", " ██ ██ "],
+  [" ██      ██    ██    ██████  ", "  ███  "],
+  [" ██      ██    ██    ██   ██ ", " ██ ██ "],
+  ["  ██████ ██    ██    ██   ██ ", "██   ██"]
 ];
+
+const LEMON_WIDTH = Math.max(...LEMON_LINES.map((line) => line.length));
+
+function compactColumns(line: string): string {
+  return Array.from(line)
+    .filter((_, index) => index % 2 === 0)
+    .join("")
+    .trimEnd();
+}
 
 export interface BannerOptions {
   color: boolean;
@@ -51,6 +62,9 @@ export interface BannerOptions {
 
 export function renderBanner(options: BannerOptions): string {
   const yellow = options.color ? pc.yellow : (text: string) => text;
+  const lime = options.color
+    ? (text: string) => `\x1b[38;5;154m${text}\x1b[39m`
+    : (text: string) => text;
   const bold = options.color ? pc.bold : (text: string) => text;
   const dim = options.color ? pc.dim : (text: string) => text;
 
@@ -60,18 +74,30 @@ export function renderBanner(options: BannerOptions): string {
 
   for (let i = 0; i < LEMON_LINES.length; i++) {
     const titleIdx = i - titleOffset;
+    const lemonLine = LEMON_LINES[i].padEnd(LEMON_WIDTH);
     const titleLine =
       titleIdx >= 0 && titleIdx < TITLE_LINES.length
-        ? `  ${bold(yellow(TITLE_LINES[titleIdx]))}`
+        ? `  ${renderTitleLine(TITLE_LINES[titleIdx], { yellow, lime, bold })}`
         : titleIdx === TITLE_LINES.length
           ? `  ${dim(`v${VERSION}`)}`
           : "";
-    rows.push(`${yellow(LEMON_LINES[i])}${titleLine}`);
+    rows.push(`${yellow(lemonLine)}${titleLine}`);
   }
 
   rows.push("");
 
   return `${rows.join("\n")}\n`;
+}
+
+function renderTitleLine(
+  [word, x]: [string, string],
+  colors: {
+    yellow: (text: string) => string;
+    lime: (text: string) => string;
+    bold: (text: string) => string;
+  }
+): string {
+  return colors.bold(`${colors.yellow(word)}${colors.lime(x)}`);
 }
 
 export function printBanner(stream: Writable, options: BannerOptions): void {
