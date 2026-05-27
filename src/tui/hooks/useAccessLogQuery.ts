@@ -13,7 +13,11 @@ import type { SortKey, SortDirection } from "../types.js";
  * sort column, and sort direction. Used to detect whether a cached index
  * already exists before issuing an async build.
  */
-function accessQueryKey(filter: string, sortKey: SortKey, sortDirection: SortDirection): string {
+export function accessQueryKey(
+  filter: string,
+  sortKey: SortKey,
+  sortDirection: SortDirection
+): string {
   return `${sortKey}:${sortDirection}:${filter}`;
 }
 

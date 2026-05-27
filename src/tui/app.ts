@@ -5,7 +5,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { Incident, IncidentLogLine } from "../analysis/types.js";
-import { AccessLogIndexQueryCache } from "../run/access-index.js";
+import {
+  AccessLogIndexQueryCache,
+  passThroughFilter,
+  readAccessLogIndexCachedPage
+} from "../run/access-index.js";
 import type { CitrxRun } from "../run/types.js";
 
 // Types
@@ -31,6 +35,8 @@ import { handleOpenAiAnswerInput } from "./hooks/useOpenAiAnswerInput.js";
 import { handleSummaryScreenInput } from "./hooks/useSummaryScreenInput.js";
 import { handleIncidentScreenInput } from "./hooks/useIncidentScreenInput.js";
 import { handleTopsScreenInput } from "./hooks/useTopsScreenInput.js";
+import { accessQueryKey } from "./hooks/useAccessLogQuery.js";
+import { createAccessLogLineFilter } from "./filter.js";
 
 // Components
 import { PromptBar, SortMenuOverlay, ExportNoticeBar, Footer } from "./components/overlays.js";
@@ -88,6 +94,37 @@ async function exportContext(
   const file = path.join(process.cwd(), `citrx-${safeRunId}-${safeIncidentId}.json`);
   await writeFile(file, `${JSON.stringify({ incident, lines }, null, 2)}\n`, "utf8");
   return file;
+}
+
+async function exportAccessLogContext({
+  run,
+  accessQueryCache,
+  filter,
+  sortKey,
+  sortDirection,
+  total
+}: {
+  run: CitrxRun;
+  accessQueryCache: AccessLogIndexQueryCache;
+  filter: string;
+  sortKey: "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
+  sortDirection: "asc" | "desc";
+  total: number;
+}): Promise<{ file: string; lines: number }> {
+  const page = await readAccessLogIndexCachedPage(
+    run.accessIndex,
+    accessQueryCache,
+    accessQueryKey(filter, sortKey, sortDirection),
+    {
+      filter: filter ? createAccessLogLineFilter(filter) : passThroughFilter,
+      sortKey,
+      sortDirection,
+      start: 0,
+      limit: total
+    }
+  );
+  const file = await exportContext(run.id, undefined, page.lines);
+  return { file, lines: page.lines.length };
 }
 
 /**
@@ -359,7 +396,16 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
         setPrompt,
         setExportNotice,
         setMessage,
-        exportContext
+        exportContext,
+        exportAllFilteredContext: () =>
+          exportAccessLogContext({
+            run,
+            accessQueryCache,
+            filter,
+            sortKey,
+            sortDirection,
+            total: globalTotal
+          })
       });
       return;
     }

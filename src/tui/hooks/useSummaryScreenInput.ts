@@ -118,7 +118,7 @@ export function firstIncidentIndexForFocus(incidents: Incident[], focus: Summary
  * - `/` / `f` / `F`   — Open the filter prompt, pre-filled with the current filter string.
  * - `t`               — Navigate to the tops screen scoped to the summary.
  * - `a`               — Open the AI prompt scoped to the summary, using selected lines or visible page lines.
- * - `e`               — Export selected lines (or visible page) to JSON via `exportContext`.
+ * - `e`               — Export selected lines, or the full filtered access-log result, to JSON.
  *
  * @param params.inputValue             - Raw character string from the key event.
  * @param params.key                    - Parsed key flags (arrows, return, tab, page keys).
@@ -151,7 +151,8 @@ export function firstIncidentIndexForFocus(incidents: Incident[], focus: Summary
  * @param params.setPrompt              - Opens a prompt overlay (filter or AI kind).
  * @param params.setExportNotice        - Displays the post-export confirmation banner.
  * @param params.setMessage             - Sets the status-bar message string.
- * @param params.exportContext          - Async function that serialises lines to a JSON file and returns the path.
+ * @param params.exportContext          - Async function that serialises selected lines to a JSON file.
+ * @param params.exportAllFilteredContext - Async function that exports the full filtered access-log result.
  */
 export function handleSummaryScreenInput({
   inputValue,
@@ -183,7 +184,8 @@ export function handleSummaryScreenInput({
   setPrompt,
   setExportNotice,
   setMessage,
-  exportContext
+  exportContext,
+  exportAllFilteredContext
 }: {
   inputValue: string;
   key: Key;
@@ -221,6 +223,7 @@ export function handleSummaryScreenInput({
     incident: Incident | undefined,
     lines: IncidentLogLine[]
   ) => Promise<string>;
+  exportAllFilteredContext: () => Promise<{ file: string; lines: number }>;
 }): void {
   const incidentBounds = isIncidentFocus(summaryFocus)
     ? kindRange(incidents, summaryFocus)
@@ -349,12 +352,24 @@ export function handleSummaryScreenInput({
   }
 
   if (inputValue === "e") {
-    const exportable = selectedGlobalLines.length > 0 ? selectedGlobalLines : summaryPageLines;
     setMessage("Exporting JSON...");
-    void exportContext(runId, undefined, exportable)
-      .then((file) => {
-        setExportNotice({ file, lines: exportable.length });
-        setMessage(`Export OK: ${exportable.length} rows saved`);
+    if (selectedGlobalLines.length > 0) {
+      const exportable = selectedGlobalLines;
+      void exportContext(runId, undefined, exportable)
+        .then((file) => {
+          setExportNotice({ file, lines: exportable.length });
+          setMessage(`Export OK: ${exportable.length} rows saved`);
+        })
+        .catch((error) => {
+          setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      return;
+    }
+
+    void exportAllFilteredContext()
+      .then(({ file, lines }) => {
+        setExportNotice({ file, lines });
+        setMessage(`Export OK: ${lines} rows saved`);
       })
       .catch((error) => {
         setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
