@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  AccessLogIndexQueryCache,
   createAccessLogIndexWriter,
   passThroughFilter,
+  readAccessLogIndexCachedPage,
   readAccessLogIndexPage
 } from "./access-index.js";
 import type { IncidentLogLine } from "../analysis/types.js";
@@ -57,6 +59,45 @@ describe("access log temp index", () => {
           expect.objectContaining({ path: "/b" })
         ]
       });
+
+      await expect(
+        readAccessLogIndexPage(writer.index, {
+          filter: passThroughFilter,
+          sortKey: "path",
+          sortDirection: "asc",
+          start: 1,
+          limit: 1
+        })
+      ).resolves.toMatchObject({
+        total: 3,
+          lines: [expect.objectContaining({ path: "/b", row: 1 })]
+        });
+
+      const cache = new AccessLogIndexQueryCache();
+      const cases = [
+        ["ip", "asc", ["203.0.113.10", "203.0.113.10", "203.0.113.20"]],
+        ["status", "desc", [404, 200, 200]],
+        ["path", "desc", ["/c", "/b", "/a"]],
+        ["bytes", "asc", [100, 200, 300]]
+      ] as const;
+
+      for (const [sortKey, sortDirection, expected] of cases) {
+        const page = await readAccessLogIndexCachedPage(
+          writer.index,
+          cache,
+          `${sortKey}:${sortDirection}`,
+          {
+            filter: passThroughFilter,
+            sortKey,
+            sortDirection,
+            start: 0,
+            limit: 3
+          }
+        );
+
+        expect(page.total).toBe(3);
+        expect(page.lines.map((line) => line[sortKey])).toEqual(expected);
+      }
     } finally {
       writer.close();
       await rm(directory, { recursive: true, force: true });
@@ -73,6 +114,7 @@ function accessLine(
   bytes: number
 ): IncidentLogLine {
   return {
+    row: lineNumber - 1,
     source: "/tmp/access.log",
     lineNumber,
     raw: `${ip} - - [25/May/2026:03:12:0${lineNumber} +0200] "${method} ${path} HTTP/1.1" ${status} ${bytes} "-" "UA"`,

@@ -5,12 +5,14 @@ import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 import type { AnalyzeReport, Incident, IncidentLogLine, TopItem } from "../analysis/types.js";
+import { requestParamNames, requestParamValueLabels, userAgentLabel } from "../analysis/query-params.js";
 import { OpenAiIncidentQuestionClient } from "../ai/incident-question.js";
 import type { IncidentQuestionClient } from "../ai/incident-question.js";
 import {
   passThroughFilter,
-  readAccessLogIndexLines,
-  readAccessLogIndexPage
+  readAccessLogIndexCachedPage,
+  readAccessLogIndexRows,
+  AccessLogIndexQueryCache
 } from "../run/access-index.js";
 import type { CitrxRun } from "../run/types.js";
 import { createAccessLogLineFilter, validateAccessLogFilter } from "./filter.js";
@@ -134,6 +136,7 @@ function CitrxExplorer({
   const [busy, setBusy] = useState(false);
   const [globalTotal, setGlobalTotal] = useState(run.report.accessLog.indexedLines);
   const [summaryPageLines, setSummaryPageLines] = useState<IncidentLogLine[]>([]);
+  const accessQueryCache = useMemo(() => new AccessLogIndexQueryCache(), [run.accessIndex]);
   const incidents = run.report.incidents;
   const incident = incidents[incidentIndex];
   const allIncidentLines = useMemo(
@@ -184,8 +187,13 @@ function CitrxExplorer({
   useEffect(() => {
     let cancelled = false;
     const filterFn = filter ? createAccessLogLineFilter(filter) : passThroughFilter;
+    const cacheKey = accessQueryKey(filter, sortKey, sortDirection);
 
-    void readAccessLogIndexPage(run.accessIndex, {
+    if (!accessQueryCache.has(cacheKey) && (filter || sortKey !== "timestamp")) {
+      setMessage("Building filter cache...");
+    }
+
+    void readAccessLogIndexCachedPage(run.accessIndex, accessQueryCache, cacheKey, {
       filter: filterFn,
       sortKey,
       sortDirection,
@@ -199,6 +207,7 @@ function CitrxExplorer({
 
         setGlobalTotal(page.total);
         setSummaryPageLines(page.lines);
+        setMessage(filter || sortKey !== "timestamp" ? "Filter cache ready" : "Ready");
 
         setSummaryLineIndex((value) => Math.min(Math.max(0, page.total - 1), value));
       })
@@ -211,7 +220,7 @@ function CitrxExplorer({
     return () => {
       cancelled = true;
     };
-  }, [filter, run.accessIndex, sortDirection, sortKey, summaryPageSize, summaryPageStart]);
+  }, [accessQueryCache, filter, run.accessIndex, sortDirection, sortKey, summaryPageSize, summaryPageStart]);
 
   useInput((inputValue, key) => {
     if (prompt) {
@@ -649,6 +658,7 @@ function CitrxExplorer({
           : screen === "tops"
             ? React.createElement(TopValuesScreen, {
                 run,
+                accessQueryCache,
                 report: run.report,
                 incident: topScope === "summary" ? undefined : incident,
                 scope: topScope,
@@ -781,7 +791,7 @@ function SummaryPanel({ report }: { report: AnalyzeReport }) {
       null,
       `lines: ${report.summary.parsedLines}/${report.summary.totalLines} parsed | invalid: ${report.summary.invalidLines}`
     ),
-    React.createElement(Text, null, `bytes: ${formatBytes(report.summary.totalBytes)}`),
+    React.createElement(Text, null, `bytes served: ${formatBytes(report.summary.totalBytes)}`),
     React.createElement(Text, null, `peak rps: ${report.timeStats.peakGlobalRps}`),
     React.createElement(Text, null, `indexed lines: ${report.accessLog.indexedLines}`),
     React.createElement(Text, { color: "gray" }, "press t for global top values")
@@ -899,6 +909,7 @@ function IncidentScreen({
 
 function TopValuesScreen({
   run,
+  accessQueryCache,
   report,
   incident,
   scope,
@@ -909,6 +920,7 @@ function TopValuesScreen({
   columns
 }: {
   run: CitrxRun;
+  accessQueryCache: AccessLogIndexQueryCache;
   report: AnalyzeReport;
   incident: Incident | undefined;
   scope: TopScope;
@@ -937,7 +949,7 @@ function TopValuesScreen({
 
     let cancelled = false;
 
-    void incidentInsightsFromAccessIndex(run, filter).then((value) => {
+    void incidentInsightsFromAccessIndex(run, accessQueryCache, filter).then((value) => {
       if (!cancelled) {
         setSummaryTopValues(value);
       }
@@ -946,13 +958,17 @@ function TopValuesScreen({
     return () => {
       cancelled = true;
     };
-  }, [filter, run, scope]);
+  }, [accessQueryCache, filter, run, scope]);
 
   const insights = scope === "summary"
-    ? summaryTopValues?.insights ?? emptyIncidentInsights()
+    ? filter
+      ? summaryTopValues?.insights ?? emptyIncidentInsights()
+      : reportInsights(report)
     : incidentTopValues;
   const sourceCount = scope === "summary"
-    ? summaryTopValues?.count ?? 0
+    ? filter
+      ? summaryTopValues?.count ?? 0
+      : report.accessLog.totalLines
     : matchSet?.totalMatches ?? 0;
   const selectedTopItem = selectedTopValue(insights, focus, selectedIndexes[focus]);
 
@@ -1138,9 +1154,9 @@ function currentTopContext(
     ? {
         ips: report.topIps,
         paths: report.topPaths,
-        userAgents: [],
-        params: [],
-        paramValues: []
+        userAgents: report.topUserAgents,
+        params: report.topParams,
+        paramValues: report.topParamValues
       }
     : incidentInsights(filteredTopLines(matchSet?.lines ?? [], filter));
   const selected = selectedTopValue(insights, focus, selectedIndexes[focus]);
@@ -1392,10 +1408,21 @@ function incidentInsights(lines: IncidentLogLine[]): IncidentInsights {
   return topInsightMaps({ ips, paths, userAgents, params, paramValues });
 }
 
-async function incidentInsightsFromAccessIndex(run: CitrxRun, filter: string): Promise<{
+async function incidentInsightsFromAccessIndex(
+  run: CitrxRun,
+  accessQueryCache: AccessLogIndexQueryCache,
+  filter: string
+): Promise<{
   insights: IncidentInsights;
   count: number;
 }> {
+  if (!filter) {
+    return {
+      insights: reportInsights(run.report),
+      count: run.report.accessLog.totalLines
+    };
+  }
+
   const maps = {
     ips: new Map<string, number>(),
     paths: new Map<string, number>(),
@@ -1403,21 +1430,19 @@ async function incidentInsightsFromAccessIndex(run: CitrxRun, filter: string): P
     params: new Map<string, number>(),
     paramValues: new Map<string, number>()
   };
-  let count = 0;
-  const matches = filter ? createAccessLogLineFilter(filter) : () => true;
+  const query = await accessQueryCache.getOrBuild(run.accessIndex, accessQueryKey(filter, "timestamp", "desc"), {
+    filter: createAccessLogLineFilter(filter),
+    sortKey: "timestamp",
+    sortDirection: "desc"
+  });
 
-  for await (const line of readAccessLogIndexLines(run.accessIndex)) {
-    if (!matches(line)) {
-      continue;
-    }
-
+  for (const line of readAccessLogIndexRows(run.accessIndex, query.rows)) {
     addInsightLine(maps, line);
-    count += 1;
   }
 
   return {
     insights: topInsightMaps(maps),
-    count
+    count: query.total
   };
 }
 
@@ -1458,7 +1483,7 @@ function addInsightLine(
     incrementMap(maps.params, param);
   }
 
-  for (const paramValue of requestParamValues(line.target)) {
+  for (const paramValue of requestParamValueLabels(line.target)) {
     incrementMap(maps.paramValues, paramValue);
   }
 }
@@ -1479,91 +1504,18 @@ function topInsightMaps(maps: {
   };
 }
 
-function requestParamNames(target: string): string[] {
-  try {
-    const url = new URL(target, "http://citrx.local");
-    return [...new Set([...url.searchParams.keys()])];
-  } catch {
-    const queryStart = target.indexOf("?");
-
-    if (queryStart === -1) {
-      return [];
-    }
-
-    return [
-      ...new Set(
-        target
-          .slice(queryStart + 1)
-          .split("&")
-          .map((part) => part.split("=")[0]?.trim())
-          .filter((part): part is string => Boolean(part))
-      )
-    ];
-  }
+function reportInsights(report: AnalyzeReport): IncidentInsights {
+  return {
+    ips: report.topIps.slice(0, 10),
+    paths: report.topPaths.slice(0, 10),
+    userAgents: report.topUserAgents.slice(0, 10),
+    params: report.topParams.slice(0, 10),
+    paramValues: report.topParamValues.slice(0, 10)
+  };
 }
 
-function requestParamValues(target: string): string[] {
-  try {
-    const url = new URL(target, "http://citrx.local");
-    return uniqueParamValues([...url.searchParams.entries()]);
-  } catch {
-    const queryStart = target.indexOf("?");
-
-    if (queryStart === -1) {
-      return [];
-    }
-
-    return uniqueParamValues(
-      target
-        .slice(queryStart + 1)
-        .split("&")
-        .map(parseQueryPart)
-    );
-  }
-}
-
-function parseQueryPart(part: string): [string, string] {
-  const separator = part.indexOf("=");
-
-  if (separator === -1) {
-    return [safeDecode(part), ""];
-  }
-
-  return [safeDecode(part.slice(0, separator)), safeDecode(part.slice(separator + 1))];
-}
-
-function uniqueParamValues(entries: Array<[string, string]>): string[] {
-  return [
-    ...new Set(
-      entries
-        .map(([name, value]) => paramValueLabel(name.trim(), value.trim()))
-        .filter((part): part is string => Boolean(part))
-    )
-  ];
-}
-
-function paramValueLabel(name: string, value: string): string | undefined {
-  if (!name) {
-    return undefined;
-  }
-
-  if (isSensitiveParamName(name)) {
-    return `${name}=<redacted>`;
-  }
-
-  return `${name}=${value || "<empty>"}`;
-}
-
-function isSensitiveParamName(name: string): boolean {
-  return /pass(word)?|token|secret|key|auth|session|sid|jwt|credential/i.test(name);
-}
-
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value.replace(/\+/g, " "));
-  } catch {
-    return value;
-  }
+function accessQueryKey(filter: string, sortKey: SortKey, sortDirection: SortDirection): string {
+  return `${sortKey}:${sortDirection}:${filter}`;
 }
 
 function incrementMap(map: Map<string, number>, key: string): void {
@@ -2091,37 +2043,6 @@ function compactDateTime(timestamp: string): string {
   const iso = timestamp.match(/^\d{4}-(\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/);
   if (iso) return `${iso[1]} ${iso[2]}`;
   return timestamp.slice(0, 15);
-}
-
-function userAgentLabel(userAgent: string | null): string {
-  if (!userAgent || userAgent === "-") {
-    return "-";
-  }
-
-  const normalized = userAgent.replace(/\s+/g, " ").trim();
-  const bot = normalized.match(
-    /([A-Za-z0-9_.-]*(?:bot|crawler|spider|slurp|searchbot)[A-Za-z0-9_.-]*\/[^\s;)]+)/i
-  );
-
-  if (bot) {
-    return bot[1] ?? normalized;
-  }
-
-  const browser =
-    normalized.match(/(?:Chrome|Firefox|Version|OPR|Edg)\/[^\s;)]+/)?.[0] ??
-    normalized.match(/Safari\/[^\s;)]+/)?.[0] ??
-    "UA";
-  const os =
-    normalized.match(/Android [^;)]+/)?.[0] ??
-    normalized.match(/Windows NT [^;)]+/)?.[0] ??
-    normalized.match(/Mac OS X [^;)]+/)?.[0] ??
-    normalized.match(/Linux [^;)]+/)?.[0];
-
-  if (browser !== "UA") {
-    return os ? `${browser} ${os}` : browser;
-  }
-
-  return truncate(normalized, 42);
 }
 
 function formatBytes(value: number): string {

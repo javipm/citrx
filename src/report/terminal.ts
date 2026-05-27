@@ -34,6 +34,9 @@ export function renderTerminalReport(
   lines.push("");
   lines.push(section("Top IPs", report.topIps, colors));
   lines.push(section("Top paths", report.topPaths, colors));
+  lines.push(section("Top user agents", report.topUserAgents, colors));
+  lines.push(section("Top query params", report.topParams, colors));
+  lines.push(section("Top query param values", report.topParamValues, colors));
   lines.push(section("Methods", report.topMethods, colors));
   lines.push(section("Statuses", report.topStatuses, colors));
   if (report.aiBotStats.length > 0) {

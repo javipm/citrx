@@ -22,6 +22,7 @@ export interface Incident {
 }
 
 export interface IncidentLogLine {
+  row: number;
   source: string;
   lineNumber: number;
   raw: string;
@@ -38,6 +39,8 @@ export interface IncidentLogLine {
 export interface IncidentMatchSet {
   incidentId: string;
   totalMatches: number;
+  /** Sample row ordinals for fast incident drill-down; totalMatches remains exact. */
+  rowNumbers: number[];
   lines: IncidentLogLine[];
 }
 
@@ -121,6 +124,9 @@ export interface AnalyzeReport {
   topPaths: TopItem[];
   topMethods: TopItem[];
   topStatuses: TopItem[];
+  topUserAgents: TopItem[];
+  topParams: TopItem[];
+  topParamValues: TopItem[];
   accessLog: AccessLogIndexSummary;
   timeStats: TimeStats;
   ipBehaviorStats: IpBehaviorStats[];

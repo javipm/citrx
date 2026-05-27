@@ -1,4 +1,5 @@
 import type { IncidentLogLine } from "../analysis/types.js";
+import { requestParamEntries } from "../analysis/query-params.js";
 
 type BinaryOperator = "and" | "or";
 type MatchOperator = ":" | "=" | "!=" | ">" | ">=" | "<" | "<=";
@@ -428,31 +429,7 @@ function matchParam(target: string, expected: string, positive: boolean): boolea
 }
 
 function queryEntries(target: string): Array<[string, string]> {
-  try {
-    const url = new URL(target, "http://citrx.local");
-    return [...url.searchParams.entries()];
-  } catch {
-    const queryStart = target.indexOf("?");
-
-    if (queryStart === -1) {
-      return [];
-    }
-
-    return target
-      .slice(queryStart + 1)
-      .split("&")
-      .map(parseQueryPart);
-  }
-}
-
-function parseQueryPart(part: string): [string, string] {
-  const separator = part.indexOf("=");
-
-  if (separator === -1) {
-    return [safeDecode(part), ""];
-  }
-
-  return [safeDecode(part.slice(0, separator)), safeDecode(part.slice(separator + 1))];
+  return requestParamEntries(target).map((entry) => [entry.name, entry.value]);
 }
 
 function matchPattern(actualValue: string, expectedValue: string, containsByDefault: boolean): boolean {

@@ -44,7 +44,7 @@ export function renderHtmlReport(report: AnalyzeReport): string {
       ${metric("Parsed Lines", `${report.summary.parsedLines} / ${report.summary.totalLines}`)}
       ${metric("Filtered", report.summary.filteredLines)}
       ${metric("Invalid", report.summary.invalidLines)}
-      ${metric("Bytes", report.summary.totalBytes)}
+      ${metric("Bytes served", report.summary.totalBytes)}
       ${metric("Peak RPS", report.timeStats.peakGlobalRps)}
       ${metric("RPS p95", report.timeStats.globalRpsP95)}
       ${metric("Incidents", report.incidents.length)}
@@ -64,6 +64,9 @@ export function renderHtmlReport(report: AnalyzeReport): string {
     <section class="two">
       ${topTable("Top IPs", report.topIps)}
       ${topTable("Top Paths", report.topPaths)}
+      ${topTable("Top User Agents", report.topUserAgents)}
+      ${topTable("Top Query Params", report.topParams)}
+      ${topTable("Top Query Param Values", report.topParamValues)}
       ${topTable("Methods", report.topMethods)}
       ${topTable("Statuses", report.topStatuses)}
     </section>

@@ -4,6 +4,7 @@ import type { IncidentLogLine } from "../analysis/types.js";
 import { createAccessLogLineFilter, validateAccessLogFilter } from "./filter.js";
 
 const postAdmin: IncidentLogLine = {
+  row: 0,
   source: "access.log",
   lineNumber: 10,
   raw: `198.51.100.10 - - [25/May/2026:10:00:00 +0200] "POST /admin/login?q=camper&debug=true HTTP/1.1" 200 56072 "-" "Mozilla/5.0 BotProbe"`,
@@ -18,6 +19,7 @@ const postAdmin: IncidentLogLine = {
 };
 
 const getMissing: IncidentLogLine = {
+  row: 1,
   source: "access.log",
   lineNumber: 11,
   raw: `66.249.70.174 - - [25/May/2026:10:01:00 +0200] "GET /missing.php?order=price HTTP/1.1" 404 1024 "-" "Googlebot/2.1"`,
@@ -32,6 +34,7 @@ const getMissing: IncidentLogLine = {
 };
 
 const putApi: IncidentLogLine = {
+  row: 2,
   source: "api.log",
   lineNumber: 12,
   raw: `203.0.113.55 - - [25/May/2026:10:02:00 +0200] "PUT /api/products?token=secret&q=SELECT%201 HTTP/1.1" 204 0 "-" "curl/8.0"`,

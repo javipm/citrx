@@ -36,11 +36,40 @@ describe("access log analysis incident matches", () => {
     expect(matches).toEqual(
       expect.objectContaining({
         totalMatches: 2,
+        rowNumbers: [0, 1],
         lines: [
-          expect.objectContaining({ path: "/robots.txt" }),
-          expect.objectContaining({ path: "/product" })
+          expect.objectContaining({ row: 0, path: "/robots.txt" }),
+          expect.objectContaining({ row: 1, path: "/product" })
         ]
       })
     );
+  });
+
+  it("builds exact top user-agent and query parameter lists", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+
+    await writeFile(
+      logFile,
+      [
+        '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /search?q=camper&token=secret HTTP/1.1" 200 12 "-" "Mozilla/5.0"',
+        '203.0.113.11 - - [25/May/2026:03:12:50 +0200] "GET /search?q=camper HTTP/1.1" 200 120 "-" "Mozilla/5.0"',
+        '203.0.113.12 - - [25/May/2026:03:12:51 +0200] "GET /search?page=2 HTTP/1.1" 200 100 "-" "curl/8.0"'
+      ].join("\n")
+    );
+
+    const report = await analyzeAccessLogs([logFile], {
+      top: 5,
+      format: "auto"
+    });
+
+    expect(report.topUserAgents).toContainEqual({ value: "Mozilla/5.0", count: 2 });
+    expect(report.topParams).toEqual([
+      { value: "q", count: 2 },
+      { value: "page", count: 1 },
+      { value: "token", count: 1 }
+    ]);
+    expect(report.topParamValues).toContainEqual({ value: "token=<redacted>", count: 1 });
+    expect(report.topParamValues).toContainEqual({ value: "q=camper", count: 2 });
   });
 });

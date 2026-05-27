@@ -30,6 +30,7 @@ import type {
   TopItem
 } from "./types.js";
 import { BehaviorTracker, extractSubnetPrefix } from "./behavior.js";
+import { requestParamNames, requestParamValueLabels, userAgentLabel } from "./query-params.js";
 import { parseAccessLogTimestamp } from "./timestamp.js";
 
 interface AnalyzeOptions {
@@ -62,6 +63,9 @@ interface Counters {
   paths: Map<string, number>;
   methods: Map<string, number>;
   statuses: Map<string, number>;
+  userAgents: Map<string, number>;
+  params: Map<string, number>;
+  paramValues: Map<string, number>;
   pathStats: Map<string, PathStats>;
   ruleIncidents: Map<string, Incident>;
   ruleMatches: Map<string, MutableIncidentMatches>;
@@ -80,6 +84,7 @@ interface MutableIncidentMatches {
 const MIN_SAMPLE_LINES = 1;
 const MIN_PARSE_RATIO = 0.8;
 const MAX_SAMPLE_LINES = 200;
+const MAX_INCIDENT_SAMPLE_LINES = 200;
 
 export async function analyzeAccessLogs(
   files: string[],
@@ -111,6 +116,9 @@ export async function analyzeAccessLogSources(
     paths: new Map(),
     methods: new Map(),
     statuses: new Map(),
+    userAgents: new Map(),
+    params: new Map(),
+    paramValues: new Map(),
     pathStats: new Map(),
     ruleIncidents: new Map(),
     ruleMatches: new Map(),
@@ -162,6 +170,9 @@ export async function analyzeAccessLogSources(
     topPaths: topItems(counters.paths, options.top),
     topMethods: topItems(counters.methods, options.top),
     topStatuses: topItems(counters.statuses, options.top),
+    topUserAgents: topItems(counters.userAgents, options.top),
+    topParams: topItems(counters.params, options.top),
+    topParamValues: topItems(counters.paramValues, options.top),
     accessLog: {
       totalLines: counters.parsedLines,
       indexedLines: counters.accessLogWriter?.index.totalRows ?? 0
@@ -321,7 +332,8 @@ function analyzeLine(
 
   counters.parsedLines += 1;
   counters.totalBytes += entry.bytes ?? 0;
-  const storedLine = {
+  const storedLine: IncidentLogLine = {
+    row: -1,
     source: sourceLabel,
     lineNumber,
     raw: redactRawLine(line),
@@ -335,12 +347,19 @@ function analyzeLine(
     userAgent: entry.userAgent
   };
 
-  counters.accessLogWriter?.write(storedLine);
+  storedLine.row = counters.accessLogWriter?.write(storedLine) ?? counters.parsedLines - 1;
   counters.behavior.observe(entry);
   increment(counters.ips, entry.ip);
   increment(counters.paths, entry.path);
   increment(counters.methods, entry.method);
   increment(counters.statuses, String(entry.status));
+  increment(counters.userAgents, userAgentLabel(entry.userAgent));
+  for (const param of requestParamNames(entry.target)) {
+    increment(counters.params, param);
+  }
+  for (const paramValue of requestParamValueLabels(entry.target)) {
+    increment(counters.paramValues, paramValue);
+  }
   updatePathStats(counters.pathStats, entry);
   addIncidentLine(counters.pathMatches, entry.path, storedLine);
 
@@ -408,6 +427,7 @@ function incidentMatches(
     .map((matchSet) => ({
       incidentId: matchSet.incidentId,
       totalMatches: matchSet.totalMatches,
+      rowNumbers: matchSet.lines.map((line) => line.row),
       lines: matchSet.lines
     }));
 }
@@ -431,7 +451,7 @@ function behaviorIncidentMatches(
     for (const line of pathMatchSet.lines) {
       if (predicate(line)) {
         matchSet.totalMatches += 1;
-        matchSet.lines.push(line);
+        pushSampleLine(matchSet.lines, line);
       }
     }
   }
@@ -520,9 +540,15 @@ function addIncidentLine(
   };
 
   current.totalMatches += 1;
-  current.lines.push(line);
+  pushSampleLine(current.lines, line);
 
   matches.set(incidentId, current);
+}
+
+function pushSampleLine(lines: IncidentLogLine[], line: IncidentLogLine): void {
+  if (lines.length < MAX_INCIDENT_SAMPLE_LINES) {
+    lines.push(line);
+  }
 }
 
 function incrementLineNumber(map: Map<string, number>, sourceLabel: string): number {

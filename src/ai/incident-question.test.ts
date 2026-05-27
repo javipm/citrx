@@ -38,6 +38,9 @@ const report: AnalyzeReport = {
   topPaths: [{ value: "/search", count: 2 }],
   topMethods: [{ value: "GET", count: 2 }],
   topStatuses: [{ value: "200", count: 2 }],
+  topUserAgents: [{ value: "Mozilla/5.0", count: 2 }],
+  topParams: [{ value: "q", count: 2 }],
+  topParamValues: [{ value: "q=union", count: 2 }],
   accessLog: {
     totalLines: 2,
     indexedLines: 0
@@ -90,6 +93,7 @@ describe("OpenAI incident questions", () => {
       incident,
       lines: [
         {
+          row: 0,
           source: "/tmp/access.log",
           lineNumber: 1,
           raw: "line 1",
@@ -103,6 +107,7 @@ describe("OpenAI incident questions", () => {
           userAgent: "Mozilla/5.0"
         },
         {
+          row: 1,
           source: "/tmp/access.log",
           lineNumber: 2,
           raw: "line 2",

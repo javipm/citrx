@@ -16,7 +16,7 @@ export interface AccessLogIndex {
 
 export interface AccessLogIndexWriter {
   readonly index: AccessLogIndex;
-  write(line: IncidentLogLine): void;
+  write(line: IncidentLogLine): number;
   close(): void;
 }
 
@@ -31,6 +31,38 @@ export interface AccessLogIndexPageOptions {
 export interface AccessLogIndexPage {
   total: number;
   lines: IncidentLogLine[];
+}
+
+export interface AccessLogIndexQuery {
+  total: number;
+  rows: number[];
+}
+
+export class AccessLogIndexQueryCache {
+  private readonly entries = new Map<string, Promise<AccessLogIndexQuery>>();
+
+  has(key: string): boolean {
+    return this.entries.has(key);
+  }
+
+  getOrBuild(
+    index: AccessLogIndex,
+    key: string,
+    options: Pick<AccessLogIndexPageOptions, "filter" | "sortKey" | "sortDirection">
+  ): Promise<AccessLogIndexQuery> {
+    const cached = this.entries.get(key);
+
+    if (cached) {
+      return cached;
+    }
+
+    const next = buildAccessLogIndexQuery(index, options).catch((error) => {
+      this.entries.delete(key);
+      throw error;
+    });
+    this.entries.set(key, next);
+    return next;
+  }
 }
 
 export async function createAccessLogIndexWriter(directory: string): Promise<AccessLogIndexWriter> {
@@ -72,6 +104,23 @@ export async function readAccessLogIndexPage(
   };
 }
 
+export async function readAccessLogIndexCachedPage(
+  index: AccessLogIndex,
+  cache: AccessLogIndexQueryCache,
+  key: string,
+  options: AccessLogIndexPageOptions
+): Promise<AccessLogIndexPage> {
+  if (options.filter === passThroughFilter && options.sortKey === "timestamp") {
+    return readSequentialPage(index, options.start, options.limit, options.sortDirection);
+  }
+
+  const query = await cache.getOrBuild(index, key, options);
+  return {
+    total: query.total,
+    lines: readAccessLogIndexRows(index, query.rows.slice(options.start, options.start + options.limit))
+  };
+}
+
 export function passThroughFilter(): boolean {
   return true;
 }
@@ -87,6 +136,70 @@ export async function* readAccessLogIndexLines(index: AccessLogIndex): AsyncIter
       yield JSON.parse(line) as IncidentLogLine;
     }
   }
+}
+
+export function readAccessLogIndexRows(index: AccessLogIndex, rowNumbers: number[]): IncidentLogLine[] {
+  if (rowNumbers.length === 0) {
+    return [];
+  }
+
+  const lines: IncidentLogLine[] = [];
+  const fileHandles = openIndexFiles(index);
+
+  try {
+    for (const rowNumber of rowNumbers) {
+      if (rowNumber >= 0 && rowNumber < index.totalRows) {
+        lines.push(readAccessLogIndexRowFromOpenFiles(index, rowNumber, fileHandles));
+      }
+    }
+  } finally {
+    closeIndexFiles(fileHandles);
+  }
+
+  return lines;
+}
+
+export async function buildAccessLogIndexQuery(
+  index: AccessLogIndex,
+  options: Pick<AccessLogIndexPageOptions, "filter" | "sortKey" | "sortDirection">
+): Promise<AccessLogIndexQuery> {
+  if (options.filter === passThroughFilter && options.sortKey === "timestamp") {
+    return {
+      total: index.totalRows,
+      rows: sequentialRows(index.totalRows, options.sortDirection)
+    };
+  }
+
+  const rows: Array<{ row: number; value: string | number }> = [];
+  const fileHandles = openIndexFiles(index);
+
+  try {
+    for (let row = 0; row < index.totalRows; row += 1) {
+      const line = readAccessLogIndexRowFromOpenFiles(index, row, fileHandles);
+
+      if (options.filter(line)) {
+        rows.push({
+          row,
+          value: sortableValue(line, options.sortKey)
+        });
+      }
+    }
+  } finally {
+    closeIndexFiles(fileHandles);
+  }
+
+  if (options.sortKey === "timestamp") {
+    if (options.sortDirection === "desc") {
+      rows.reverse();
+    }
+  } else {
+    rows.sort((a, b) => compareSortableValue(a.value, b.value, options.sortDirection));
+  }
+
+  return {
+    total: rows.length,
+    rows: rows.map((item) => item.row)
+  };
 }
 
 function readSequentialPage(
@@ -214,6 +327,52 @@ function compareLine(
   return String(a[sortKey]).localeCompare(String(b[sortKey])) * multiplier;
 }
 
+function sequentialRows(totalRows: number, direction: "asc" | "desc"): number[] {
+  const rows: number[] = [];
+
+  if (direction === "asc") {
+    for (let row = 0; row < totalRows; row += 1) {
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  for (let row = totalRows - 1; row >= 0; row -= 1) {
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function sortableValue(
+  line: IncidentLogLine,
+  sortKey: AccessLogIndexPageOptions["sortKey"]
+): string | number {
+  if (sortKey === "bytes") {
+    return line.bytes ?? 0;
+  }
+
+  if (sortKey === "status") {
+    return line.status;
+  }
+
+  return String(line[sortKey]);
+}
+
+function compareSortableValue(
+  a: string | number,
+  b: string | number,
+  direction: "asc" | "desc"
+): number {
+  const multiplier = direction === "asc" ? 1 : -1;
+
+  if (typeof a === "number" && typeof b === "number") {
+    return (a - b) * multiplier;
+  }
+
+  return String(a).localeCompare(String(b)) * multiplier;
+}
+
 class SyncAccessLogIndexWriter implements AccessLogIndexWriter {
   readonly index: AccessLogIndex;
   private readonly rowsFd: number;
@@ -230,12 +389,13 @@ class SyncAccessLogIndexWriter implements AccessLogIndexWriter {
     this.offsetsFd = openSync(index.offsetsPath, "w");
   }
 
-  write(line: IncidentLogLine): void {
+  write(line: IncidentLogLine): number {
     if (this.closed) {
       throw new Error("Cannot write to closed access-log index.");
     }
 
-    const row = Buffer.from(`${JSON.stringify(line)}\n`, "utf8");
+    const rowNumber = this.index.totalRows;
+    const row = Buffer.from(`${JSON.stringify({ ...line, row: rowNumber })}\n`, "utf8");
     const offset = Buffer.allocUnsafe(8);
     offset.writeBigUInt64LE(BigInt(this.byteOffset), 0);
     this.offsetsBuffer.push(offset);
@@ -247,6 +407,8 @@ class SyncAccessLogIndexWriter implements AccessLogIndexWriter {
     if (this.bufferedBytes >= 1024 * 1024) {
       this.flush();
     }
+
+    return rowNumber;
   }
 
   close(): void {
