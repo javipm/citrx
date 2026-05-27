@@ -32,8 +32,8 @@ import type {
   TopItem
 } from "./types.js";
 import { BehaviorTracker, extractSubnetPrefix } from "./behavior.js";
-import { requestParamNames, requestParamValueLabels, userAgentLabel } from "./query-params.js";
-import { accessLogTimestampToEpochSeconds, parseAccessLogTimestamp } from "./timestamp.js";
+import { requestParamLabels, userAgentLabel } from "./query-params.js";
+import { accessLogTimestampToEpochSeconds } from "./timestamp.js";
 
 interface AnalyzeOptions {
   top: number;
@@ -398,7 +398,9 @@ function analyzeLine(
     return;
   }
 
-  if (!isInsideDateRange(entry.timestamp, options)) {
+  const epochSecond = accessLogTimestampToEpochSeconds(entry.timestamp);
+
+  if (!isInsideDateRange(epochSecond, options)) {
     counters.filteredLines += 1;
     return;
   }
@@ -421,19 +423,20 @@ function analyzeLine(
   };
 
   storedLine.row = counters.accessLogWriter?.write(storedLine) ?? counters.parsedLines - 1;
-  counters.behavior.observe(entry);
+  counters.behavior.observe(entry, epochSecond);
   increment(counters.ips, entry.ip);
   increment(counters.paths, entry.path);
   increment(counters.methods, entry.method);
   increment(counters.statuses, String(entry.status));
   increment(counters.userAgents, userAgentLabel(entry.userAgent));
-  for (const param of requestParamNames(entry.target)) {
+  const params = requestParamLabels(entry.target);
+  for (const param of params.names) {
     increment(counters.params, param);
   }
-  for (const paramValue of requestParamValueLabels(entry.target)) {
+  for (const paramValue of params.values) {
     increment(counters.paramValues, paramValue);
   }
-  updatePathStats(counters.pathStats, entry);
+  updatePathStats(counters.pathStats, entry, epochSecond);
   addIncidentLine(counters.pathMatches, entry.path, storedLine);
 
   for (const hit of detectRequestHits(entry)) {
@@ -713,7 +716,11 @@ function redactRawLine(line: string): string {
   );
 }
 
-function updatePathStats(statsByPath: Map<string, PathStats>, entry: AccessLogEntry): void {
+function updatePathStats(
+  statsByPath: Map<string, PathStats>,
+  entry: AccessLogEntry,
+  epoch: number | null
+): void {
   let stats = statsByPath.get(entry.path);
 
   if (!stats) {
@@ -754,7 +761,6 @@ function updatePathStats(statsByPath: Map<string, PathStats>, entry: AccessLogEn
   }
 
   // Track first/last seen epoch for rate-per-minute and persistence scoring.
-  const epoch = accessLogTimestampToEpochSeconds(entry.timestamp);
   if (epoch !== null) {
     if (stats.firstSeen === null || epoch < stats.firstSeen) stats.firstSeen = epoch;
     if (stats.lastSeen === null || epoch > stats.lastSeen) stats.lastSeen = epoch;
@@ -842,16 +848,16 @@ async function* emptyAsyncIterable(): AsyncIterable<string> {
   // Empty by design.
 }
 
-function isInsideDateRange(timestamp: string, options: AnalyzeOptions): boolean {
+function isInsideDateRange(epochSecond: number | null, options: AnalyzeOptions): boolean {
   if (!options.since && !options.until) {
     return true;
   }
 
-  const date = parseAccessLogTimestamp(timestamp);
-
-  if (!date) {
+  if (epochSecond === null) {
     return true;
   }
+
+  const date = new Date(epochSecond * 1000);
 
   if (options.since && date < options.since) {
     return false;

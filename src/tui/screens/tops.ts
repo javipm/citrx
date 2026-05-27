@@ -2,11 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { setImmediate } from "node:timers/promises";
 import type { AnalyzeReport, Incident, IncidentLogLine, TopItem } from "../../analysis/types.js";
-import {
-  requestParamNames,
-  requestParamValueLabels,
-  userAgentLabel
-} from "../../analysis/query-params.js";
+import { requestParamLabels, userAgentLabel } from "../../analysis/query-params.js";
 import type { AccessLogIndexQueryCache } from "../../run/access-index.js";
 import { readAccessLogIndexRows } from "../../run/access-index.js";
 import type { CitrxRun } from "../../run/types.js";
@@ -74,11 +70,12 @@ function addInsightLine(
   incrementMap(maps.paths, line.path);
   incrementMap(maps.userAgents, userAgentLabel(line.userAgent));
 
-  for (const param of requestParamNames(line.target)) {
+  const params = requestParamLabels(line.target);
+  for (const param of params.names) {
     incrementMap(maps.params, param);
   }
 
-  for (const paramValue of requestParamValueLabels(line.target)) {
+  for (const paramValue of params.values) {
     incrementMap(maps.paramValues, paramValue);
   }
 }

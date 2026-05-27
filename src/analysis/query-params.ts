@@ -3,7 +3,15 @@ export interface QueryParamEntry {
   value: string;
 }
 
+export interface QueryParamLabels {
+  names: string[];
+  values: string[];
+}
+
 const SENSITIVE_PARAM_PATTERN = /pass(word)?|token|secret|key|auth|session|sid|jwt|credential/i;
+const UA_LABEL_CACHE_MAX = 20_000;
+const UA_LABEL_CACHE_EVICT = 5_000;
+const uaLabelCache = new Map<string, string>();
 
 export function requestParamEntries(target: string): QueryParamEntry[] {
   const queryStart = target.indexOf("?");
@@ -20,19 +28,36 @@ export function requestParamEntries(target: string): QueryParamEntry[] {
 }
 
 export function requestParamNames(target: string): string[] {
-  return unique(
-    requestParamEntries(target)
-      .map((entry) => entry.name.trim())
-      .filter(Boolean)
-  );
+  return requestParamLabels(target).names;
 }
 
 export function requestParamValueLabels(target: string): string[] {
-  return unique(
-    requestParamEntries(target)
-      .map((entry) => paramValueLabel(entry.name.trim(), entry.value.trim()))
-      .filter((value): value is string => Boolean(value))
-  );
+  return requestParamLabels(target).values;
+}
+
+export function requestParamLabels(target: string): QueryParamLabels {
+  const names: string[] = [];
+  const values: string[] = [];
+
+  for (const entry of requestParamEntries(target)) {
+    const name = entry.name.trim();
+
+    if (!name) {
+      continue;
+    }
+
+    names.push(name);
+
+    const value = paramValueLabel(name, entry.value.trim());
+    if (value) {
+      values.push(value);
+    }
+  }
+
+  return {
+    names: unique(names),
+    values: unique(values)
+  };
 }
 
 export function userAgentLabel(userAgent: string | null): string {
@@ -40,6 +65,17 @@ export function userAgentLabel(userAgent: string | null): string {
     return "-";
   }
 
+  const cached = uaLabelCache.get(userAgent);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const label = computeUserAgentLabel(userAgent);
+  cacheUserAgentLabel(userAgent, label);
+  return label;
+}
+
+function computeUserAgentLabel(userAgent: string): string {
   const normalized = userAgent.replace(/\s+/g, " ").trim();
   const bot = normalized.match(
     /([A-Za-z0-9_.-]*(?:bot|crawler|spider|slurp|searchbot)[A-Za-z0-9_.-]*\/[^\s;)]+)/i
@@ -64,6 +100,22 @@ export function userAgentLabel(userAgent: string | null): string {
   }
 
   return normalized.length <= 42 ? normalized : `${normalized.slice(0, 41)}…`;
+}
+
+function cacheUserAgentLabel(userAgent: string, label: string): void {
+  if (uaLabelCache.size >= UA_LABEL_CACHE_MAX) {
+    let evicted = 0;
+    for (const key of uaLabelCache.keys()) {
+      uaLabelCache.delete(key);
+      evicted += 1;
+
+      if (evicted >= UA_LABEL_CACHE_EVICT) {
+        break;
+      }
+    }
+  }
+
+  uaLabelCache.set(userAgent, label);
 }
 
 export function isSensitiveParamName(name: string): boolean {

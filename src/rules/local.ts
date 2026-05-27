@@ -257,13 +257,12 @@ const PAYLOAD_PREFIXES = [
   ".old"
 ];
 
+const PAYLOAD_PREFIX_RE = new RegExp(PAYLOAD_PREFIXES.map(escapeRegex).join("|"), "i");
 const COMMON_METHODS = new Set(["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "PATCH"]);
 
 export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
-  const rawLower = entry.target.toLowerCase();
-
   // Fast path: skip expensive decode + regex if no known payload prefix present
-  if (!PAYLOAD_PREFIXES.some((prefix) => rawLower.includes(prefix))) {
+  if (!PAYLOAD_PREFIX_RE.test(entry.target)) {
     // Still check rare method (PUT/DELETE/PATCH are standard REST and excluded).
     if (COMMON_METHODS.has(entry.method)) {
       return [];
@@ -980,4 +979,8 @@ function normalizeForMatching(target: string): string {
 
 function truncateSample(value: string): string {
   return value.length <= MAX_SAMPLE_LENGTH ? value : `${value.slice(0, MAX_SAMPLE_LENGTH - 3)}...`;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
 }

@@ -1,3 +1,18 @@
+const MONTHS: Record<string, string> = {
+  Jan: "01",
+  Feb: "02",
+  Mar: "03",
+  Apr: "04",
+  May: "05",
+  Jun: "06",
+  Jul: "07",
+  Aug: "08",
+  Sep: "09",
+  Oct: "10",
+  Nov: "11",
+  Dec: "12"
+};
+
 export function parseAccessLogTimestamp(timestamp: string): Date | null {
   const match =
     /^(?<day>\d{2})\/(?<month>[A-Za-z]{3})\/(?<year>\d{4}):(?<time>\d{2}:\d{2}:\d{2}) (?<offset>[+-]\d{4})$/.exec(
@@ -27,20 +42,5 @@ export function accessLogTimestampToEpochSeconds(timestamp: string): number | nu
 }
 
 function monthNumber(month: string): string | null {
-  const months = new Map([
-    ["Jan", "01"],
-    ["Feb", "02"],
-    ["Mar", "03"],
-    ["Apr", "04"],
-    ["May", "05"],
-    ["Jun", "06"],
-    ["Jul", "07"],
-    ["Aug", "08"],
-    ["Sep", "09"],
-    ["Oct", "10"],
-    ["Nov", "11"],
-    ["Dec", "12"]
-  ]);
-
-  return months.get(month) ?? null;
+  return MONTHS[month] ?? null;
 }

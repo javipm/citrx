@@ -10,6 +10,7 @@ import { accessLogTimestampToEpochSeconds } from "./timestamp.js";
 
 export const MAX_TRACKED_IPS = 100_000;
 const STALE_IP_SECONDS = 900;
+const STALE_IP_EVICTION_BATCH = 5_000;
 const PATH_SENTINEL_LIMIT = 501;
 const UA_SENTINEL_LIMIT = 9;
 const TOP_IP_LIMIT = 100;
@@ -51,6 +52,7 @@ const SUBNET_BURST_SECONDS = 5;
 const SUBNET_IPS_SENTINEL = 5001;
 const MAX_TRACKED_SUBNETS = 50_000;
 const STALE_SUBNET_SECONDS = 900;
+const STALE_SUBNET_EVICTION_BATCH = 5_000;
 /** Fake-bot threshold: 1-2 requests from a misconfigured bot or a typo'd UA aren't actionable.
  *  Real impersonation campaigns probe at scale. */
 const FAKE_BOT_MIN_REQUESTS = 10;
@@ -193,9 +195,7 @@ export class BehaviorTracker {
     this.maxTrackedSubnets = options.maxTrackedSubnets ?? MAX_TRACKED_SUBNETS;
   }
 
-  observe(entry: AccessLogEntry): void {
-    const epochSecond = accessLogTimestampToEpochSeconds(entry.timestamp);
-
+  observe(entry: AccessLogEntry, epochSecond = accessLogTimestampToEpochSeconds(entry.timestamp)): void {
     if (epochSecond === null) {
       this.invalidTimestampLines += 1;
       return;
@@ -341,27 +341,28 @@ export class BehaviorTracker {
   }
 
   private evictStaleIp(epochSecond: number): boolean {
-    let candidate: IpBehaviorState | undefined;
+    const cutoff = epochSecond - STALE_IP_SECONDS;
+    const candidates: IpBehaviorState[] = [];
 
     for (const state of this.ips.values()) {
-      if (state.lastSeen >= epochSecond - STALE_IP_SECONDS) {
-        continue;
-      }
-
-      if (
-        !candidate ||
-        state.totalRequests < candidate.totalRequests ||
-        (state.totalRequests === candidate.totalRequests && state.lastSeen < candidate.lastSeen)
-      ) {
-        candidate = state;
+      if (state.lastSeen < cutoff) {
+        candidates.push(state);
       }
     }
 
-    if (!candidate) {
+    if (candidates.length === 0) {
       return false;
     }
 
-    this.ips.delete(candidate.ip);
+    candidates.sort(
+      (a, b) => a.totalRequests - b.totalRequests || a.lastSeen - b.lastSeen
+    );
+
+    const count = Math.min(STALE_IP_EVICTION_BATCH, candidates.length);
+    for (let index = 0; index < count; index += 1) {
+      this.ips.delete(candidates[index]!.ip);
+    }
+
     return true;
   }
 
@@ -398,27 +399,28 @@ export class BehaviorTracker {
   }
 
   private evictStaleSubnet(epochSecond: number): boolean {
-    let candidate: SubnetState | undefined;
+    const cutoff = epochSecond - STALE_SUBNET_SECONDS;
+    const candidates: SubnetState[] = [];
 
     for (const subnet of this.subnets.values()) {
-      if (subnet.lastSeen >= epochSecond - STALE_SUBNET_SECONDS) {
-        continue;
-      }
-
-      if (
-        !candidate ||
-        subnet.peakSubnetRps < candidate.peakSubnetRps ||
-        (subnet.peakSubnetRps === candidate.peakSubnetRps && subnet.lastSeen < candidate.lastSeen)
-      ) {
-        candidate = subnet;
+      if (subnet.lastSeen < cutoff) {
+        candidates.push(subnet);
       }
     }
 
-    if (!candidate) {
+    if (candidates.length === 0) {
       return false;
     }
 
-    this.subnets.delete(candidate.prefix);
+    candidates.sort(
+      (a, b) => a.peakSubnetRps - b.peakSubnetRps || a.lastSeen - b.lastSeen
+    );
+
+    const count = Math.min(STALE_SUBNET_EVICTION_BATCH, candidates.length);
+    for (let index = 0; index < count; index += 1) {
+      this.subnets.delete(candidates[index]!.prefix);
+    }
+
     return true;
   }
 
