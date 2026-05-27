@@ -45,6 +45,46 @@ describe("access log analysis incident matches", () => {
     );
   });
 
+  it("links saturation AI crawler incidents only to materially served lines", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    const lines: string[] = [];
+
+    for (let minute = 0; minute < 3; minute += 1) {
+      for (let index = 0; index < 120; index += 1) {
+        lines.push(
+          `203.0.113.10 - - [25/May/2026:03:${String(12 + minute).padStart(2, "0")}:00 +0200] "GET /served-${minute}-${index} HTTP/1.1" 200 120 "-" "GPTBot/1.0"`
+        );
+      }
+    }
+
+    for (let index = 0; index < 20; index += 1) {
+      lines.push(
+        `203.0.113.10 - - [25/May/2026:03:20:00 +0200] "GET /blocked-${index} HTTP/1.1" 403 12 "-" "GPTBot/1.0"`
+      );
+    }
+
+    await writeFile(logFile, lines.join("\n"));
+
+    const report = await analyzeAccessLogs([logFile], {
+      top: 5,
+      format: "auto"
+    });
+
+    const incident = report.incidents.find((item) => item.id === "ai_scraper_known:GPTBot");
+    const matches = report.incidentMatches.find(
+      (item) => item.incidentId === "ai_scraper_known:GPTBot"
+    );
+
+    expect(incident).toEqual(expect.objectContaining({ kind: "saturation" }));
+    expect(matches).toEqual(
+      expect.objectContaining({
+        totalMatches: 360
+      })
+    );
+    expect(matches?.lines.every((line) => line.status === 200)).toBe(true);
+  });
+
   it("builds exact top user-agent and query parameter lists", async () => {
     const directory = await mkdtemp(join(tmpdir(), "citrx-"));
     const logFile = join(directory, "access.log");

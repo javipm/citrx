@@ -27,8 +27,9 @@ const BINGBOT_UA = /\bbingbot\/\d/i;
 const BOT_PATH_SENTINEL_LIMIT = 1001;
 const BOT_IP_SENTINEL_LIMIT = 5001;
 const AI_BOT_MEDIUM_REQUESTS = 500;
-const AI_BOT_HIGH_REQUESTS = 5000;
 const AI_BOT_HIGH_PATH_MINUTES = 3;
+const AI_BOT_MIN_PEAK_SERVED_PER_MINUTE = 120;
+const AI_BOT_MIN_5XX_DISTRESS = 100;
 const FINGERPRINT_BUCKET_SECONDS = 60;
 const FINGERPRINT_PATH_THRESHOLD = 20;
 const SINGLE_IP_PATH_EXPLOSION_THRESHOLD = 500;
@@ -138,6 +139,13 @@ interface BotState {
   pathMinuteBuckets: Map<number, Set<string>>;
   maxPathsPerMinute: number;
   highPathMinuteCount: number;
+  status2xx: number;
+  status3xx: number;
+  status4xx: number;
+  status5xx: number;
+  currentMinute: number | null;
+  currentMinuteServed: number;
+  maxServedPerMinute: number;
 }
 
 interface TopIpSnapshot {
@@ -597,7 +605,14 @@ export class BehaviorTracker {
       lastSeen: epochSecond,
       pathMinuteBuckets: new Map<number, Set<string>>(),
       maxPathsPerMinute: 0,
-      highPathMinuteCount: 0
+      highPathMinuteCount: 0,
+      status2xx: 0,
+      status3xx: 0,
+      status4xx: 0,
+      status5xx: 0,
+      currentMinute: null,
+      currentMinuteServed: 0,
+      maxServedPerMinute: 0
     };
 
     bot.requests += 1;
@@ -614,6 +629,7 @@ export class BehaviorTracker {
     }
 
     const minute = Math.floor(epochSecond / 60);
+    this.observeBotStatus(bot, entry.status, minute);
     const paths = bot.pathMinuteBuckets.get(minute) ?? new Set<string>();
     const previousSize = paths.size;
     paths.add(entry.path);
@@ -631,6 +647,30 @@ export class BehaviorTracker {
     }
 
     this.botRollup.set(botName, bot);
+  }
+
+  private observeBotStatus(bot: BotState, status: number, minute: number): void {
+    const served = (status >= 200 && status < 300) || (status >= 500 && status < 600);
+
+    if (status >= 200 && status < 300) {
+      bot.status2xx += 1;
+    } else if (status >= 300 && status < 400) {
+      bot.status3xx += 1;
+    } else if (status >= 400 && status < 500) {
+      bot.status4xx += 1;
+    } else if (status >= 500 && status < 600) {
+      bot.status5xx += 1;
+    }
+
+    if (bot.currentMinute !== minute) {
+      bot.currentMinute = minute;
+      bot.currentMinuteServed = 0;
+    }
+
+    if (served) {
+      bot.currentMinuteServed += 1;
+      bot.maxServedPerMinute = Math.max(bot.maxServedPerMinute, bot.currentMinuteServed);
+    }
   }
 
   private observeFingerprintPath(state: IpBehaviorState, path: string, epochSecond: number): void {
@@ -992,11 +1032,12 @@ export class BehaviorTracker {
       incidents.push({
         id: `http_4xx_storm:${state.ip}`,
         category: "http_anomaly",
-        kind: "saturation",
-        severity: "medium",
-        score: 60,
+        kind: "noise",
+        severity: "low",
+        score: 35,
         title: "4xx response storm",
-        description: "One IP generated many 4xx responses in adjacent minute buckets.",
+        description:
+          "One IP generated many blocked/error responses; this is useful context but not backend saturation.",
         evidence: [
           { key: "ip", value: state.ip },
           { key: "status4xx", value: state.max4xxTwoBucketCount },
@@ -1108,7 +1149,9 @@ export class BehaviorTracker {
       // bot traffic is informational — kind: "noise" so it stays out of the
       // saturation panel.
       const high =
-        bot.requests > AI_BOT_HIGH_REQUESTS || bot.highPathMinuteCount >= AI_BOT_HIGH_PATH_MINUTES;
+        bot.highPathMinuteCount >= AI_BOT_HIGH_PATH_MINUTES &&
+        (bot.maxServedPerMinute >= AI_BOT_MIN_PEAK_SERVED_PER_MINUTE ||
+          bot.status5xx >= AI_BOT_MIN_5XX_DISTRESS);
       const medium = bot.requests >= AI_BOT_MEDIUM_REQUESTS;
       const kind: IncidentKind = high ? "saturation" : "noise";
 
@@ -1127,7 +1170,12 @@ export class BehaviorTracker {
           { key: "pathsTouched", value: bot.paths.size },
           { key: "requestedRobotsTxt", value: bot.requestedRobotsTxt },
           { key: "maxPathsPerMinute", value: bot.maxPathsPerMinute },
+          { key: "maxServedPerMinute", value: bot.maxServedPerMinute },
           { key: "highPathMinutes", value: bot.highPathMinuteCount },
+          { key: "status2xx", value: bot.status2xx },
+          { key: "status3xx", value: bot.status3xx },
+          { key: "status4xx", value: bot.status4xx },
+          { key: "status5xx", value: bot.status5xx },
           { key: "firstSeen", value: formatEpoch(bot.firstSeen) },
           { key: "lastSeen", value: formatEpoch(bot.lastSeen) }
         ],
@@ -1277,11 +1325,12 @@ export class BehaviorTracker {
       incidents.push({
         id: `ua_rotation_same_ip:${state.ip}`,
         category: "http_anomaly",
-        kind: "compromise",
-        severity: "high",
-        score: 70,
+        kind: "noise",
+        severity: "low",
+        score: 35,
         title: "User-agent rotation from one IP",
-        description: "One IP used many different user-agents across a sizeable request volume.",
+        description:
+          "One IP used many different user-agents, but no attack payload was observed from this signal alone.",
         evidence: [
           { key: "ip", value: state.ip },
           { key: "uaCount", value: state.userAgents.size },

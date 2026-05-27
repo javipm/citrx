@@ -395,25 +395,25 @@ Every incident has a `kind` field that drives which TUI panel it appears in:
 | `ssrf:`                 | `ssrf`              | compromise | localhost, metadata IPs/hosts, callback-like URL params                               |
 | `command_injection:`    | `command_injection` | compromise | shell metacharacters plus command indicators                                          |
 | `recon_sensitive_file:` | `recon`             | compromise | probes for `.env`, `.git`, backups, dumps, internals                                  |
-| `rare_method:`          | `http_anomaly`      | compromise | uncommon HTTP methods (`CONNECT`, `TRACE`, `OPTIONS`)                                 |
+| `rare_method:`          | `http_anomaly`      | noise      | uncommon HTTP methods (`CONNECT`, `TRACE`, `OPTIONS`)                                 |
 
 Payload incidents are grouped **by attacker IP**, not by path, so one incident
 per IP regardless of how many paths they probe. Scoring by response outcome:
 
-- Any `2xx` response → `critical/100` + `!SUCCESS` flag (payload landed)
-- Any `5xx` response → `critical/90`
-- Only `4xx` responses → `medium/55` (blocked probes)
+- Any `2xx` response → `SECURITY`, `critical/100` + `!SUCCESS` flag (payload landed)
+- Any `5xx` response → `SECURITY`, `critical/90`
+- Only blocked/redirected responses → `OTHER` noise; useful context, not proven impact
 
 `recon_sensitive_file` requires at least **2 successful responses** or a **10% success
 ratio** to avoid flagging typical 404 scanners.
 
 ### Aggregate Path Rules
 
-| ID prefix          | Category           | Kind             | Meaning                                                                 |
-| ------------------ | ------------------ | ---------------- | ----------------------------------------------------------------------- |
-| `abusive_crawl:`   | `abusive_crawling` | saturation/noise | material path pressure or distributed crawling on a non-entrypoint path |
-| `query_explosion:` | `abusive_crawling` | noise            | one path requested with many query variants                             |
-| `post_hotspot:`    | `post_hotspot`     | saturation       | endpoint receives unusually many POST requests                          |
+| ID prefix          | Category           | Kind             | Meaning                                                                        |
+| ------------------ | ------------------ | ---------------- | ------------------------------------------------------------------------------ |
+| `abusive_crawl:`   | `abusive_crawling` | saturation/noise | material served path pressure or distributed crawling on a non-entrypoint path |
+| `query_explosion:` | `abusive_crawling` | noise            | one path requested with many query variants                                    |
+| `post_hotspot:`    | `post_hotspot`     | noise            | endpoint receives unusually many POST requests                                 |
 
 ### Rate And DDoS Rules
 
@@ -428,7 +428,7 @@ ratio** to avoid flagging typical 404 scanners.
 
 | ID prefix         | Category       | Kind       | Meaning                                                        |
 | ----------------- | -------------- | ---------- | -------------------------------------------------------------- |
-| `http_4xx_storm:` | `http_anomaly` | saturation | one IP generates many 4xx responses in adjacent minute buckets |
+| `http_4xx_storm:` | `http_anomaly` | noise      | one IP generates many 4xx responses in adjacent minute buckets |
 | `http_5xx_storm:` | `http_anomaly` | saturation | one IP generates many 5xx responses in adjacent minute buckets |
 
 ### Bot And Scanner Rules
@@ -439,7 +439,7 @@ ratio** to avoid flagging typical 404 scanners.
 | `scanner_ua_known:`         | `scanner`          | compromise       | known scanner/offensive tooling user-agent                             |
 | `scanner_signature_paths:`  | `scanner`          | compromise       | one IP touches many known fingerprint paths in adjacent minute buckets |
 | `single_ip_path_explosion:` | `abusive_crawling` | saturation       | one IP exceeds **10 unique paths/minute** sustained                    |
-| `ua_rotation_same_ip:`      | `http_anomaly`     | saturation       | one IP uses many different user-agents **and** peak RPS ≥ 5            |
+| `ua_rotation_same_ip:`      | `http_anomaly`     | noise            | one IP uses many different user-agents **and** peak RPS ≥ 5            |
 | `fake_bot_googlebot:`       | `fake_bot`         | compromise       | UA claims core Googlebot but IP is outside published Googlebot ranges  |
 | `fake_bot_bingbot:`         | `fake_bot`         | compromise       | UA claims bingbot but IP is outside published Bing ranges              |
 
@@ -447,12 +447,17 @@ Detection notes:
 
 - `single_ip_path_explosion` requires **pathsPerMinute ≥ 10**, not just raw count.
   Normal page loads fetching many assets do not trigger it.
-- `ua_rotation_same_ip` requires **peak RPS ≥ 5**. Shared NAT (e.g. AWS offices)
-  naturally generates many user-agents at low rate without being malicious.
+- `abusive_crawl` enters `SATURATION` only when enough requests are actually
+  served (`2xx`/material `5xx`) and the path has a real served-per-minute peak.
+  Redirect-heavy or 403-heavy traffic stays in `OTHER`.
+- `ua_rotation_same_ip` requires **peak RPS ≥ 5**, but is still `OTHER` unless
+  another detector finds payload impact. Shared NAT (e.g. AWS offices) naturally
+  generates many user-agents at low rate without being malicious.
 - `fake_bot_*` incidents require **at least 10 requests** from that IP.
 - IPs confirmed as legitimate Googlebot or Bingbot (verified against published
   ranges) are excluded from all bot and scanner detections.
-- `ai_scraper_known` is `saturation` when score ≥ 70, `noise` otherwise.
+- `ai_scraper_known` is `SATURATION` only for bursty path fan-out; high total
+  crawler volume spread over days stays in `OTHER`.
 
 Googlebot and Bingbot range snapshots are stored in source. Refresh them with:
 

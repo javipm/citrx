@@ -115,6 +115,17 @@ describe("scoring multipliers", () => {
     expect(scored?.score).toBe(25);
   });
 
+  it("does not add persistence bonus to aggregate path incidents", () => {
+    const [scored] = applyScoringMultipliers([
+      incident("abusive_crawl:/hot", 75, [
+        { key: "firstSeen", value: "2026-05-25T00:00:00.000Z" },
+        { key: "lastSeen", value: "2026-05-25T01:00:00.000Z" }
+      ])
+    ]);
+
+    expect(scored).toMatchObject({ score: 75, severity: "high" });
+  });
+
   it("penalizes moderate AI bots that requested robots.txt", () => {
     const [scored] = applyScoringMultipliers([
       incident("ai_scraper_known:GPTBot", 25, [

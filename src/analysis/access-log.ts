@@ -33,7 +33,7 @@ import type {
 } from "./types.js";
 import { BehaviorTracker, extractSubnetPrefix } from "./behavior.js";
 import { requestParamNames, requestParamValueLabels, userAgentLabel } from "./query-params.js";
-import { parseAccessLogTimestamp } from "./timestamp.js";
+import { accessLogTimestampToEpochSeconds, parseAccessLogTimestamp } from "./timestamp.js";
 
 interface AnalyzeOptions {
   top: number;
@@ -599,7 +599,11 @@ function behaviorIncidentPredicate(
   if (incident.id.startsWith("ai_scraper_known:")) {
     const botName = String(evidenceValue(incident, "botName") ?? "");
     const pattern = AI_BOT_PATTERNS.find((item) => item.name === botName);
-    return pattern ? (line) => Boolean(line.userAgent && pattern.regex.test(line.userAgent)) : null;
+    return pattern
+      ? (line) =>
+          Boolean(line.userAgent && pattern.regex.test(line.userAgent)) &&
+          (incident.kind !== "saturation" || isMateriallyServed(line.status))
+      : null;
   }
 
   if (incident.id.startsWith("scanner_ua_known:")) {
@@ -656,6 +660,10 @@ function behaviorIncidentPredicate(
   return null;
 }
 
+function isMateriallyServed(status: number): boolean {
+  return (status >= 200 && status < 300) || (status >= 500 && status < 600);
+}
+
 function evidenceValue(
   incident: Incident,
   key: string
@@ -709,7 +717,19 @@ function updatePathStats(statsByPath: Map<string, PathStats>, entry: AccessLogEn
       bytes: 0,
       ipCounts: new Map(),
       queryVariants: new Set(),
-      postCount: 0
+      postCount: 0,
+      firstSeen: null,
+      lastSeen: null,
+      status2xx: 0,
+      status3xx: 0,
+      status4xx: 0,
+      status5xx: 0,
+      currentMinute: null,
+      currentMinuteRequests: 0,
+      currentMinuteServed: 0,
+      maxRequestsPerMinute: 0,
+      maxServedPerMinute: 0,
+      samples: []
     };
     statsByPath.set(entry.path, stats);
   }
@@ -725,6 +745,55 @@ function updatePathStats(statsByPath: Map<string, PathStats>, entry: AccessLogEn
 
   if (entry.method === "POST") {
     stats.postCount += 1;
+  }
+
+  // Track first/last seen epoch for rate-per-minute and persistence scoring.
+  const epoch = accessLogTimestampToEpochSeconds(entry.timestamp);
+  if (epoch !== null) {
+    if (stats.firstSeen === null || epoch < stats.firstSeen) stats.firstSeen = epoch;
+    if (stats.lastSeen === null || epoch > stats.lastSeen) stats.lastSeen = epoch;
+    updatePathMinuteStats(stats, epoch, entry.status);
+  }
+
+  // Status counters for server-distress signal and served-request gating.
+  if (entry.status >= 200 && entry.status < 300) {
+    stats.status2xx += 1;
+  } else if (entry.status >= 300 && entry.status < 400) {
+    stats.status3xx += 1;
+  } else if (entry.status >= 400 && entry.status < 500) {
+    stats.status4xx += 1;
+  } else if (entry.status >= 500 && entry.status < 600) {
+    stats.status5xx += 1;
+  }
+
+  // Collect up to 5 redacted sample targets (query-bearing only) for operator review.
+  if (stats.samples.length < 5 && entry.target.includes("?")) {
+    const sample = redactTarget(entry.target);
+    if (!stats.samples.includes(sample)) {
+      stats.samples.push(sample);
+    }
+  }
+}
+
+function updatePathMinuteStats(stats: PathStats, epochSecond: number, status: number): void {
+  const minute = Math.floor(epochSecond / 60);
+  const served = (status >= 200 && status < 300) || (status >= 500 && status < 600);
+
+  if (stats.currentMinute !== minute) {
+    stats.currentMinute = minute;
+    stats.currentMinuteRequests = 0;
+    stats.currentMinuteServed = 0;
+  }
+
+  stats.currentMinuteRequests = (stats.currentMinuteRequests ?? 0) + 1;
+  stats.maxRequestsPerMinute = Math.max(
+    stats.maxRequestsPerMinute ?? 0,
+    stats.currentMinuteRequests
+  );
+
+  if (served) {
+    stats.currentMinuteServed = (stats.currentMinuteServed ?? 0) + 1;
+    stats.maxServedPerMinute = Math.max(stats.maxServedPerMinute ?? 0, stats.currentMinuteServed);
   }
 }
 

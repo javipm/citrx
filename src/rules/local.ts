@@ -40,6 +40,21 @@ export interface PathStats {
   ipCounts: Map<string, number>;
   queryVariants: Set<string>;
   postCount: number;
+  /** Epoch seconds of first/last entry for this path (null if not tracked). */
+  firstSeen: number | null;
+  lastSeen: number | null;
+  /** HTTP status counters for rate-quality signal. */
+  status2xx: number;
+  status3xx: number;
+  status4xx: number;
+  status5xx: number;
+  currentMinute?: number | null;
+  currentMinuteRequests?: number;
+  currentMinuteServed?: number;
+  maxRequestsPerMinute?: number;
+  maxServedPerMinute?: number;
+  /** Up to 5 redacted sample targets for operator review. */
+  samples: string[];
 }
 
 const RULES: RuleDefinition[] = [
@@ -159,6 +174,19 @@ const CRAWL_SATURATION_MIN_QUERY_VARIANTS = 1_000;
 const CRAWL_SATURATION_MIN_QUERY_VARIANT_RATIO = 0.5;
 const CRAWL_SATURATION_MIN_REPEATED_IPS = 20;
 const CRAWL_SATURATION_MIN_REPEATED_REQUEST_SHARE = 0.8;
+/**
+ * When signal quality is very high (query-variant ratio ≥ 0.75 or many repeated IPs)
+ * allow saturation at lower served-request volume. A URL receiving 1 000+ requests
+ * where 75%+ are unique queries is clearly being exhaustively scraped regardless of
+ * total volume.
+ */
+const CRAWL_SATURATION_HIGH_SIGNAL_MIN_REQUESTS = 1_000;
+const CRAWL_SATURATION_HIGH_SIGNAL_QUERY_RATIO = 0.75;
+const CRAWL_SATURATION_HIGH_SIGNAL_REPEATED_IPS = 30;
+const CRAWL_SATURATION_MIN_PEAK_SERVED_PER_MINUTE = 120;
+const CRAWL_SATURATION_LARGE_CHURN_MIN_REQUESTS = 20_000;
+const CRAWL_SATURATION_LARGE_CHURN_MIN_PEAK_SERVED_PER_MINUTE = 60;
+const CRAWL_SATURATION_MIN_5XX_DISTRESS = 100;
 const POST_HOTSPOT_MIN_REQUESTS = 200;
 const QUERY_EXPLOSION_MIN_REQUESTS = 500;
 const QUERY_EXPLOSION_MIN_VARIANTS = 150;
@@ -287,8 +315,18 @@ const STATIC_ASSET_RE =
 const ADMIN_PATH_RE =
   /^\/(?:admin|admincontrol|wp-admin|adminer|administrator|backend|manage|dashboard|panel)(?:\/|$)/i;
 
+/** Crawler-infra paths hammered by Googlebot/aggregators but never abuse targets. */
+const CRAWLER_INFRA_RE =
+  /^\/(?:sitemap[^?]*\.xml|robots\.txt|feed(?:\/|$|\?)|rss(?:\/|$|\?)|\.well-known(?:\/|$|\?)|favicon\.ico)(?:\?|$)/i;
+
+/** Marketing / analytics click-tracking params that are unique per visitor/click.
+ *  Stripped from query variant signatures to avoid false-positive saturation signals
+ *  on popular social-shared or ad-targeted URLs. */
+const TRACKING_PARAM_RE =
+  /^(?:fbclid|gclid|gclsrc|dclid|msclkid|yclid|utm_\w+|_ga\w*|_gl|_gid|mc_eid|mc_cid|igshid|s_kwcid|ef_id)$/i;
+
 function isLowSignalAggregatePath(path: string): boolean {
-  return STATIC_ASSET_RE.test(path) || ADMIN_PATH_RE.test(path);
+  return STATIC_ASSET_RE.test(path) || ADMIN_PATH_RE.test(path) || CRAWLER_INFRA_RE.test(path);
 }
 
 export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Incident[] {
@@ -303,31 +341,87 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
     const crawlSignal = highVolumeCrawlSignal(stats);
 
     if (crawlSignal) {
-      const saturationSignal = materialPathSaturationSignal(stats, crawlSignal);
+      const saturationKind = materialPathSaturationSignal(stats, crawlSignal);
+
+      // Rate per minute (null when timestamps not available).
+      const durationMinutes =
+        stats.firstSeen !== null && stats.lastSeen !== null
+          ? Math.max(1, (stats.lastSeen - stats.firstSeen) / 60)
+          : null;
+      const ratePerMinute =
+        durationMinutes !== null ? Math.round(stats.count / durationMinutes) : null;
+
+      // Server distress: 5xx under load escalates severity.
+      const hasServerDistress = stats.status5xx >= CRAWL_SATURATION_MIN_5XX_DISTRESS;
+
+      let kind: "saturation" | "noise";
+      let severity: "critical" | "high" | "medium";
+      let score: number;
+      let title: string;
+      let description: string;
+
+      if (saturationKind === "query_churn") {
+        kind = "saturation";
+        severity = hasServerDistress ? "critical" : "high";
+        score = hasServerDistress ? 85 : 75;
+        title = "Distributed URL saturation";
+        description = "A non-entrypoint URL received material distributed request pressure.";
+      } else if (saturationKind === "repeat_pressure") {
+        kind = "saturation";
+        severity = hasServerDistress ? "critical" : "high";
+        score = hasServerDistress ? 80 : 70;
+        title = "Concentrated URL pressure";
+        description =
+          "A non-entrypoint URL received concentrated repeated pressure from a small set of IPs.";
+      } else {
+        kind = "noise";
+        severity = "medium";
+        score = 55;
+        title = "Distributed high-volume path crawling";
+        description = "Many clients repeatedly requested a non-entrypoint path.";
+      }
+
+      const evidence: Incident["evidence"] = [
+        { key: "path", value: stats.path },
+        { key: "requests", value: stats.count },
+        { key: "uniqueIps", value: stats.ipCounts.size },
+        { key: "repeatedIps", value: crawlSignal.repeatedIps },
+        { key: "repeatedRequestShare", value: crawlSignal.repeatedRequestShare },
+        { key: "queryVariants", value: stats.queryVariants.size },
+        { key: "queryVariantRatio", value: crawlSignal.queryVariantRatio },
+        { key: "bytes", value: stats.bytes }
+      ];
+
+      if (stats.firstSeen !== null) {
+        evidence.push({ key: "firstSeen", value: epochToIso(stats.firstSeen) });
+      }
+      if (stats.lastSeen !== null) {
+        evidence.push({ key: "lastSeen", value: epochToIso(stats.lastSeen) });
+      }
+      if (ratePerMinute !== null) {
+        evidence.push({ key: "ratePerMinute", value: ratePerMinute });
+      }
+      if (stats.maxRequestsPerMinute !== undefined) {
+        evidence.push({ key: "maxRequestsPerMinute", value: stats.maxRequestsPerMinute });
+      }
+      if (stats.maxServedPerMinute !== undefined) {
+        evidence.push({ key: "maxServedPerMinute", value: stats.maxServedPerMinute });
+      }
+      if (stats.status2xx > 0) evidence.push({ key: "status2xx", value: stats.status2xx });
+      if (stats.status3xx > 0) evidence.push({ key: "status3xx", value: stats.status3xx });
+      if (stats.status4xx > 0) evidence.push({ key: "status4xx", value: stats.status4xx });
+      if (stats.status5xx > 0) evidence.push({ key: "status5xx", value: stats.status5xx });
 
       incidents.push({
         id: `abusive_crawl:${stats.path}`,
         category: "abusive_crawling",
-        kind: saturationSignal ? "saturation" : "noise",
-        severity: saturationSignal ? "high" : "medium",
-        score: saturationSignal ? 75 : 55,
-        title: saturationSignal
-          ? "Distributed URL saturation"
-          : "Distributed high-volume path crawling",
-        description: saturationSignal
-          ? "A non-entrypoint URL received material distributed request pressure."
-          : "Many clients repeatedly requested a non-entrypoint path.",
-        evidence: [
-          { key: "path", value: stats.path },
-          { key: "requests", value: stats.count },
-          { key: "uniqueIps", value: stats.ipCounts.size },
-          { key: "repeatedIps", value: crawlSignal.repeatedIps },
-          { key: "repeatedRequestShare", value: crawlSignal.repeatedRequestShare },
-          { key: "queryVariants", value: stats.queryVariants.size },
-          { key: "queryVariantRatio", value: crawlSignal.queryVariantRatio },
-          { key: "bytes", value: stats.bytes }
-        ],
-        samples: []
+        kind,
+        severity,
+        score,
+        title,
+        description,
+        evidence,
+        samples: stats.samples.slice(0, 5)
       });
     } else if (
       !isLowSignalEntryPath(stats.path) &&
@@ -421,19 +515,56 @@ function materialPathSaturationSignal(
     repeatedRequestShare: number;
     queryVariantRatio: number;
   }
-): boolean {
-  if (stats.count < CRAWL_SATURATION_MIN_REQUESTS) {
-    return false;
+): "query_churn" | "repeat_pressure" | null {
+  // Saturation threshold uses only requests that hit real backend processing:
+  //   2xx — content actually delivered.
+  //   5xx — backend crashed under load (most extreme saturation signal).
+  // 3xx (redirects) are resolved at the webserver/CDN level without app processing.
+  // 4xx (WAF/auth blocks) never reach the application.
+  // Neither contributes meaningfully to backend load saturation.
+  const servedCount = stats.status2xx + stats.status5xx;
+  const maxServedPerMinute = stats.maxServedPerMinute ?? servedCount;
+
+  // High signal quality (very high query-variant churn or many repeat IPs) allows
+  // saturation at lower served volume — exhaustive scraping at 1 000+ hits is
+  // actionable regardless of whether total volume reaches 10 000.
+  const highQuerySignal = crawlSignal.queryVariantRatio >= CRAWL_SATURATION_HIGH_SIGNAL_QUERY_RATIO;
+  const highRepeatSignal = crawlSignal.repeatedIps >= CRAWL_SATURATION_HIGH_SIGNAL_REPEATED_IPS;
+  const minServed =
+    highQuerySignal || highRepeatSignal
+      ? CRAWL_SATURATION_HIGH_SIGNAL_MIN_REQUESTS
+      : CRAWL_SATURATION_MIN_REQUESTS;
+
+  if (servedCount < minServed) {
+    return null;
   }
 
+  const minPeakServedPerMinute =
+    highQuerySignal && servedCount >= CRAWL_SATURATION_LARGE_CHURN_MIN_REQUESTS
+      ? CRAWL_SATURATION_LARGE_CHURN_MIN_PEAK_SERVED_PER_MINUTE
+      : CRAWL_SATURATION_MIN_PEAK_SERVED_PER_MINUTE;
+
+  if (
+    stats.status5xx < CRAWL_SATURATION_MIN_5XX_DISTRESS &&
+    maxServedPerMinute < minPeakServedPerMinute
+  ) {
+    return null;
+  }
+
+  // Distributed query churn: many unique non-tracking query variants from spread IPs.
   const hasMaterialQueryChurn =
     stats.queryVariants.size >= CRAWL_SATURATION_MIN_QUERY_VARIANTS &&
     crawlSignal.queryVariantRatio >= CRAWL_SATURATION_MIN_QUERY_VARIANT_RATIO;
+
+  // Concentrated repeat pressure: small set of IPs accounts for the majority of load.
+  // Labelled separately from distributed churn — the attack profile differs.
   const hasMaterialRepeatPressure =
     crawlSignal.repeatedIps >= CRAWL_SATURATION_MIN_REPEATED_IPS &&
     crawlSignal.repeatedRequestShare >= CRAWL_SATURATION_MIN_REPEATED_REQUEST_SHARE;
 
-  return hasMaterialQueryChurn || hasMaterialRepeatPressure;
+  if (hasMaterialQueryChurn) return "query_churn";
+  if (hasMaterialRepeatPressure) return "repeat_pressure";
+  return null;
 }
 
 function isLowSignalEntryPath(path: string): boolean {
@@ -443,6 +574,10 @@ function isLowSignalEntryPath(path: string): boolean {
 
 function roundRatio(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+function epochToIso(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toISOString();
 }
 
 export function mergeRuleHit(
@@ -552,12 +687,29 @@ function applyOutcomeScore(
   ip: string
 ): void {
   const outcome = outcomeFor(hit.ruleId, stats);
+  incident.kind = actionableCompromiseKind(hit, outcome.label) ? "compromise" : "noise";
   incident.severity = outcome.severity ?? hit.severity;
   incident.score = outcome.score ?? hit.score;
   if (outcome.successful) {
     incident.successful = true;
   }
   incident.evidence = buildRuleEvidence(ip, stats, outcome.label);
+}
+
+function actionableCompromiseKind(hit: RuleHit, outcome: string): boolean {
+  if (hit.kind !== "compromise") {
+    return false;
+  }
+
+  if (isReconRule(hit.ruleId)) {
+    return outcome === "file_served" || outcome === "server_error";
+  }
+
+  if (isPayloadRule(hit.ruleId)) {
+    return outcome === "successful" || outcome === "server_error";
+  }
+
+  return false;
 }
 
 function outcomeFor(
@@ -706,7 +858,24 @@ export function redactTarget(target: string): string {
 
 export function querySignature(target: string): string {
   const queryStart = target.indexOf("?");
-  return queryStart === -1 ? "" : redactSensitiveTarget(`/${target.slice(queryStart)}`).slice(1);
+  if (queryStart === -1) return "";
+
+  // Strip marketing/analytics tracking params before building the variant signature.
+  // fbclid/gclid/utm_*/etc. are unique per click and inflate query-variant counts
+  // for legitimate marketing traffic. We keep all real application params so genuine
+  // query-explosion abuse is still detected.
+  try {
+    const url = new URL(target, "http://citrx.local");
+    for (const key of [...url.searchParams.keys()]) {
+      if (TRACKING_PARAM_RE.test(key)) {
+        url.searchParams.delete(key);
+      }
+    }
+    if (!url.search) return "";
+    return redactSensitiveTarget(`/${url.search}`).slice(1);
+  } catch {
+    return redactSensitiveTarget(`/${target.slice(queryStart)}`).slice(1);
+  }
 }
 
 function redactSensitiveTarget(target: string): string {

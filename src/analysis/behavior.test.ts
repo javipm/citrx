@@ -200,7 +200,7 @@ describe("behavior tracker", () => {
     );
   });
 
-  it("raises known AI crawlers above five thousand requests to high", () => {
+  it("keeps high-total AI crawlers as noise without bursty path fan-out", () => {
     const tracker = new BehaviorTracker();
 
     for (let index = 0; index < 5001; index += 1) {
@@ -211,7 +211,65 @@ describe("behavior tracker", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: "ai_scraper_known:ClaudeBot",
-          severity: "high"
+          kind: "noise",
+          severity: "low"
+        })
+      ])
+    );
+  });
+
+  it("raises AI crawlers only when path fan-out produces served load", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let minute = 0; minute < 3; minute += 1) {
+      for (let index = 0; index < 120; index += 1) {
+        const path = `/ai-path-${minute}-${index}`;
+        tracker.observe(
+          entry({
+            userAgent: "GPTBot/1.0",
+            path,
+            target: path,
+            timestamp: ts(minute * 60)
+          })
+        );
+      }
+    }
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "ai_scraper_known:GPTBot",
+          kind: "saturation",
+          evidence: expect.arrayContaining([{ key: "maxServedPerMinute", value: 120 }])
+        })
+      ])
+    );
+  });
+
+  it("keeps AI crawler fan-out as noise when responses are blocked", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let minute = 0; minute < 3; minute += 1) {
+      for (let index = 0; index < 120; index += 1) {
+        const path = `/blocked-ai-path-${minute}-${index}`;
+        tracker.observe(
+          entry({
+            userAgent: "GPTBot/1.0",
+            path,
+            target: path,
+            status: 403,
+            timestamp: ts(minute * 60)
+          })
+        );
+      }
+    }
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "ai_scraper_known:GPTBot",
+          kind: "noise",
+          evidence: expect.arrayContaining([{ key: "maxServedPerMinute", value: 0 }])
         })
       ])
     );
@@ -358,7 +416,13 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "ua_rotation_same_ip:203.0.113.10" })])
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "ua_rotation_same_ip:203.0.113.10",
+          kind: "noise",
+          severity: "low"
+        })
+      ])
     );
   });
 
