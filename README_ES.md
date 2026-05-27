@@ -111,8 +111,6 @@ Opciones:
 `NO_COLOR=1` desactiva colores. `CITRX_QUIET=1` desactiva banner/progreso en
 salida por terminal.
 
-Opciones eliminadas: `--geo`, `--no-session`, `--incident-lines`.
-
 ## Entradas
 
 Entradas soportadas:
@@ -192,8 +190,8 @@ El área de incidencias tiene tres pestañas navegables con `Tab`:
 
 `Tab` cicla: access log → SATURATION → SECURITY → OTHER → access log.
 
-Las incidencias marcadas con `!SUCCESS` tuvieron al menos una respuesta `2xx`,
-lo que significa que el payload o probe recibió una respuesta exitosa.
+Las incidencias marcadas con `2XX_HIT` tuvieron al menos una respuesta `2xx`,
+lo que significa que el payload o probe recibió una respuesta HTTP exitosa.
 
 Atajos:
 
@@ -233,6 +231,10 @@ b                vuelve al resumen
 q                salir
 ```
 
+El export de incidencia sólo aparece cuando todos los requests relacionados han
+terminado de cargarse, para evitar exportar una muestra parcial hidratada en
+background.
+
 ### Menú De Ordenación
 
 Pulsa `s` o `S` desde la pantalla principal o de incidencia para abrir un menú
@@ -248,8 +250,8 @@ Esc / Backspace  cancela
 ```
 
 Los valores seleccionados aparecen resaltados en el menú. Cuando una vista
-filtrada/ordenada grande o unos tops se están recalculando, la TUI muestra un
-estado de carga para que no parezca bloqueada.
+filtrada/ordenada grande, unos tops o un export JSON se están recalculando, la
+TUI muestra un estado de carga para que no parezca bloqueada.
 
 ### Pantalla De Tops
 
@@ -292,34 +294,76 @@ q                salir
 Los filtros funcionan sobre el access log global y sobre las filas relacionadas
 con una incidencia.
 
-Soportan:
+Puedes usarlos desde la tabla global, desde las filas de una incidencia y desde
+los drill-downs de tops. No distinguen mayúsculas/minúsculas y funcionan como
+un pequeño lenguaje de consulta:
 
-- búsqueda de texto
-- campos concretos
-- `AND` por defecto
-- `OR` o `|`
-- grupos con paréntesis
-- negación con `!`
-- comodín `*`
-- comparaciones numéricas para `status`, `bytes` y `line`
+- búsqueda de texto en IP, hora, método, path, target, status, bytes, UA y línea raw
+- términos seguidos equivalen a `AND`
+- `AND`, `OR`, `|`, paréntesis y negación con `!` o `NOT`
+- `:` significa contiene para campos de texto; `=` significa coincidencia exacta
+- `!=` niega una coincidencia de campo
+- `>`, `>=`, `<`, `<=` funcionan en `status`, `bytes` y `line`
+- `status:2xx`, `status:3xx`, `status:4xx` y `status:5xx` agrupan familias HTTP
+- `*` usa comodines anclados, por ejemplo `ip:66.249.*`
+- valores entre comillas permiten espacios o símbolos: `ua:"Googlebot/2.1"`
+- los valores URL-encoded del filtro se decodifican antes de comparar
 
-Ejemplos:
+Ejemplos habituales:
 
 ```text
 method:POST status:200 url:*admin*
 (method:POST OR method:PUT) status:2xx
 (status:403 | status:404) !ua:*Googlebot*
 ip:66.249.* bytes>50000
+status:5xx path:/checkout
+method!=GET status>=400
 param:q
 param:q=*select*
+param:*=*sleep*
+query:*utm_*
 url:"/admin/login?q=camper"
+raw:"union select"
+source:access.log line>=10000 line<20000
 ```
 
 Campos:
 
 ```text
-ip, method, status, path, url, target, ua, bytes, param, source, line, time, raw
+ip, method, status, path, target, url, ua, bytes, param, query, source, line, time, raw
 ```
+
+Alias útiles:
+
+```text
+url -> target
+timestamp -> time
+userAgent -> ua
+st -> status
+ln -> line
+src -> source
+qs -> query
+mth -> method
+params -> param
+```
+
+Los filtros de parámetros tienen dos modos:
+
+```text
+param:q              cualquier request con parámetro q
+param:q=*select*     parámetro q cuyo valor contiene "select"
+param:*=*token*      cualquier valor de parámetro que contiene "token"
+```
+
+La búsqueda de texto libre viene bien para cazar rápido:
+
+```text
+googlebot checkout
+198.51.100.10 wp-admin
+```
+
+Esos ejemplos equivalen a exigir que ambas palabras aparezcan en la línea
+buscable.
 
 ## Modo OpenAI
 
@@ -403,7 +447,7 @@ Las incidencias de payload se agrupan **por IP atacante**, no por path, de modo
 que hay una incidencia por IP independientemente de cuántos paths pruebe. Scoring
 según el resultado de las respuestas:
 
-- Cualquier respuesta `2xx` → `SECURITY`, `critical/100` + flag `!SUCCESS`
+- Cualquier respuesta `2xx` → `SECURITY`, `critical/100` + flag `2XX_HIT`
 - Cualquier respuesta `5xx` → `SECURITY`, `critical/90`
 - Solo respuestas bloqueadas/redirigidas → `OTHER`; contexto útil, no impacto probado
 

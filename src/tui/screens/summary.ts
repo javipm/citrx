@@ -108,7 +108,7 @@ function IncidentRow({
   active: boolean;
 }) {
   const selected = active && index === incidentIndex;
-  const successMark = incident.successful ? " !SUCCESS" : "";
+  const successMark = incident.successful ? " 2XX_HIT" : "";
   const ip = incident.evidence.find((item) => item.key === "ip")?.value;
   const ipTag = ip ? ` ${String(ip)}` : "";
   return React.createElement(

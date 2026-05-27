@@ -142,7 +142,7 @@ function incidentPanel(
     const displayCount = count ?? requests;
     const suffix = displayCount ? ` count=${displayCount}` : "";
 
-    const successTag = incident.successful ? colors.red(" !SUCCESS") : "";
+    const successTag = incident.successful ? colors.red(" 2XX_HIT") : "";
 
     lines.push(
       `  ${severity(incident.severity, colors)} ${incident.score.toString().padStart(3, " ")}  ${incident.title}${suffix}${successTag}`

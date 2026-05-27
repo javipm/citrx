@@ -110,8 +110,6 @@ Options:
 `NO_COLOR=1` disables color. `CITRX_QUIET=1` disables startup UI/progress noise
 for terminal output.
 
-Removed options: `--geo`, `--no-session`, `--incident-lines`.
-
 ## Inputs
 
 Supported inputs:
@@ -191,8 +189,8 @@ The incident area has three tabs navigable with `Tab`:
 
 `Tab` cycles: access log → SATURATION → SECURITY → OTHER → access log.
 
-Incidents marked `!SUCCESS` had at least one `2xx` response, meaning the
-payload or probe received a successful reply.
+Incidents marked `2XX_HIT` had at least one `2xx` response, meaning the
+payload or probe received a successful HTTP reply.
 
 Keys:
 
@@ -232,6 +230,9 @@ b                back to summary
 q                quit
 ```
 
+Incident export is shown only after all related rows have finished loading, so
+exports do not accidentally contain a partial background-hydrated sample.
+
 ### Sort Menu
 
 Press `s` or `S` from the summary or incident screen to open a centered sort
@@ -247,8 +248,8 @@ Esc / Backspace  cancel
 ```
 
 Selected values are highlighted in the menu. When a large filtered/sorted view
-or top-value set is being computed, the TUI shows a loading status instead of
-appearing frozen.
+or top-value set is being computed, or JSON export is running, the TUI shows a
+loading status instead of appearing frozen.
 
 ### Top Values Screen
 
@@ -290,34 +291,75 @@ q                quit
 
 Filters work on the global access log and incident-related rows.
 
-Supported features:
+You can use filters from the summary access-log table, incident rows, and top
+values drill-downs. They are case-insensitive and work as a small query language:
 
-- plain text search
-- field filters
-- `AND` by default
-- `OR` or `|`
-- grouping with parentheses
-- negation with `!`
-- wildcard `*`
-- numeric comparisons for `status`, `bytes`, and `line`
+- plain text searches across IP, time, method, path, target, status, bytes, UA,
+  and raw line
+- adjacent terms mean `AND`
+- explicit `AND`, `OR`, `|`, parentheses, and negation with `!` or `NOT`
+- `:` means contains for normal fields, while `=` means exact match
+- `!=` negates a field match
+- `>`, `>=`, `<`, `<=` work for `status`, `bytes`, and `line`
+- `status:2xx`, `status:3xx`, `status:4xx`, and `status:5xx` match status families
+- `*` wildcards are anchored, so `ip:66.249.*` matches that prefix
+- quoted values allow spaces or symbols: `ua:"Googlebot/2.1"`
+- URL-encoded filter values are decoded before matching
 
-Examples:
+Common examples:
 
 ```text
 method:POST status:200 url:*admin*
 (method:POST OR method:PUT) status:2xx
 (status:403 | status:404) !ua:*Googlebot*
 ip:66.249.* bytes>50000
+status:5xx path:/checkout
+method!=GET status>=400
 param:q
 param:q=*select*
+param:*=*sleep*
+query:*utm_*
 url:"/admin/login?q=camper"
+raw:"union select"
+source:access.log line>=10000 line<20000
 ```
 
 Fields:
 
 ```text
-ip, method, status, path, url, target, ua, bytes, param, source, line, time, raw
+ip, method, status, path, target, url, ua, bytes, param, query, source, line, time, raw
 ```
+
+Useful aliases:
+
+```text
+url -> target
+timestamp -> time
+userAgent -> ua
+st -> status
+ln -> line
+src -> source
+qs -> query
+mth -> method
+params -> param
+```
+
+Parameter filters have two modes:
+
+```text
+param:q              any request with a q parameter
+param:q=*select*     q parameter whose value contains "select"
+param:*=*token*      any parameter value containing "token"
+```
+
+Bare text is convenient for quick hunting:
+
+```text
+googlebot checkout
+198.51.100.10 wp-admin
+```
+
+Those are equivalent to requiring both words somewhere in the searchable line.
 
 ## OpenAI Mode
 
@@ -400,7 +442,7 @@ Every incident has a `kind` field that drives which TUI panel it appears in:
 Payload incidents are grouped **by attacker IP**, not by path, so one incident
 per IP regardless of how many paths they probe. Scoring by response outcome:
 
-- Any `2xx` response → `SECURITY`, `critical/100` + `!SUCCESS` flag (payload landed)
+- Any `2xx` response → `SECURITY`, `critical/100` + `2XX_HIT` flag (payload landed)
 - Any `5xx` response → `SECURITY`, `critical/90`
 - Only blocked/redirected responses → `OTHER` noise; useful context, not proven impact
 

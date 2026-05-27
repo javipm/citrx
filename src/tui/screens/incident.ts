@@ -51,7 +51,7 @@ export function IncidentScreen({
         Text,
         { bold: true, color: severityColor(incident.severity), wrap: "truncate" },
         fitText(
-          `[${incident.kind.toUpperCase()}] ${incident.severity.toUpperCase()} ${incident.score}${incident.successful ? " !SUCCESS" : ""} | ${incident.title}`,
+          `[${incident.kind.toUpperCase()}] ${incident.severity.toUpperCase()} ${incident.score}${incident.successful ? " 2XX_HIT" : ""} | ${incident.title}`,
           headerWidth
         )
       ),
