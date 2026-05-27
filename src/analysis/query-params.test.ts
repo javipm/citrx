@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  requestParamEntries,
-  requestParamNames,
-  requestParamValueLabels
-} from "./query-params.js";
+import { requestParamEntries, requestParamNames, requestParamValueLabels } from "./query-params.js";
 
 describe("query param extraction", () => {
   it("extracts repeated names and decoded values without URL parsing", () => {
@@ -25,9 +21,6 @@ describe("query param extraction", () => {
   });
 
   it("keeps malformed escapes deterministic", () => {
-    expect(requestParamValueLabels("/x?bad=%E0%A4%A&q=ok")).toEqual([
-      "bad=%E0%A4%A",
-      "q=ok"
-    ]);
+    expect(requestParamValueLabels("/x?bad=%E0%A4%A&q=ok")).toEqual(["bad=%E0%A4%A", "q=ok"]);
   });
 });

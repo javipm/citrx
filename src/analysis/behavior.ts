@@ -480,11 +480,7 @@ export class BehaviorTracker {
     }
   }
 
-  private observeHead(
-    state: IpBehaviorState,
-    entry: AccessLogEntry,
-    epochSecond: number
-  ): void {
+  private observeHead(state: IpBehaviorState, entry: AccessLogEntry, epochSecond: number): void {
     if (entry.method !== "HEAD") {
       return;
     }
@@ -570,10 +566,7 @@ export class BehaviorTracker {
       state.peakIpCount = state.currentIps.size;
     }
 
-    if (
-      state.currentCount >= SUBNET_RPS_THRESHOLD &&
-      state.currentIps.size >= SUBNET_MIN_IPS
-    ) {
+    if (state.currentCount >= SUBNET_RPS_THRESHOLD && state.currentIps.size >= SUBNET_MIN_IPS) {
       state.burstRunLen += 1;
       state.burstStart ??= state.currentSecond;
 
@@ -640,11 +633,7 @@ export class BehaviorTracker {
     this.botRollup.set(botName, bot);
   }
 
-  private observeFingerprintPath(
-    state: IpBehaviorState,
-    path: string,
-    epochSecond: number
-  ): void {
+  private observeFingerprintPath(state: IpBehaviorState, path: string, epochSecond: number): void {
     const bucket = Math.floor(epochSecond / FINGERPRINT_BUCKET_SECONDS);
 
     if (state.currentFingerprintBucket === null) {
@@ -848,9 +837,10 @@ export class BehaviorTracker {
 
   private snapshotIp(state: IpBehaviorState): TopIpSnapshot {
     const currentPeakRps = Math.max(state.peakRps, state.currentCount);
-    const currentPeakRpsAt = currentPeakRps > state.peakRps && state.currentSecond !== null
-      ? state.currentSecond
-      : state.peakRpsAt;
+    const currentPeakRpsAt =
+      currentPeakRps > state.peakRps && state.currentSecond !== null
+        ? state.currentSecond
+        : state.peakRpsAt;
 
     return {
       ip: state.ip,
@@ -1012,7 +1002,10 @@ export class BehaviorTracker {
           { key: "status4xx", value: state.max4xxTwoBucketCount },
           { key: "window", value: "two adjacent 60s buckets" },
           { key: "windowApproxSeconds", value: 120 },
-          { key: "windowEnd", value: formatEpoch((state.max4xxBucket + 1) * FOUR_XX_BUCKET_SECONDS - 1) }
+          {
+            key: "windowEnd",
+            value: formatEpoch((state.max4xxBucket + 1) * FOUR_XX_BUCKET_SECONDS - 1)
+          }
         ],
         samples: []
       });
@@ -1044,7 +1037,10 @@ export class BehaviorTracker {
           { key: "status5xx", value: state.max5xxTwoBucketCount },
           { key: "window", value: "two adjacent 60s buckets" },
           { key: "windowApproxSeconds", value: 120 },
-          { key: "windowEnd", value: formatEpoch((state.max5xxBucket + 1) * FIVE_XX_BUCKET_SECONDS - 1) }
+          {
+            key: "windowEnd",
+            value: formatEpoch((state.max5xxBucket + 1) * FIVE_XX_BUCKET_SECONDS - 1)
+          }
         ],
         samples: []
       });
@@ -1063,25 +1059,29 @@ export class BehaviorTracker {
       }
 
       if (state.claimedGooglebot && !ipInPreparedRanges(state.ip, this.googlebotRanges)) {
-        incidents.push(fakeBotIncident({
-          id: `fake_bot_googlebot:${state.ip}`,
-          ip: state.ip,
-          claimedBot: "Googlebot",
-          userAgent: state.claimedBotUserAgent ?? "",
-          requests: state.totalRequests,
-          pathsTouched: state.paths.size
-        }));
+        incidents.push(
+          fakeBotIncident({
+            id: `fake_bot_googlebot:${state.ip}`,
+            ip: state.ip,
+            claimedBot: "Googlebot",
+            userAgent: state.claimedBotUserAgent ?? "",
+            requests: state.totalRequests,
+            pathsTouched: state.paths.size
+          })
+        );
       }
 
       if (state.claimedBingbot && !ipInPreparedRanges(state.ip, this.bingbotRanges)) {
-        incidents.push(fakeBotIncident({
-          id: `fake_bot_bingbot:${state.ip}`,
-          ip: state.ip,
-          claimedBot: "bingbot",
-          userAgent: state.claimedBotUserAgent ?? "",
-          requests: state.totalRequests,
-          pathsTouched: state.paths.size
-        }));
+        incidents.push(
+          fakeBotIncident({
+            id: `fake_bot_bingbot:${state.ip}`,
+            ip: state.ip,
+            claimedBot: "bingbot",
+            userAgent: state.claimedBotUserAgent ?? "",
+            requests: state.totalRequests,
+            pathsTouched: state.paths.size
+          })
+        );
       }
     }
 
@@ -1108,8 +1108,7 @@ export class BehaviorTracker {
       // bot traffic is informational — kind: "noise" so it stays out of the
       // saturation panel.
       const high =
-        bot.requests > AI_BOT_HIGH_REQUESTS ||
-        bot.highPathMinuteCount >= AI_BOT_HIGH_PATH_MINUTES;
+        bot.requests > AI_BOT_HIGH_REQUESTS || bot.highPathMinuteCount >= AI_BOT_HIGH_PATH_MINUTES;
       const medium = bot.requests >= AI_BOT_MEDIUM_REQUESTS;
       const kind: IncidentKind = high ? "saturation" : "noise";
 
@@ -1173,7 +1172,10 @@ export class BehaviorTracker {
     const incidents: Incident[] = [];
 
     for (const state of this.ips.values()) {
-      if (state.maxFingerprintHits < FINGERPRINT_PATH_THRESHOLD || state.maxFingerprintBucket === null) {
+      if (
+        state.maxFingerprintHits < FINGERPRINT_PATH_THRESHOLD ||
+        state.maxFingerprintBucket === null
+      ) {
         continue;
       }
 
@@ -1186,13 +1188,17 @@ export class BehaviorTracker {
         severity: "high",
         score: 75,
         title: "Scanner fingerprint paths",
-        description: "One IP touched many known scanner fingerprint paths in adjacent minute buckets.",
+        description:
+          "One IP touched many known scanner fingerprint paths in adjacent minute buckets.",
         evidence: [
           { key: "ip", value: state.ip },
           { key: "fingerprintHits", value: state.maxFingerprintHits },
           { key: "samplePaths", value: state.maxFingerprintSamplePaths.join(", ") },
           { key: "windowSeconds", value: 120 },
-          { key: "windowEnd", value: formatEpoch((state.maxFingerprintBucket + 1) * FINGERPRINT_BUCKET_SECONDS - 1) }
+          {
+            key: "windowEnd",
+            value: formatEpoch((state.maxFingerprintBucket + 1) * FINGERPRINT_BUCKET_SECONDS - 1)
+          }
         ],
         samples: state.maxFingerprintSamplePaths
       });
@@ -1203,8 +1209,7 @@ export class BehaviorTracker {
 
   private isLegitimateBot(ip: string): boolean {
     return (
-      ipInPreparedRanges(ip, this.googlebotRanges) ||
-      ipInPreparedRanges(ip, this.bingbotRanges)
+      ipInPreparedRanges(ip, this.googlebotRanges) || ipInPreparedRanges(ip, this.bingbotRanges)
     );
   }
 
@@ -1344,14 +1349,18 @@ export class BehaviorTracker {
         severity: "critical",
         score: 90,
         title: "Distributed DDoS from subnet",
-        description: "Subnet exceeded the per-second request threshold with many unique IPs for consecutive seconds.",
+        description:
+          "Subnet exceeded the per-second request threshold with many unique IPs for consecutive seconds.",
         evidence: [
           { key: "prefix", value: subnet.prefix },
           { key: "peakSubnetRps", value: subnet.peakSubnetRps },
           { key: "peakSubnetRpsAt", value: formatEpoch(subnet.peakSubnetRpsAt) },
           { key: "peakIpCount", value: subnet.peakIpCount },
           { key: "burstSeconds", value: subnet.longestBurstLen },
-          { key: "burstStart", value: formatEpoch(subnet.longestBurstStart ?? subnet.peakSubnetRpsAt) },
+          {
+            key: "burstStart",
+            value: formatEpoch(subnet.longestBurstStart ?? subnet.peakSubnetRpsAt)
+          },
           { key: "burstEnd", value: formatEpoch(subnet.longestBurstEnd ?? subnet.peakSubnetRpsAt) }
         ],
         samples: []
@@ -1442,10 +1451,7 @@ export function extractSubnetPrefix(ip: string): string | null {
 
   const parts = ip.split(".");
 
-  if (
-    parts.length !== 4 ||
-    parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)
-  ) {
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)) {
     return null;
   }
 

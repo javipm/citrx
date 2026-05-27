@@ -20,7 +20,7 @@ for (const source of SOURCES) {
     throw new Error(`Failed to fetch ${source.url}: ${response.status} ${response.statusText}`);
   }
 
-  const data = await response.json() as {
+  const data = (await response.json()) as {
     prefixes?: Array<{
       ipv4Prefix?: string;
       ipv6Prefix?: string;

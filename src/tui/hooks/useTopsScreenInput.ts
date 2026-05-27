@@ -58,7 +58,9 @@ export function handleTopsScreenInput({
   topIndexes: Record<TopPanelKey, number>;
   filter: string;
   setTopFocus: (updater: (value: TopPanelKey) => TopPanelKey) => void;
-  setTopIndexes: (updater: (value: Record<TopPanelKey, number>) => Record<TopPanelKey, number>) => void;
+  setTopIndexes: (
+    updater: (value: Record<TopPanelKey, number>) => Record<TopPanelKey, number>
+  ) => void;
   setScreen: (screen: "summary" | "incident") => void;
   setPrompt: (value: PromptState) => void;
   setMessage: (value: string) => void;
@@ -91,7 +93,14 @@ export function handleTopsScreenInput({
   }
 
   if (inputValue === "a") {
-    const topContext = currentTopContext(run.report, topScope, incident, filter, topFocus, topIndexes);
+    const topContext = currentTopContext(
+      run.report,
+      topScope,
+      incident,
+      filter,
+      topFocus,
+      topIndexes
+    );
     setPrompt({
       kind: "ai",
       value: "",

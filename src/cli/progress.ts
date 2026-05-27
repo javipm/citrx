@@ -67,9 +67,7 @@ interface ActiveSpinner {
  * @param options Configuration for the reporter.
  * @returns A {@link ProgressReporter} instance.
  */
-export function createProgressReporter(
-  options: ProgressReporterOptions
-): ProgressReporter {
+export function createProgressReporter(options: ProgressReporterOptions): ProgressReporter {
   if (!options.enabled) {
     return noopReporter();
   }
@@ -213,9 +211,7 @@ function ttyReporter(options: ProgressReporterOptions): ProgressReporter {
       const text = label ?? active?.label ?? "done";
       const elapsed = active ? Date.now() - active.startedAt : 0;
       stop();
-      options.stream.write(
-        `${green("✓")} ${text} ${dim(`(${formatElapsed(elapsed)})`)}\n`
-      );
+      options.stream.write(`${green("✓")} ${text} ${dim(`(${formatElapsed(elapsed)})`)}\n`);
     },
     fail(label) {
       const text = label ?? active?.label ?? "failed";

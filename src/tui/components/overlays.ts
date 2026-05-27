@@ -1,11 +1,24 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { PromptState, SortKey, SortDirection, SortMenuFocus, Screen, SummaryFocus } from "../types.js";
+import type {
+  PromptState,
+  SortKey,
+  SortDirection,
+  SortMenuFocus,
+  Screen,
+  SummaryFocus
+} from "../types.js";
 import { SORT_KEYS } from "../types.js";
 import { fitText } from "../utils/format.js";
 import { useSpinner } from "../hooks/useSpinner.js";
 
-export function PromptBar({ prompt, columns }: { prompt: PromptState; columns: number }): React.ReactElement {
+export function PromptBar({
+  prompt,
+  columns
+}: {
+  prompt: PromptState;
+  columns: number;
+}): React.ReactElement {
   const label =
     prompt.kind === "filter"
       ? "Filter"
@@ -117,7 +130,11 @@ export function SortMenuOverlay({
         { flexDirection: "column", width: fieldWidth, backgroundColor: "black" },
         React.createElement(
           Text,
-          { bold: true, color: sortMenu.focus === "key" ? "cyan" : "gray", backgroundColor: "black" },
+          {
+            bold: true,
+            color: sortMenu.focus === "key" ? "cyan" : "gray",
+            backgroundColor: "black"
+          },
           "Field".padEnd(fieldWidth)
         ),
         ...SORT_KEYS.map((key) => {
@@ -141,7 +158,11 @@ export function SortMenuOverlay({
         { flexDirection: "column", width: directionWidth, backgroundColor: "black" },
         React.createElement(
           Text,
-          { bold: true, color: sortMenu.focus === "direction" ? "cyan" : "gray", backgroundColor: "black" },
+          {
+            bold: true,
+            color: sortMenu.focus === "direction" ? "cyan" : "gray",
+            backgroundColor: "black"
+          },
           "Direction".padEnd(directionWidth)
         ),
         ...(["desc", "asc"] as const).map((direction) => {
@@ -177,7 +198,9 @@ export function SortMenuOverlay({
     React.createElement(
       Text,
       { color: "gray", backgroundColor: "black", wrap: "truncate" },
-      fitText("Arrows move | Space select | Enter apply | Esc cancel", innerWidth).padEnd(innerWidth)
+      fitText("Arrows move | Space select | Enter apply | Esc cancel", innerWidth).padEnd(
+        innerWidth
+      )
     )
   );
 }
@@ -250,19 +273,23 @@ export function Footer({
   const shortcuts = answerOpen
     ? "↑/↓ PgUp/PgDn scroll | b/Esc close answer | q quit"
     : detailOpen
-    ? "↑/↓ PgUp/PgDn scroll | d/b/Esc close | q quit"
-    : screen === "summary"
-      ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate panel | Enter/d open | f filter | s sort menu | t tops | a ask | e export | q quit`
-      : screen === "tops"
-        ? "Tab panel | ↑/↓ row | Enter filter by value | a ask about tops | t/b/Esc back | q quit"
-        : "↑/↓ PgUp/PgDn rows | Enter/d detail | t tops | Space select | A select visible | f filter | s sort menu | a ask | e export | b back | q quit";
+      ? "↑/↓ PgUp/PgDn scroll | d/b/Esc close | q quit"
+      : screen === "summary"
+        ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate panel | Enter/d open | f filter | s sort menu | t tops | a ask | e export | q quit`
+        : screen === "tops"
+          ? "Tab panel | ↑/↓ row | Enter filter by value | a ask about tops | t/b/Esc back | q quit"
+          : "↑/↓ PgUp/PgDn rows | Enter/d detail | t tops | Space select | A select visible | f filter | s sort menu | a ask | e export | b back | q quit";
   const prefix = loading || busy ? `${spinner} ` : "";
   const status = `${prefix}${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
 
   return React.createElement(
     Box,
     { flexDirection: "column" },
-    React.createElement(Text, { color: busy || loading ? "yellow" : "cyan", wrap: "truncate" }, fitText(status, columns - 2)),
+    React.createElement(
+      Text,
+      { color: busy || loading ? "yellow" : "cyan", wrap: "truncate" },
+      fitText(status, columns - 2)
+    ),
     React.createElement(Text, { color: "cyan", wrap: "truncate" }, fitText(shortcuts, columns - 2))
   );
 }

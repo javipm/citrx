@@ -261,10 +261,7 @@ async function analyzeTextSource(
 ): Promise<void> {
   const selection = await selectParserForStream(source, options.format, customParsers);
 
-  if (
-    selection.sampledLines < MIN_SAMPLE_LINES ||
-    selection.parseRatio < MIN_PARSE_RATIO
-  ) {
+  if (selection.sampledLines < MIN_SAMPLE_LINES || selection.parseRatio < MIN_PARSE_RATIO) {
     throw new Error(
       `Input does not look like an Apache/Nginx access log: ${selection.label} ` +
         `(${selection.parsedLines}/${selection.sampledLines} sampled lines parsed). ` +
@@ -405,9 +402,7 @@ function incidentMatches(
   }
 
   for (const incident of aggregateIncidents) {
-    const path = String(
-      incident.evidence.find((item) => item.key === "path")?.value ?? ""
-    );
+    const path = String(incident.evidence.find((item) => item.key === "path")?.value ?? "");
     const pathMatches = counters.pathMatches.get(path);
 
     if (pathMatches) {
@@ -437,10 +432,7 @@ function incidentMatches(
     }));
 }
 
-function behaviorIncidentMatches(
-  incident: Incident,
-  counters: Counters
-): MutableIncidentMatches {
+function behaviorIncidentMatches(incident: Incident, counters: Counters): MutableIncidentMatches {
   const matchSet: MutableIncidentMatches = {
     incidentId: incident.id,
     totalMatches: 0,
@@ -470,9 +462,7 @@ function behaviorIncidentPredicate(
   if (incident.id.startsWith("ai_scraper_known:")) {
     const botName = String(evidenceValue(incident, "botName") ?? "");
     const pattern = AI_BOT_PATTERNS.find((item) => item.name === botName);
-    return pattern
-      ? (line) => Boolean(line.userAgent && pattern.regex.test(line.userAgent))
-      : null;
+    return pattern ? (line) => Boolean(line.userAgent && pattern.regex.test(line.userAgent)) : null;
   }
 
   if (incident.id.startsWith("scanner_ua_known:")) {
@@ -529,7 +519,10 @@ function behaviorIncidentPredicate(
   return null;
 }
 
-function evidenceValue(incident: Incident, key: string): Incident["evidence"][number]["value"] | undefined {
+function evidenceValue(
+  incident: Incident,
+  key: string
+): Incident["evidence"][number]["value"] | undefined {
   return incident.evidence.find((item) => item.key === key)?.value;
 }
 
@@ -569,10 +562,7 @@ function redactRawLine(line: string): string {
   );
 }
 
-function updatePathStats(
-  statsByPath: Map<string, PathStats>,
-  entry: AccessLogEntry
-): void {
+function updatePathStats(statsByPath: Map<string, PathStats>, entry: AccessLogEntry): void {
   let stats = statsByPath.get(entry.path);
 
   if (!stats) {
@@ -624,9 +614,7 @@ function sortIncidents(incidents: Incident[]): Incident[] {
   );
 }
 
-async function* iteratorToAsyncIterable(
-  iterator: AsyncIterator<string>
-): AsyncIterable<string> {
+async function* iteratorToAsyncIterable(iterator: AsyncIterator<string>): AsyncIterable<string> {
   while (true) {
     const next = await iterator.next();
 

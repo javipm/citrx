@@ -92,6 +92,8 @@ export function handleDetailViewInput({
   }
 
   if (isPageDown(inputValue, key)) {
-    setDetailScroll((value) => Math.min(Math.max(0, detailLines.length - detailRows), value + detailRows));
+    setDetailScroll((value) =>
+      Math.min(Math.max(0, detailLines.length - detailRows), value + detailRows)
+    );
   }
 }

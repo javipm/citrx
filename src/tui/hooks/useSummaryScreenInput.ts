@@ -41,7 +41,9 @@ function isPageDown(inputValue: string, key: Key): boolean {
  * @param focus - The current summary panel focus value.
  * @returns Type predicate narrowing `focus` to an incident-kind union.
  */
-export function isIncidentFocus(focus: SummaryFocus): focus is "compromise" | "saturation" | "noise" {
+export function isIncidentFocus(
+  focus: SummaryFocus
+): focus is "compromise" | "saturation" | "noise" {
   return focus !== "accesses";
 }
 
@@ -154,7 +156,6 @@ export function handleSummaryScreenInput({
   sortKey,
   sortDirection,
   runId,
-  exit,
   setSummaryFocus,
   setIncidentIndex,
   setSummaryLineIndex,
@@ -186,7 +187,6 @@ export function handleSummaryScreenInput({
   sortKey: SortKey;
   sortDirection: SortDirection;
   runId: string;
-  exit: () => void;
   setSummaryFocus: (value: SummaryFocus) => void;
   setIncidentIndex: (updater: (value: number) => number) => void;
   setSummaryLineIndex: (updater: (value: number) => number) => void;
@@ -196,12 +196,18 @@ export function handleSummaryScreenInput({
   setSelectedLineKeys: (updaterOrValue: Set<string> | ((v: Set<string>) => Set<string>)) => void;
   setDetailLine: (line: IncidentLogLine | undefined) => void;
   setDetailScroll: (value: number) => void;
-  setSortMenu: (value: { sortKey: SortKey; sortDirection: SortDirection; focus: "key" } | undefined) => void;
+  setSortMenu: (
+    value: { sortKey: SortKey; sortDirection: SortDirection; focus: "key" } | undefined
+  ) => void;
   setTopScope: (scope: "summary") => void;
   setPrompt: (value: PromptState) => void;
   setExportNotice: (value: { file: string; lines: number }) => void;
   setMessage: (value: string) => void;
-  exportContext: (runId: string, incident: Incident | undefined, lines: IncidentLogLine[]) => Promise<string>;
+  exportContext: (
+    runId: string,
+    incident: Incident | undefined,
+    lines: IncidentLogLine[]
+  ) => Promise<string>;
 }): void {
   const incidentBounds = isIncidentFocus(summaryFocus)
     ? kindRange(incidents, summaryFocus)
@@ -238,7 +244,9 @@ export function handleSummaryScreenInput({
     if (isIncidentFocus(summaryFocus) && incidentBounds.start >= 0) {
       setIncidentIndex((value) => Math.min(incidentBounds.end - 1, value + 7));
     } else {
-      setSummaryLineIndex((value) => Math.min(Math.max(0, globalTotal - 1), value + summaryPageSize));
+      setSummaryLineIndex((value) =>
+        Math.min(Math.max(0, globalTotal - 1), value + summaryPageSize)
+      );
     }
     return;
   }

@@ -102,10 +102,7 @@ export function useVisibleLines({
   answerRows,
   selectedLineKeys
 }: VisibleLinesOptions) {
-  const allIncidentLines = useMemo(
-    () => incidentLines(run, incidentId),
-    [run, incidentId]
-  );
+  const allIncidentLines = useMemo(() => incidentLines(run, incidentId), [run, incidentId]);
 
   const lines = useMemo(
     () => visibleFilteredLines(allIncidentLines, filter, sortKey, sortDirection),
@@ -123,7 +120,11 @@ export function useVisibleLines({
   );
 
   const pageStart = useMemo(
-    () => Math.max(0, Math.min(lineIndex - Math.floor(pageSize / 2), Math.max(0, lines.length - pageSize))),
+    () =>
+      Math.max(
+        0,
+        Math.min(lineIndex - Math.floor(pageSize / 2), Math.max(0, lines.length - pageSize))
+      ),
     [lineIndex, pageSize, lines.length]
   );
 

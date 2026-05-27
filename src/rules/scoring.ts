@@ -59,9 +59,7 @@ function buildCorrelatedIps(incidents: Incident[]): Set<string> {
     counts.set(ip, (counts.get(ip) ?? 0) + 1);
   }
 
-  return new Set(
-    [...counts.entries()].filter(([, count]) => count >= 2).map(([ip]) => ip)
-  );
+  return new Set([...counts.entries()].filter(([, count]) => count >= 2).map(([ip]) => ip));
 }
 
 function isPersistent(incident: Incident): boolean {

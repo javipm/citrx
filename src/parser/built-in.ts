@@ -23,11 +23,7 @@ export function getBuiltInParser(id: BuiltInFormatId): AccessLogParser {
   return parser;
 }
 
-function createRegexParser(
-  id: BuiltInFormatId,
-  label: string,
-  pattern: RegExp
-): AccessLogParser {
+function createRegexParser(id: BuiltInFormatId, label: string, pattern: RegExp): AccessLogParser {
   return {
     id,
     label,

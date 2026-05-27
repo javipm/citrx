@@ -1,10 +1,5 @@
 import { builtInParsers, getBuiltInParser } from "./built-in.js";
-import type {
-  AccessLogFormatId,
-  AccessLogParser,
-  BuiltInFormatId,
-  FormatChoice
-} from "./types.js";
+import type { AccessLogFormatId, AccessLogParser, BuiltInFormatId, FormatChoice } from "./types.js";
 
 export interface FormatDetectionResult {
   parser: AccessLogParser;
@@ -65,10 +60,7 @@ export function isAccessLogFormatId(value: string): value is AccessLogFormatId {
   );
 }
 
-function scoreParser(
-  parser: AccessLogParser,
-  lines: string[]
-): FormatDetectionResult {
+function scoreParser(parser: AccessLogParser, lines: string[]): FormatDetectionResult {
   const sampledLines = lines.length;
   const parsedLines = lines.filter((line) => parser.parse(line)).length;
 

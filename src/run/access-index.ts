@@ -204,7 +204,10 @@ export async function readAccessLogIndexCachedPage(
   const query = await cache.getOrBuild(index, key, options);
   return {
     total: query.total,
-    lines: readAccessLogIndexRows(index, query.rows.slice(options.start, options.start + options.limit))
+    lines: readAccessLogIndexRows(
+      index,
+      query.rows.slice(options.start, options.start + options.limit)
+    )
   };
 }
 
@@ -223,7 +226,9 @@ export function passThroughFilter(): boolean {
  * @param index - The index whose rows to read.
  * @yields Each parsed `IncidentLogLine` in sequence.
  */
-export async function* readAccessLogIndexLines(index: AccessLogIndex): AsyncIterable<IncidentLogLine> {
+export async function* readAccessLogIndexLines(
+  index: AccessLogIndex
+): AsyncIterable<IncidentLogLine> {
   const reader = createInterface({
     input: createReadStream(index.rowsPath, { encoding: "utf8" }),
     crlfDelay: Infinity
@@ -244,7 +249,10 @@ export async function* readAccessLogIndexLines(index: AccessLogIndex): AsyncIter
  * @param rowNumbers - Zero-based row numbers to fetch, in the desired output order.
  * @returns Parsed log lines in the same order as `rowNumbers`.
  */
-export function readAccessLogIndexRows(index: AccessLogIndex, rowNumbers: number[]): IncidentLogLine[] {
+export function readAccessLogIndexRows(
+  index: AccessLogIndex,
+  rowNumbers: number[]
+): IncidentLogLine[] {
   if (rowNumbers.length === 0) {
     return [];
   }
@@ -331,9 +339,8 @@ function readSequentialPage(
 
   try {
     for (let offset = 0; offset < safeLimit; offset += 1) {
-      const rowNumber = direction === "asc"
-        ? safeStart + offset
-        : index.totalRows - 1 - safeStart - offset;
+      const rowNumber =
+        direction === "asc" ? safeStart + offset : index.totalRows - 1 - safeStart - offset;
 
       if (rowNumber < 0 || rowNumber >= index.totalRows) {
         break;
@@ -363,9 +370,7 @@ function readFilteredSequentialPage(
 
   try {
     for (let offset = 0; offset < index.totalRows; offset += 1) {
-      const rowNumber = options.sortDirection === "asc"
-        ? offset
-        : index.totalRows - 1 - offset;
+      const rowNumber = options.sortDirection === "asc" ? offset : index.totalRows - 1 - offset;
       const line = readAccessLogIndexRowFromOpenFiles(index, rowNumber, fileHandles);
 
       if (!options.filter(line)) {
@@ -388,7 +393,11 @@ function readFilteredSequentialPage(
   };
 }
 
-function openIndexFiles(index: AccessLogIndex): { offsetsFd: number; rowsFd: number; rowsSize: number } {
+function openIndexFiles(index: AccessLogIndex): {
+  offsetsFd: number;
+  rowsFd: number;
+  rowsSize: number;
+} {
   const offsetsFd = openSync(index.offsetsPath, "r");
   const rowsFd = openSync(index.rowsPath, "r");
   return {
@@ -409,9 +418,10 @@ function readAccessLogIndexRowFromOpenFiles(
   fileHandles: { offsetsFd: number; rowsFd: number; rowsSize: number }
 ): IncidentLogLine {
   const start = readOffset(fileHandles.offsetsFd, rowNumber);
-  const end = rowNumber + 1 < index.totalRows
-    ? readOffset(fileHandles.offsetsFd, rowNumber + 1)
-    : fileHandles.rowsSize;
+  const end =
+    rowNumber + 1 < index.totalRows
+      ? readOffset(fileHandles.offsetsFd, rowNumber + 1)
+      : fileHandles.rowsSize;
   const length = end - start;
   const buffer = Buffer.allocUnsafe(length);
   readSync(fileHandles.rowsFd, buffer, 0, length, start);

@@ -23,7 +23,15 @@ export function RequestDetailScreen({
       `Request detail | line=${line.lineNumber} | ${scroll + 1}-${Math.min(scroll + visibleLines.length, totalLines)}/${totalLines}`
     ),
     ...visibleLines.map((value, index) =>
-      React.createElement(Text, { key: `${scroll + index}:${value}`, color: value.startsWith("raw") || value.startsWith("        ") ? "gray" : undefined, wrap: "truncate" }, value)
+      React.createElement(
+        Text,
+        {
+          key: `${scroll + index}:${value}`,
+          color: value.startsWith("raw") || value.startsWith("        ") ? "gray" : undefined,
+          wrap: "truncate"
+        },
+        value
+      )
     )
   );
 }

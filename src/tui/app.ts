@@ -10,18 +10,7 @@ import type { CitrxRun } from "../run/types.js";
 
 // Types
 export type { TuiRuntime } from "./types.js";
-import type {
-  TuiRuntime,
-  Screen,
-  SummaryFocus,
-  TopScope,
-  TopPanelKey,
-  SortKey,
-  SortDirection,
-  SortMenuFocus,
-  PromptState,
-  OpenAiAnswerState
-} from "./types.js";
+import type { TuiRuntime } from "./types.js";
 
 // Utils
 import { fitText, sanitizeFilePart } from "./utils/format.js";
@@ -61,10 +50,7 @@ import { TopValuesScreen } from "./screens/tops.js";
  * @param run     The completed `CitrxRun` whose report and logs to explore.
  * @param runtime I/O streams and optional OpenAI client for AI features.
  */
-export async function openRunTui(
-  run: CitrxRun,
-  runtime: TuiRuntime
-): Promise<void> {
+export async function openRunTui(run: CitrxRun, runtime: TuiRuntime): Promise<void> {
   const instance = render(
     React.createElement(CitrxExplorer, {
       run,
@@ -80,7 +66,6 @@ export async function openRunTui(
 
   await instance.waitUntilExit();
 }
-
 
 /**
  * Serialize an incident and its associated log lines to a JSON file in cwd.
@@ -104,11 +89,6 @@ async function exportContext(
   await writeFile(file, `${JSON.stringify({ incident, lines }, null, 2)}\n`, "utf8");
   return file;
 }
-
-
-
-
-
 
 /**
  * Top status bar showing run ID, file count, parsed line count, and incident count.
@@ -136,55 +116,75 @@ function Header({ run, columns }: { run: CitrxRun; columns: number }) {
  * @param run     The completed `CitrxRun` whose report and logs are displayed.
  * @param runtime I/O streams and optional OpenAI client forwarded to AI hooks.
  */
-function CitrxExplorer({
-  run,
-  runtime
-}: {
-  run: CitrxRun;
-  runtime: TuiRuntime;
-}) {
+function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime }) {
   const { exit } = useApp();
   const { rows, columns } = useWindowSize();
 
   const {
-    screen, setScreen,
-    summaryFocus, setSummaryFocus,
-    topScope, setTopScope,
-    topFocus, setTopFocus,
-    topIndexes, setTopIndexes,
-    incidentIndex, setIncidentIndex
+    screen,
+    setScreen,
+    summaryFocus,
+    setSummaryFocus,
+    topScope,
+    setTopScope,
+    topFocus,
+    setTopFocus,
+    topIndexes,
+    setTopIndexes,
+    incidentIndex,
+    setIncidentIndex
   } = useNavigationState(run);
 
   const {
-    lineIndex, setLineIndex,
-    summaryLineIndex, setSummaryLineIndex,
-    detailLine, setDetailLine,
-    detailScroll, setDetailScroll,
-    openAiAnswer, setOpenAiAnswer,
-    openAiAnswerScroll, setOpenAiAnswerScroll
+    lineIndex,
+    setLineIndex,
+    summaryLineIndex,
+    setSummaryLineIndex,
+    detailLine,
+    setDetailLine,
+    detailScroll,
+    setDetailScroll,
+    openAiAnswer,
+    setOpenAiAnswer,
+    openAiAnswerScroll,
+    setOpenAiAnswerScroll
   } = useContentState();
 
   const {
-    filter, setFilter,
-    sortKey, setSortKey,
-    sortDirection, setSortDirection,
-    selectedLineKeys, setSelectedLineKeys,
-    prompt, setPrompt,
-    sortMenu, setSortMenu,
-    exportNotice, setExportNotice,
-    message, setMessage,
-    busy, setBusy,
-    indexLoading, setIndexLoading
+    filter,
+    setFilter,
+    sortKey,
+    setSortKey,
+    sortDirection,
+    setSortDirection,
+    selectedLineKeys,
+    setSelectedLineKeys,
+    prompt,
+    setPrompt,
+    sortMenu,
+    setSortMenu,
+    exportNotice,
+    setExportNotice,
+    message,
+    setMessage,
+    busy,
+    setBusy,
+    indexLoading,
+    setIndexLoading
   } = useFilterSortState();
 
   const accessQueryCache = useMemo(() => new AccessLogIndexQueryCache(), [run.accessIndex]);
   const incidents = run.report.incidents;
   const incident = incidents[incidentIndex];
 
-  const { controlRows, pageSize, summaryPageSize, detailRows, detailWidth, answerRows, answerWidth } =
+  const { pageSize, summaryPageSize, detailRows, detailWidth, answerRows, answerWidth } =
     usePageLayout({ screen, rows, columns, prompt, exportNotice });
 
-  const { globalTotal, summaryPageLines, summaryPageStart: computedSummaryPageStart } = useAccessLogQuery({
+  const {
+    globalTotal,
+    summaryPageLines,
+    summaryPageStart: computedSummaryPageStart
+  } = useAccessLogQuery({
     run,
     accessQueryCache,
     filter,
@@ -345,7 +345,6 @@ function CitrxExplorer({
         sortKey,
         sortDirection,
         runId: run.id,
-        exit,
         setSummaryFocus,
         setIncidentIndex,
         setSummaryLineIndex,
@@ -433,58 +432,58 @@ function CitrxExplorer({
               scroll: openAiAnswerScroll,
               totalLines: openAiAnswerLines.length
             })
-        : screen === "summary"
-          ? React.createElement(SummaryScreen, {
-              report: run.report,
-              incidents,
-              incidentIndex,
-              focus: summaryFocus,
-              lines: [],
-              totalLines: globalTotal,
-              pageLines: summaryPageLines,
-              pageStart: computedSummaryPageStart,
-              lineIndex: summaryLineIndex,
-              filter,
-              sortKey,
-              sortDirection,
-              selectedLineKeys,
-              columns
-            })
-          : screen === "tops"
-            ? React.createElement(TopValuesScreen, {
-                run,
-                accessQueryCache,
+          : screen === "summary"
+            ? React.createElement(SummaryScreen, {
                 report: run.report,
-                incident: topScope === "summary" ? undefined : incident,
-                scope: topScope,
+                incidents,
+                incidentIndex,
+                focus: summaryFocus,
+                lines: [],
+                totalLines: globalTotal,
+                pageLines: summaryPageLines,
+                pageStart: computedSummaryPageStart,
+                lineIndex: summaryLineIndex,
                 filter,
-                focus: topFocus,
-                selectedIndexes: topIndexes,
-                onApplyFilter: (nextFilter: string) => {
-                  setIndexLoading(true);
-                  setFilter(nextFilter);
-                  setSelectedLineKeys(new Set());
-                  setLineIndex(0);
-                  setSummaryLineIndex(0);
-                  setSummaryFocus("accesses");
-                  setScreen(topScope === "summary" ? "summary" : "incident");
-                  setMessage(`Filter applied: ${nextFilter}`);
-                },
+                sortKey,
+                sortDirection,
+                selectedLineKeys,
                 columns
               })
-          : React.createElement(IncidentScreen, {
-              report: run.report,
-              incident,
-              lines,
-              pageLines,
-              pageStart,
-              lineIndex,
-              filter,
-              sortKey,
-              sortDirection,
-              selectedLineKeys,
-              columns
-            })
+            : screen === "tops"
+              ? React.createElement(TopValuesScreen, {
+                  run,
+                  accessQueryCache,
+                  report: run.report,
+                  incident: topScope === "summary" ? undefined : incident,
+                  scope: topScope,
+                  filter,
+                  focus: topFocus,
+                  selectedIndexes: topIndexes,
+                  onApplyFilter: (nextFilter: string) => {
+                    setIndexLoading(true);
+                    setFilter(nextFilter);
+                    setSelectedLineKeys(new Set());
+                    setLineIndex(0);
+                    setSummaryLineIndex(0);
+                    setSummaryFocus("accesses");
+                    setScreen(topScope === "summary" ? "summary" : "incident");
+                    setMessage(`Filter applied: ${nextFilter}`);
+                  },
+                  columns
+                })
+              : React.createElement(IncidentScreen, {
+                  report: run.report,
+                  incident,
+                  lines,
+                  pageLines,
+                  pageStart,
+                  lineIndex,
+                  filter,
+                  sortKey,
+                  sortDirection,
+                  selectedLineKeys,
+                  columns
+                })
     ),
     sortMenu ? React.createElement(SortMenuOverlay, { sortMenu, columns, rows }) : null,
     prompt ? React.createElement(PromptBar, { prompt, columns }) : null,

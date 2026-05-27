@@ -105,8 +105,8 @@ async function runRootAnalysis(
   runtime: CliRuntime
 ): Promise<void> {
   let paths = initialPaths;
-  let top = parseTopOption(options.top);
-  let outputFormat = parseOutputFormat(options);
+  const top = parseTopOption(options.top);
+  const outputFormat = parseOutputFormat(options);
   const color = isColorEnabled(options, runtime);
   const showUi = shouldShowStartupUi(outputFormat, runtime);
   const progress = createProgressReporter({
@@ -144,8 +144,7 @@ async function runRootAnalysis(
       analyzeAccessLogSources(sources, {
         top,
         format,
-        formatConfig:
-          typeof options.formatConfig === "string" ? options.formatConfig : undefined,
+        formatConfig: typeof options.formatConfig === "string" ? options.formatConfig : undefined,
         since: parseDateOption(options.since, "--since"),
         until: parseDateOption(options.until, "--until"),
         accessLogWriter
@@ -200,10 +199,7 @@ function isStderrTty(runtime: CliRuntime): boolean {
   return Boolean(stderr.isTTY);
 }
 
-function isColorEnabled(
-  options: Record<string, unknown>,
-  runtime: CliRuntime
-): boolean {
+function isColorEnabled(options: Record<string, unknown>, runtime: CliRuntime): boolean {
   return options.color !== false && runtime.env.NO_COLOR === undefined;
 }
 
@@ -316,10 +312,7 @@ function shouldOpenTui(
   );
 }
 
-async function openInteractiveRun(
-  run: CitrxRun,
-  runtime: CliRuntime
-): Promise<void> {
+async function openInteractiveRun(run: CitrxRun, runtime: CliRuntime): Promise<void> {
   if (runtime.openInteractive) {
     await runtime.openInteractive(run);
     return;
@@ -368,10 +361,7 @@ function renderReport(
  * @returns Exit code: `0` on success, `1` on unhandled error, or the
  *   Commander-supplied exit code on a usage/version event.
  */
-export async function runCli(
-  argv: string[],
-  runtime: Partial<CliRuntime> = {}
-): Promise<number> {
+export async function runCli(argv: string[], runtime: Partial<CliRuntime> = {}): Promise<number> {
   const cliRuntime: CliRuntime = {
     stdout: runtime.stdout ?? process.stdout,
     stderr: runtime.stderr ?? process.stderr,

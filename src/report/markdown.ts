@@ -124,9 +124,7 @@ function incidentSection(incidents: Incident[]): string {
   }
 
   for (const incident of incidents) {
-    const evidence = incident.evidence
-      .map((item) => `${item.key}=${item.value}`)
-      .join("; ");
+    const evidence = incident.evidence.map((item) => `${item.key}=${item.value}`).join("; ");
     lines.push(
       `| ${incident.severity} | ${incident.score} | ${escapeCell(incident.category)} | ${escapeCell(incident.title)} | ${escapeCell(evidence)} |`
     );

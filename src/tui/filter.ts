@@ -102,7 +102,9 @@ export function createAccessLogLineFilter(query: string): (line: IncidentLogLine
  * @param query - Filter expression to validate.
  * @returns `{ ok: true }` if valid, or `{ ok: false; error }` if not.
  */
-export function validateAccessLogFilter(query: string): { ok: true } | { ok: false; error: string } {
+export function validateAccessLogFilter(
+  query: string
+): { ok: true } | { ok: false; error: string } {
   try {
     parseAccessLogFilter(query);
     return { ok: true };
@@ -205,7 +207,9 @@ class FilterParser {
     const token = this.consumeWord();
 
     if (!token) {
-      throw new AccessLogFilterSyntaxError(`expected filter term, got "${tokenLabel(this.peek())}"`);
+      throw new AccessLogFilterSyntaxError(
+        `expected filter term, got "${tokenLabel(this.peek())}"`
+      );
     }
 
     return {
@@ -314,7 +318,7 @@ function readWord(query: string, startIndex: number): { value: string; nextIndex
       break;
     }
 
-    if (char === "'" || char === "\"") {
+    if (char === "'" || char === '"') {
       const result = readQuoted(query, index);
       value += result.value;
       index = result.nextIndex;
@@ -461,7 +465,11 @@ function evaluateTerm(term: FilterTerm, line: IncidentLogLine): boolean {
  * non-numeric expected values fall back to `matchPattern`; numeric values use
  * standard arithmetic comparison.
  */
-function matchNumericField(actual: number | null, operator: MatchOperator, expected: string): boolean {
+function matchNumericField(
+  actual: number | null,
+  operator: MatchOperator,
+  expected: string
+): boolean {
   if (actual === null) {
     return operator === "!=";
   }
@@ -531,7 +539,11 @@ function queryEntries(target: string): Array<[string, string]> {
  * `containsByDefault` is `true`, or strict equality when `false`.
  * Both sides are lowercased; `expectedValue` is URI-decoded before comparison.
  */
-function matchPattern(actualValue: string, expectedValue: string, containsByDefault: boolean): boolean {
+function matchPattern(
+  actualValue: string,
+  expectedValue: string,
+  containsByDefault: boolean
+): boolean {
   const actual = actualValue.toLowerCase();
   const expected = safeDecode(expectedValue).toLowerCase();
 

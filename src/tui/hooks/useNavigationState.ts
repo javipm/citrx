@@ -34,11 +34,17 @@ export function useNavigationState(run: CitrxRun) {
   });
 
   return {
-    screen, setScreen,
-    summaryFocus, setSummaryFocus,
-    topScope, setTopScope,
-    topFocus, setTopFocus,
-    topIndexes, setTopIndexes,
-    incidentIndex, setIncidentIndex
+    screen,
+    setScreen,
+    summaryFocus,
+    setSummaryFocus,
+    topScope,
+    setTopScope,
+    topFocus,
+    setTopFocus,
+    topIndexes,
+    setTopIndexes,
+    incidentIndex,
+    setIncidentIndex
   };
 }

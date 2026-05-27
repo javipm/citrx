@@ -37,15 +37,25 @@ export function useFilterSortState() {
   const [indexLoading, setIndexLoading] = useState(false);
 
   return {
-    filter, setFilter,
-    sortKey, setSortKey,
-    sortDirection, setSortDirection,
-    selectedLineKeys, setSelectedLineKeys,
-    prompt, setPrompt,
-    sortMenu, setSortMenu,
-    exportNotice, setExportNotice,
-    message, setMessage,
-    busy, setBusy,
-    indexLoading, setIndexLoading
+    filter,
+    setFilter,
+    sortKey,
+    setSortKey,
+    sortDirection,
+    setSortDirection,
+    selectedLineKeys,
+    setSelectedLineKeys,
+    prompt,
+    setPrompt,
+    sortMenu,
+    setSortMenu,
+    exportNotice,
+    setExportNotice,
+    message,
+    setMessage,
+    busy,
+    setBusy,
+    indexLoading,
+    setIndexLoading
   };
 }

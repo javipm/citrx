@@ -143,14 +143,11 @@ describe("citrx CLI", () => {
     const stdout = memoryStream();
     const stderr = memoryStream();
 
-    const code = await runCli(
-      ["node", "citrx", logFile, "--json"],
-      {
-        stdout: stdout.stream,
-        stderr: stderr.stream,
-        stdinIsTTY: true
-      }
-    );
+    const code = await runCli(["node", "citrx", logFile, "--json"], {
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      stdinIsTTY: true
+    });
 
     expect(code).toBe(0);
     const report = JSON.parse(stdout.output()) as Record<string, unknown>;
@@ -189,12 +186,8 @@ describe("citrx CLI", () => {
         })
       ])
     });
-    expect(report.topIps).toEqual(
-      expect.arrayContaining([{ value: "203.0.113.10", count: 2 }])
-    );
-    expect(report.topPaths).toEqual(
-      expect.arrayContaining([{ value: "/products", count: 2 }])
-    );
+    expect(report.topIps).toEqual(expect.arrayContaining([{ value: "203.0.113.10", count: 2 }]));
+    expect(report.topPaths).toEqual(expect.arrayContaining([{ value: "/products", count: 2 }]));
     expect(report.incidents).toEqual([]);
     expect(stderr.output()).toBe("");
   });
@@ -214,14 +207,11 @@ describe("citrx CLI", () => {
     );
     const stdout = memoryStream();
 
-    const code = await runCli(
-      ["node", "citrx", logFile, "--json"],
-      {
-        stdout: stdout.stream,
-        stderr: memoryStream().stream,
-        stdinIsTTY: true
-      }
-    );
+    const code = await runCli(["node", "citrx", logFile, "--json"], {
+      stdout: stdout.stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true
+    });
 
     expect(code).toBe(0);
     const report = JSON.parse(stdout.output()) as {
@@ -332,27 +322,21 @@ describe("citrx CLI", () => {
     );
 
     const markdownOut = memoryStream();
-    const markdownCode = await runCli(
-      ["node", "citrx", logFile, "--markdown"],
-      {
-        stdout: markdownOut.stream,
-        stderr: memoryStream().stream,
-        stdinIsTTY: true
-      }
-    );
+    const markdownCode = await runCli(["node", "citrx", logFile, "--markdown"], {
+      stdout: markdownOut.stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true
+    });
 
     expect(markdownCode).toBe(0);
     expect(markdownOut.output()).toContain("# citrx access log analysis");
     expect(markdownOut.output()).toContain("Sensitive file probe");
 
-    const htmlCode = await runCli(
-      ["node", "citrx", logFile, "--html", "--out", htmlFile],
-      {
-        stdout: memoryStream().stream,
-        stderr: memoryStream().stream,
-        stdinIsTTY: true
-      }
-    );
+    const htmlCode = await runCli(["node", "citrx", logFile, "--html", "--out", htmlFile], {
+      stdout: memoryStream().stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true
+    });
 
     expect(htmlCode).toBe(0);
     const html = await readFile(htmlFile, "utf8");
@@ -371,14 +355,11 @@ describe("citrx CLI", () => {
     );
     const stderr = memoryStream();
 
-    const code = await runCli(
-      ["node", "citrx", logFile, "--json", "--html"],
-      {
-        stdout: memoryStream().stream,
-        stderr: stderr.stream,
-        stdinIsTTY: true
-      }
-    );
+    const code = await runCli(["node", "citrx", logFile, "--json", "--html"], {
+      stdout: memoryStream().stream,
+      stderr: stderr.stream,
+      stdinIsTTY: true
+    });
 
     expect(code).toBe(1);
     expect(stderr.output()).toContain("Choose only one output format");
@@ -420,19 +401,18 @@ describe("citrx CLI", () => {
     const opened: string[] = [];
     const tempDirs: string[] = [];
 
-    const code = await runCli(
-      ["node", "citrx", logFile],
-      {
-        stdout: memoryStream().stream,
-        stderr: memoryStream().stream,
-        stdinIsTTY: true,
-        openInteractive: async (run) => {
-          opened.push(run.id);
-          tempDirs.push(run.tempDir);
-          await expect(stat(run.tempDir)).resolves.toMatchObject({ isDirectory: expect.any(Function) });
-        }
+    const code = await runCli(["node", "citrx", logFile], {
+      stdout: memoryStream().stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true,
+      openInteractive: async (run) => {
+        opened.push(run.id);
+        tempDirs.push(run.tempDir);
+        await expect(stat(run.tempDir)).resolves.toMatchObject({
+          isDirectory: expect.any(Function)
+        });
       }
-    );
+    });
 
     expect(code).toBe(0);
     expect(opened).toHaveLength(1);
@@ -606,14 +586,11 @@ describe("citrx CLI", () => {
       await writeFile(logFile, data);
       const stdout = memoryStream();
 
-      const code = await runCli(
-        ["node", "citrx", logFile, "--json"],
-        {
-          stdout: stdout.stream,
-          stderr: memoryStream().stream,
-          stdinIsTTY: true
-        }
-      );
+      const code = await runCli(["node", "citrx", logFile, "--json"], {
+        stdout: stdout.stream,
+        stderr: memoryStream().stream,
+        stdinIsTTY: true
+      });
 
       expect(code, name).toBe(0);
       expect(JSON.parse(stdout.output()), name).toMatchObject({

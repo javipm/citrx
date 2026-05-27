@@ -32,9 +32,7 @@ export function buildAccessLogEntry(input: BuildEntryInput): AccessLogEntry | nu
   const protocol = input.protocol ?? requestParts.at(-1) ?? "";
   const target =
     input.target ??
-    (requestParts.length >= 3
-      ? requestParts.slice(1, -1).join(" ")
-      : requestParts[1]) ??
+    (requestParts.length >= 3 ? requestParts.slice(1, -1).join(" ") : requestParts[1]) ??
     "";
 
   if (!method || !HTTP_METHODS.has(method)) {

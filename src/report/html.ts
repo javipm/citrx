@@ -168,9 +168,7 @@ function incidentTable(incidents: Incident[]): string {
  * @returns An HTML `<tr>` string.
  */
 function incidentRow(incident: Incident): string {
-  const evidence = incident.evidence
-    .map((item) => `${item.key}=${item.value}`)
-    .join("; ");
+  const evidence = incident.evidence.map((item) => `${item.key}=${item.value}`).join("; ");
   const samples = incident.samples
     .slice(0, 3)
     .map((sample) => `<code>${escapeHtml(sample)}</code>`)

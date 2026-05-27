@@ -1,7 +1,4 @@
-export type BuiltInFormatId =
-  | "apache_common"
-  | "apache_combined"
-  | "nginx_combined";
+export type BuiltInFormatId = "apache_common" | "apache_combined" | "nginx_combined";
 
 export type AccessLogFormatId = BuiltInFormatId | `custom:${string}`;
 

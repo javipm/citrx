@@ -20,7 +20,11 @@ export function requestParamEntries(target: string): QueryParamEntry[] {
 }
 
 export function requestParamNames(target: string): string[] {
-  return unique(requestParamEntries(target).map((entry) => entry.name.trim()).filter(Boolean));
+  return unique(
+    requestParamEntries(target)
+      .map((entry) => entry.name.trim())
+      .filter(Boolean)
+  );
 }
 
 export function requestParamValueLabels(target: string): string[] {

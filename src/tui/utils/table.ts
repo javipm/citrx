@@ -15,13 +15,7 @@ export function accessTableColumns(columns: number): AccessTableColumns {
     bytes: 7
   };
   const fixedTotal =
-    fixed.sel +
-    fixed.line +
-    fixed.time +
-    fixed.ip +
-    fixed.method +
-    fixed.status +
-    fixed.bytes;
+    fixed.sel + fixed.line + fixed.time + fixed.ip + fixed.method + fixed.status + fixed.bytes;
   const spaces = 8;
   const variableTotal = Math.max(16, tableWidth - fixedTotal - spaces);
   const ua = Math.min(36, Math.max(10, Math.floor(variableTotal * 0.35)));
@@ -35,19 +29,17 @@ export function accessTableColumns(columns: number): AccessTableColumns {
 }
 
 export function accessTableHeader(columns: AccessTableColumns): string {
-  return tableCells(
-    [
-      ["sel", columns.sel],
-      ["line", columns.line, "right"],
-      ["time", columns.time],
-      ["ip", columns.ip],
-      ["meth", columns.method],
-      ["st", columns.status, "right"],
-      ["bytes", columns.bytes, "right"],
-      ["path", columns.path],
-      ["ua", columns.ua]
-    ]
-  );
+  return tableCells([
+    ["sel", columns.sel],
+    ["line", columns.line, "right"],
+    ["time", columns.time],
+    ["ip", columns.ip],
+    ["meth", columns.method],
+    ["st", columns.status, "right"],
+    ["bytes", columns.bytes, "right"],
+    ["path", columns.path],
+    ["ua", columns.ua]
+  ]);
 }
 
 export function accessTableRow(
@@ -55,25 +47,21 @@ export function accessTableRow(
   selected: boolean,
   columns: AccessTableColumns
 ): string {
-  return tableCells(
-    [
-      [selected ? "*" : "", columns.sel],
-      [String(line.lineNumber), columns.line, "right"],
-      [compactDateTime(line.timestamp), columns.time],
-      [line.ip, columns.ip],
-      [line.method, columns.method],
-      [String(line.status), columns.status, "right"],
-      [String(line.bytes ?? "-"), columns.bytes, "right"],
-      [line.path, columns.path],
-      [userAgentLabel(line.userAgent), columns.ua]
-    ]
-  );
+  return tableCells([
+    [selected ? "*" : "", columns.sel],
+    [String(line.lineNumber), columns.line, "right"],
+    [compactDateTime(line.timestamp), columns.time],
+    [line.ip, columns.ip],
+    [line.method, columns.method],
+    [String(line.status), columns.status, "right"],
+    [String(line.bytes ?? "-"), columns.bytes, "right"],
+    [line.path, columns.path],
+    [userAgentLabel(line.userAgent), columns.ua]
+  ]);
 }
 
 export function tableCells(cells: Array<[string, number] | [string, number, "right"]>): string {
-  return cells
-    .map(([value, width, align]) => padCell(value, width, align))
-    .join(" ");
+  return cells.map(([value, width, align]) => padCell(value, width, align)).join(" ");
 }
 
 export function padCell(value: string, width: number, align?: "right"): string {

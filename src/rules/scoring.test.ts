@@ -37,9 +37,7 @@ describe("scoring multipliers", () => {
   it("adds correlation bonus to two incidents with the same IP", () => {
     const scored = applyScoringMultipliers([
       incident("scanner_ua_known:203.0.113.1", 70, [{ key: "ip", value: "203.0.113.1" }]),
-      incident("ddos_rps_burst_single_ip:203.0.113.1", 80, [
-        { key: "ip", value: "203.0.113.1" }
-      ])
+      incident("ddos_rps_burst_single_ip:203.0.113.1", 80, [{ key: "ip", value: "203.0.113.1" }])
     ]);
 
     expect(scored.map((item) => item.score)).toEqual([80, 90]);
@@ -56,12 +54,8 @@ describe("scoring multipliers", () => {
   it("adds correlation bonus once for three incidents with the same IP", () => {
     const scored = applyScoringMultipliers([
       incident("scanner_ua_known:203.0.113.1", 70, [{ key: "ip", value: "203.0.113.1" }]),
-      incident("ddos_rps_burst_single_ip:203.0.113.1", 80, [
-        { key: "ip", value: "203.0.113.1" }
-      ]),
-      incident("fake_bot_googlebot:203.0.113.1", 80, [
-        { key: "ip", value: "203.0.113.1" }
-      ])
+      incident("ddos_rps_burst_single_ip:203.0.113.1", 80, [{ key: "ip", value: "203.0.113.1" }]),
+      incident("fake_bot_googlebot:203.0.113.1", 80, [{ key: "ip", value: "203.0.113.1" }])
     ]);
 
     expect(scored.map((item) => item.score)).toEqual([80, 90, 90]);
@@ -158,9 +152,7 @@ describe("scoring multipliers", () => {
         { key: "burstStart", value: "2026-05-25T00:00:00.000Z" },
         { key: "burstEnd", value: "2026-05-25T01:00:00.000Z" }
       ]),
-      incident("fake_bot_googlebot:203.0.113.1", 30, [
-        { key: "ip", value: "203.0.113.1" }
-      ]),
+      incident("fake_bot_googlebot:203.0.113.1", 30, [{ key: "ip", value: "203.0.113.1" }]),
       incident("ai_scraper_known:GPTBot", 20, [
         { key: "requests", value: 300 },
         { key: "requestedRobotsTxt", value: "true" }
@@ -175,9 +167,7 @@ describe("scoring multipliers", () => {
   it("can correlate local-rule incidents with behavior incidents", () => {
     const scored = applyScoringMultipliers([
       incident("sqli:/login", 95, [{ key: "ip", value: "203.0.113.1" }]),
-      incident("ddos_rps_burst_single_ip:203.0.113.1", 95, [
-        { key: "ip", value: "203.0.113.1" }
-      ]),
+      incident("ddos_rps_burst_single_ip:203.0.113.1", 95, [{ key: "ip", value: "203.0.113.1" }]),
       incident("ddos_distributed_subnet:203.0.113.0/24", 90, [
         { key: "prefix", value: "203.0.113.0/24" }
       ])

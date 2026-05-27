@@ -72,7 +72,7 @@ export interface RenderLine {
  */
 export type PromptState =
   | ({ kind: "filter" } & PromptInputState)
-  | {
+  | ({
       kind: "ai";
       /** Whether the question is scoped to the full report or a single incident. */
       scope: "summary" | "incident";
@@ -82,7 +82,7 @@ export type PromptState =
       lines: IncidentLogLine[];
       /** Any additional context string appended to the AI prompt. */
       extraContext?: string;
-    } & PromptInputState;
+    } & PromptInputState);
 
 /** Pre-computed top-N insight lists derived from a single incident's matched log lines. */
 export interface IncidentInsights {
@@ -120,6 +120,12 @@ export interface AccessTableColumns {
   ua: number;
 }
 
-export const TOP_PANEL_KEYS: TopPanelKey[] = ["ips", "paths", "userAgents", "params", "paramValues"];
+export const TOP_PANEL_KEYS: TopPanelKey[] = [
+  "ips",
+  "paths",
+  "userAgents",
+  "params",
+  "paramValues"
+];
 export const SORT_KEYS: SortKey[] = ["timestamp", "ip", "status", "method", "path", "bytes"];
 export const SPINNER_FRAMES = ["-", "\\", "|", "/"];

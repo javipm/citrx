@@ -111,13 +111,19 @@ export function handleIncidentScreenInput({
   setSelectedLineKeys: (updaterOrValue: Set<string> | ((v: Set<string>) => Set<string>)) => void;
   setDetailLine: (line: IncidentLogLine | undefined) => void;
   setDetailScroll: (value: number) => void;
-  setSortMenu: (value: { sortKey: SortKey; sortDirection: SortDirection; focus: "key" } | undefined) => void;
+  setSortMenu: (
+    value: { sortKey: SortKey; sortDirection: SortDirection; focus: "key" } | undefined
+  ) => void;
   setTopScope: (scope: "incident") => void;
   setScreen: (screen: "tops") => void;
   setPrompt: (value: PromptState) => void;
   setExportNotice: (value: { file: string; lines: number }) => void;
   setMessage: (value: string) => void;
-  exportContext: (runId: string, incident: Incident | undefined, lines: IncidentLogLine[]) => Promise<string>;
+  exportContext: (
+    runId: string,
+    incident: Incident | undefined,
+    lines: IncidentLogLine[]
+  ) => Promise<string>;
 }): void {
   if (key.upArrow) {
     setLineIndex((value) => Math.max(0, value - 1));

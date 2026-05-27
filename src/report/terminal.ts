@@ -78,10 +78,7 @@ export function renderTerminalReport(
  * @param colors - A picocolors instance (may have color disabled).
  * @returns A newline-joined string block for the AI bot section.
  */
-function aiBotSection(
-  report: AnalyzeReport,
-  colors: ReturnType<typeof pc.createColors>
-): string {
+function aiBotSection(report: AnalyzeReport, colors: ReturnType<typeof pc.createColors>): string {
   const lines = [colors.bold("Known AI bots")];
 
   for (const bot of report.aiBotStats.slice(0, 10)) {
@@ -194,10 +191,7 @@ function incidentPanel(
  * @param colors - A picocolors instance.
  * @returns A padded, colored severity string.
  */
-function severity(
-  value: Incident["severity"],
-  colors: ReturnType<typeof pc.createColors>
-): string {
+function severity(value: Incident["severity"], colors: ReturnType<typeof pc.createColors>): string {
   switch (value) {
     case "critical":
       return colors.red(value.padEnd(8, " "));

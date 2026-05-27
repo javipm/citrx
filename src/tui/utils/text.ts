@@ -101,7 +101,10 @@ export function renderMarkdownAnswer(value: string, width: number): RenderLine[]
     if (bullet) {
       const indent = " ".repeat(Math.min(6, Math.floor((bullet[1]?.length ?? 0) / 2) * 2));
       const prefix = `${indent}• `;
-      for (const [index, chunk] of wrapWords(stripMarkdownInline(bullet[2] ?? ""), Math.max(20, contentWidth - prefix.length)).entries()) {
+      for (const [index, chunk] of wrapWords(
+        stripMarkdownInline(bullet[2] ?? ""),
+        Math.max(20, contentWidth - prefix.length)
+      ).entries()) {
         rendered.push({
           text: `${index === 0 ? prefix : " ".repeat(prefix.length)}${chunk}`,
           color: index === 0 ? undefined : "gray"
@@ -114,7 +117,10 @@ export function renderMarkdownAnswer(value: string, width: number): RenderLine[]
     if (ordered) {
       const indent = " ".repeat(Math.min(6, Math.floor((ordered[1]?.length ?? 0) / 2) * 2));
       const prefix = `${indent}${ordered[2]}. `;
-      for (const [index, chunk] of wrapWords(stripMarkdownInline(ordered[3] ?? ""), Math.max(20, contentWidth - prefix.length)).entries()) {
+      for (const [index, chunk] of wrapWords(
+        stripMarkdownInline(ordered[3] ?? ""),
+        Math.max(20, contentWidth - prefix.length)
+      ).entries()) {
         rendered.push({
           text: `${index === 0 ? prefix : " ".repeat(prefix.length)}${chunk}`,
           color: index === 0 ? undefined : "gray"
@@ -136,7 +142,11 @@ export function requestDetailLines(line: IncidentLogLine, width: number): string
     ...wrapDetailField("source", line.source, width),
     ...wrapDetailField("time", line.timestamp, width),
     ...wrapDetailField("ip", line.ip, width),
-    ...wrapDetailField("method", `${line.method} | status=${line.status} | bytes=${line.bytes ?? "-"}`, width),
+    ...wrapDetailField(
+      "method",
+      `${line.method} | status=${line.status} | bytes=${line.bytes ?? "-"}`,
+      width
+    ),
     ...wrapDetailField("path", line.path, width),
     ...wrapDetailField("target", line.target, width),
     ...wrapDetailField("ua", line.userAgent ?? "-", width),
@@ -149,7 +159,7 @@ function wrapDetailField(label: string, value: string, width: number): string[] 
   const contentWidth = Math.max(20, width - labelWidth - 1);
   const chunks = wrapHard(value, contentWidth);
 
-  return chunks.map((chunk, index) =>
-    `${index === 0 ? label.padEnd(labelWidth) : " ".repeat(labelWidth)} ${chunk}`
+  return chunks.map(
+    (chunk, index) => `${index === 0 ? label.padEnd(labelWidth) : " ".repeat(labelWidth)} ${chunk}`
   );
 }

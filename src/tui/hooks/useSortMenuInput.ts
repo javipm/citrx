@@ -82,7 +82,8 @@ export function handleSortMenuInput({
   if (key.tab) {
     setSortMenu({
       ...sortMenu,
-      focus: sortMenu.focus === "key" ? "direction" : sortMenu.focus === "direction" ? "apply" : "key"
+      focus:
+        sortMenu.focus === "key" ? "direction" : sortMenu.focus === "direction" ? "apply" : "key"
     });
     return;
   }

@@ -104,9 +104,7 @@ describe("local rules", () => {
     expect(redactTarget("/login?token=secret&next=/admin")).toBe(
       "/login?token=%5BREDACTED%5D&next=%2Fadmin"
     );
-    expect(querySignature("/api?password=hunter2&page=1")).toBe(
-      "?password=%5BREDACTED%5D&page=1"
-    );
+    expect(querySignature("/api?password=hunter2&page=1")).toBe("?password=%5BREDACTED%5D&page=1");
     expect(redactTarget(`/search?q=${"a".repeat(400)}`)).toHaveLength(300);
   });
 
@@ -117,9 +115,7 @@ describe("local rules", () => {
         count: 1000,
         bytes: 50_000,
         ipCounts: ipCounts(20, 1000),
-        queryVariants: new Set(
-          Array.from({ length: 250 }, (_, index) => `?page=${index}`)
-        ),
+        queryVariants: new Set(Array.from({ length: 250 }, (_, index) => `?page=${index}`)),
         postCount: 0
       },
       {
@@ -147,9 +143,7 @@ describe("local rules", () => {
         count: 4355,
         bytes: 201_149_997,
         ipCounts: ipCounts(1056, 4355),
-        queryVariants: new Set(
-          Array.from({ length: 387 }, (_, index) => `?utm=${index}`)
-        ),
+        queryVariants: new Set(Array.from({ length: 387 }, (_, index) => `?utm=${index}`)),
         postCount: 0
       }
     ]);

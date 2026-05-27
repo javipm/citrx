@@ -127,9 +127,7 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "http_4xx_storm:203.0.113.10" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "http_4xx_storm:203.0.113.10" })])
     );
   });
 
@@ -360,9 +358,7 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "ua_rotation_same_ip:203.0.113.10" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "ua_rotation_same_ip:203.0.113.10" })])
     );
   });
 
@@ -374,9 +370,7 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "ua_rotation_same_ip:203.0.113.10" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "ua_rotation_same_ip:203.0.113.10" })])
     );
   });
 
@@ -415,9 +409,7 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "http_head_flood:203.0.113.10" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "http_head_flood:203.0.113.10" })])
     );
   });
 
@@ -429,9 +421,7 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "fake_bot_googlebot:1.2.3.4" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "fake_bot_googlebot:1.2.3.4" })])
     );
   });
 
@@ -440,9 +430,7 @@ describe("behavior tracker", () => {
     tracker.observe(entry({ ip: "66.249.64.10", userAgent: "Googlebot/2.1" }));
 
     expect(tracker.finalize().incidents).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "fake_bot_googlebot:66.249.64.10" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "fake_bot_googlebot:66.249.64.10" })])
     );
   });
 
@@ -451,9 +439,7 @@ describe("behavior tracker", () => {
     tracker.observe(entry({ ip: "1.2.3.4", userAgent: "Googlebot-Image/1.0" }));
 
     expect(tracker.finalize().incidents).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "fake_bot_googlebot:1.2.3.4" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "fake_bot_googlebot:1.2.3.4" })])
     );
   });
 
@@ -464,9 +450,7 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "fake_bot_bingbot:1.2.3.4" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "fake_bot_bingbot:1.2.3.4" })])
     );
   });
 
@@ -475,9 +459,7 @@ describe("behavior tracker", () => {
     tracker.observe(entry({ ip: "157.55.39.10", userAgent: "bingbot/2.0" }));
 
     expect(tracker.finalize().incidents).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "fake_bot_bingbot:157.55.39.10" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "fake_bot_bingbot:157.55.39.10" })])
     );
   });
 
@@ -493,9 +475,7 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "http_5xx_storm:203.0.113.10" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "http_5xx_storm:203.0.113.10" })])
     );
   });
 
@@ -511,9 +491,7 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "http_5xx_storm:203.0.113.10" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "http_5xx_storm:203.0.113.10" })])
     );
   });
 
@@ -529,9 +507,7 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "http_head_flood:203.0.113.10" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "http_head_flood:203.0.113.10" })])
     );
   });
 
@@ -543,9 +519,7 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "http_head_flood:203.0.113.10" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "http_head_flood:203.0.113.10" })])
     );
   });
 
@@ -561,9 +535,7 @@ describe("behavior tracker", () => {
     }
 
     expect(tracker.finalize().incidents).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "http_head_flood:203.0.113.10" })
-      ])
+      expect.arrayContaining([expect.objectContaining({ id: "http_head_flood:203.0.113.10" })])
     );
   });
 

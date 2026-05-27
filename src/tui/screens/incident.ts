@@ -48,17 +48,28 @@ export function IncidentScreen({
       React.createElement(
         Text,
         { bold: true, color: severityColor(incident.severity), wrap: "truncate" },
-        fitText(`[${incident.kind.toUpperCase()}] ${incident.severity.toUpperCase()} ${incident.score}${incident.successful ? " !SUCCESS" : ""} | ${incident.title}`, headerWidth)
+        fitText(
+          `[${incident.kind.toUpperCase()}] ${incident.severity.toUpperCase()} ${incident.score}${incident.successful ? " !SUCCESS" : ""} | ${incident.title}`,
+          headerWidth
+        )
       ),
-      React.createElement(Text, { wrap: "truncate" }, fitText(`${incident.id} | ${incident.category} | ${incident.kind}`, headerWidth)),
-      React.createElement(Text, { color: "gray", wrap: "truncate" }, fitText(incident.evidence.map((item) => `${item.key}=${item.value}`).join(" | "), headerWidth)),
+      React.createElement(
+        Text,
+        { wrap: "truncate" },
+        fitText(`${incident.id} | ${incident.category} | ${incident.kind}`, headerWidth)
+      ),
       React.createElement(
         Text,
         { color: "gray", wrap: "truncate" },
         fitText(
-          `matches=${matchSet?.totalMatches ?? 0} related requests`,
+          incident.evidence.map((item) => `${item.key}=${item.value}`).join(" | "),
           headerWidth
         )
+      ),
+      React.createElement(
+        Text,
+        { color: "gray", wrap: "truncate" },
+        fitText(`matches=${matchSet?.totalMatches ?? 0} related requests`, headerWidth)
       )
     ),
     React.createElement(LineTable, {

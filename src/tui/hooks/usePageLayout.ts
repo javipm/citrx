@@ -35,14 +35,23 @@ interface PageLayoutOptions {
 export function usePageLayout({ screen, rows, columns, prompt, exportNotice }: PageLayoutOptions) {
   return useMemo(() => {
     const controlRows = (prompt ? 3 : 0) + (exportNotice ? 4 : 0);
-    const pageSize = screen === "incident"
-      ? Math.max(4, rows - 13 - controlRows)
-      : Math.max(4, rows - 16 - controlRows);
+    const pageSize =
+      screen === "incident"
+        ? Math.max(4, rows - 13 - controlRows)
+        : Math.max(4, rows - 16 - controlRows);
     const summaryPageSize = Math.max(4, rows - 16 - controlRows);
     const detailRows = Math.max(4, rows - 6 - controlRows);
     const detailWidth = Math.max(40, columns - 10);
     const answerRows = Math.max(4, rows - 7 - controlRows);
     const answerWidth = Math.max(40, columns - 10);
-    return { controlRows, pageSize, summaryPageSize, detailRows, detailWidth, answerRows, answerWidth };
+    return {
+      controlRows,
+      pageSize,
+      summaryPageSize,
+      detailRows,
+      detailWidth,
+      answerRows,
+      answerWidth
+    };
   }, [screen, rows, columns, prompt, exportNotice]);
 }

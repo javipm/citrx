@@ -30,9 +30,7 @@ describe("access log parsers", () => {
     const parser = getBuiltInParser("apache_common");
 
     expect(
-      parser.parse(
-        '2001:db8::1 - - [25/May/2026:03:12:51 +0200] "HEAD /health HTTP/2.0" 204 -'
-      )
+      parser.parse('2001:db8::1 - - [25/May/2026:03:12:51 +0200] "HEAD /health HTTP/2.0" 204 -')
     ).toMatchObject({
       ip: "2001:db8::1",
       method: "HEAD",

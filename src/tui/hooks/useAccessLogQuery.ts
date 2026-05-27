@@ -84,7 +84,10 @@ export function useAccessLogQuery({
   // Compute the page offset from current index and known total.
   const summaryPageStart = Math.max(
     0,
-    Math.min(summaryLineIndex - Math.floor(summaryPageSize / 2), Math.max(0, globalTotal - summaryPageSize))
+    Math.min(
+      summaryLineIndex - Math.floor(summaryPageSize / 2),
+      Math.max(0, globalTotal - summaryPageSize)
+    )
   );
 
   useEffect(() => {
@@ -133,7 +136,15 @@ export function useAccessLogQuery({
     return () => {
       cancelled = true;
     };
-  }, [accessQueryCache, filter, run.accessIndex, sortDirection, sortKey, summaryPageSize, summaryPageStart]);
+  }, [
+    accessQueryCache,
+    filter,
+    run.accessIndex,
+    sortDirection,
+    sortKey,
+    summaryPageSize,
+    summaryPageStart
+  ]);
 
   return { globalTotal, summaryPageLines, summaryPageStart };
 }

@@ -23,11 +23,17 @@ export function useContentState() {
   const [openAiAnswerScroll, setOpenAiAnswerScroll] = useState(0);
 
   return {
-    lineIndex, setLineIndex,
-    summaryLineIndex, setSummaryLineIndex,
-    detailLine, setDetailLine,
-    detailScroll, setDetailScroll,
-    openAiAnswer, setOpenAiAnswer,
-    openAiAnswerScroll, setOpenAiAnswerScroll
+    lineIndex,
+    setLineIndex,
+    summaryLineIndex,
+    setSummaryLineIndex,
+    detailLine,
+    setDetailLine,
+    detailScroll,
+    setDetailScroll,
+    openAiAnswer,
+    setOpenAiAnswer,
+    openAiAnswerScroll,
+    setOpenAiAnswerScroll
   };
 }

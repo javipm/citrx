@@ -25,10 +25,7 @@ export interface PreparedRanges {
 export function ipv4ToBigInt(ip: string): bigint | null {
   const parts = ip.split(".");
 
-  if (
-    parts.length !== 4 ||
-    parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)
-  ) {
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)) {
     return null;
   }
 
@@ -74,16 +71,12 @@ export function parseCidr(cidr: string): ParsedCidr | null {
 
   if (ip.includes(".")) {
     const base = ipv4ToBigInt(ip);
-    return base !== null && mask >= 0 && mask <= 32
-      ? { kind: "ipv4", base, mask }
-      : null;
+    return base !== null && mask >= 0 && mask <= 32 ? { kind: "ipv4", base, mask } : null;
   }
 
   if (ip.includes(":")) {
     const base = ipv6ToBigInt(ip);
-    return base !== null && mask >= 0 && mask <= 128
-      ? { kind: "ipv6", base, mask }
-      : null;
+    return base !== null && mask >= 0 && mask <= 128 ? { kind: "ipv6", base, mask } : null;
   }
 
   return null;
@@ -113,7 +106,7 @@ export function isIpInCidr(ip: string, cidr: ParsedCidr): boolean {
   }
 
   const shift = BigInt(totalBits - cidr.mask);
-  return (value >> shift) === (cidr.base >> shift);
+  return value >> shift === cidr.base >> shift;
 }
 
 /**
@@ -173,17 +166,11 @@ export function expandIPv6(ip: string): string | null {
   const headGroups = head ? head.split(":") : [];
   const tailGroups = tail ? tail.split(":") : [];
 
-  if (
-    [...headGroups, ...tailGroups].some(
-      (group) => !/^[0-9a-f]{1,4}$/i.test(group)
-    )
-  ) {
+  if ([...headGroups, ...tailGroups].some((group) => !/^[0-9a-f]{1,4}$/i.test(group))) {
     return null;
   }
 
-  const missing = doubleColonCount === 1
-    ? 8 - headGroups.length - tailGroups.length
-    : 0;
+  const missing = doubleColonCount === 1 ? 8 - headGroups.length - tailGroups.length : 0;
 
   if (
     missing < 0 ||
@@ -193,11 +180,7 @@ export function expandIPv6(ip: string): string | null {
     return null;
   }
 
-  const groups = [
-    ...headGroups,
-    ...Array.from({ length: missing }, () => "0"),
-    ...tailGroups
-  ];
+  const groups = [...headGroups, ...Array.from({ length: missing }, () => "0"), ...tailGroups];
 
   if (groups.length !== 8) {
     return null;

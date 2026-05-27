@@ -1,7 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import type { AnalyzeReport, Incident, IncidentLogLine, TopItem } from "../../analysis/types.js";
-import { requestParamNames, requestParamValueLabels, userAgentLabel } from "../../analysis/query-params.js";
+import {
+  requestParamNames,
+  requestParamValueLabels,
+  userAgentLabel
+} from "../../analysis/query-params.js";
 import type { AccessLogIndexQueryCache } from "../../run/access-index.js";
 import { readAccessLogIndexRows } from "../../run/access-index.js";
 import type { CitrxRun } from "../../run/types.js";
@@ -104,11 +108,15 @@ export async function incidentInsightsFromAccessIndex(
     params: new Map<string, number>(),
     paramValues: new Map<string, number>()
   };
-  const query = await accessQueryCache.getOrBuild(run.accessIndex, accessQueryKey(filter, "timestamp", "desc"), {
-    filter: createAccessLogLineFilter(filter),
-    sortKey: "timestamp",
-    sortDirection: "desc"
-  });
+  const query = await accessQueryCache.getOrBuild(
+    run.accessIndex,
+    accessQueryKey(filter, "timestamp", "desc"),
+    {
+      filter: createAccessLogLineFilter(filter),
+      sortKey: "timestamp",
+      sortDirection: "desc"
+    }
+  );
 
   for (const line of readAccessLogIndexRows(run.accessIndex, query.rows)) {
     addInsightLine(maps, line);
@@ -186,21 +194,24 @@ export function currentTopContext(
   selectedIndexes: Record<TopPanelKey, number>
 ): string {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
-  const insights = scope === "summary"
-    ? {
-        ips: report.topIps,
-        paths: report.topPaths,
-        userAgents: report.topUserAgents,
-        params: report.topParams,
-        paramValues: report.topParamValues
-      }
-    : incidentInsights(filteredTopLines(matchSet?.lines ?? [], filter));
+  const insights =
+    scope === "summary"
+      ? {
+          ips: report.topIps,
+          paths: report.topPaths,
+          userAgents: report.topUserAgents,
+          params: report.topParams,
+          paramValues: report.topParamValues
+        }
+      : incidentInsights(filteredTopLines(matchSet?.lines ?? [], filter));
   const selected = selectedTopValue(insights, focus, selectedIndexes[focus]);
   const lines = [
     `scope=${scope}`,
     filter ? `filter=${filter}` : undefined,
     incident ? `incident=${incident.id}` : undefined,
-    selected ? `selectedPanel=${focus} selected=${selected.value} count=${selected.count}` : `selectedPanel=${focus}`,
+    selected
+      ? `selectedPanel=${focus} selected=${selected.value} count=${selected.count}`
+      : `selectedPanel=${focus}`,
     `topIps=${topItemsForContext(insights.ips)}`,
     `topPaths=${topItemsForContext(insights.paths)}`,
     `topUserAgents=${topItemsForContext(insights.userAgents)}`,
@@ -212,10 +223,12 @@ export function currentTopContext(
 }
 
 function topItemsForContext(items: TopItem[]): string {
-  return items
-    .slice(0, 10)
-    .map((item) => `${item.value}:${item.count}`)
-    .join(" | ") || "none";
+  return (
+    items
+      .slice(0, 10)
+      .map((item) => `${item.value}:${item.count}`)
+      .join(" | ") || "none"
+  );
 }
 
 export function nextTopPanel(value: TopPanelKey): TopPanelKey {
@@ -257,21 +270,27 @@ function TopListPanel({
       fitText(`${active ? "> " : "  "}${title}`, width - 2)
     ),
     ...(loading
-      ? [React.createElement(Text, { key: "loading", color: "yellow" }, fitText("computing...", width - 2))]
-      : items.length > 0
-      ? items.map((item, index) =>
+      ? [
           React.createElement(
             Text,
-            {
-              key: `${panelKey}:${item.value}`,
-              color: active && index === safeSelectedIndex ? "black" : undefined,
-              backgroundColor: active && index === safeSelectedIndex ? "white" : undefined,
-              wrap: "truncate"
-            },
-            fitText(`${String(item.count).padStart(5)}  ${item.value}`, width - 2)
+            { key: "loading", color: "yellow" },
+            fitText("computing...", width - 2)
           )
-        )
-      : [React.createElement(Text, { key: "empty", color: "gray" }, "none")])
+        ]
+      : items.length > 0
+        ? items.map((item, index) =>
+            React.createElement(
+              Text,
+              {
+                key: `${panelKey}:${item.value}`,
+                color: active && index === safeSelectedIndex ? "black" : undefined,
+                backgroundColor: active && index === safeSelectedIndex ? "white" : undefined,
+                wrap: "truncate"
+              },
+              fitText(`${String(item.count).padStart(5)}  ${item.value}`, width - 2)
+            )
+          )
+        : [React.createElement(Text, { key: "empty", color: "gray" }, "none")])
   );
 }
 
@@ -325,33 +344,37 @@ export function TopValuesScreen({
       setSummaryTopValues(undefined);
     }
 
-    void incidentInsightsFromAccessIndex(run, accessQueryCache, filter).then((value) => {
-      if (!cancelled) {
-        setSummaryTopValues(value);
-        setLoading(false);
-      }
-    }).catch(() => {
-      if (!cancelled) {
-        setSummaryTopValues(undefined);
-        setLoading(false);
-      }
-    });
+    void incidentInsightsFromAccessIndex(run, accessQueryCache, filter)
+      .then((value) => {
+        if (!cancelled) {
+          setSummaryTopValues(value);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSummaryTopValues(undefined);
+          setLoading(false);
+        }
+      });
 
     return () => {
       cancelled = true;
     };
   }, [accessQueryCache, filter, run, scope]);
 
-  const insights = scope === "summary"
-    ? filter
-      ? summaryTopValues?.insights ?? emptyIncidentInsights()
-      : reportInsights(report)
-    : incidentTopValues;
-  const sourceCount = scope === "summary"
-    ? filter
-      ? summaryTopValues?.count ?? 0
-      : report.accessLog.totalLines
-    : matchSet?.totalMatches ?? 0;
+  const insights =
+    scope === "summary"
+      ? filter
+        ? (summaryTopValues?.insights ?? emptyIncidentInsights())
+        : reportInsights(report)
+      : incidentTopValues;
+  const sourceCount =
+    scope === "summary"
+      ? filter
+        ? (summaryTopValues?.count ?? 0)
+        : report.accessLog.totalLines
+      : (matchSet?.totalMatches ?? 0);
   const selectedTopItem = selectedTopValue(insights, focus, selectedIndexes[focus]);
 
   useInput((_inputValue, key) => {
@@ -366,10 +389,12 @@ export function TopValuesScreen({
     return React.createElement(Text, null, "No incident selected");
   }
 
-  const title = scope === "summary" ? "Global top values" : `Top values for ${incident?.id ?? "incident"}`;
-  const subtitle = scope === "summary"
-    ? `${loading ? "computing..." : "computed"} from ${sourceCount}/${report.accessLog.totalLines} parsed access-log rows${filter ? ` | filter=${filter}` : ""}`
-    : `computed from ${sourceCount} related requests${filter ? ` | filter=${filter}` : ""}`;
+  const title =
+    scope === "summary" ? "Global top values" : `Top values for ${incident?.id ?? "incident"}`;
+  const subtitle =
+    scope === "summary"
+      ? `${loading ? "computing..." : "computed"} from ${sourceCount}/${report.accessLog.totalLines} parsed access-log rows${filter ? ` | filter=${filter}` : ""}`
+      : `computed from ${sourceCount} related requests${filter ? ` | filter=${filter}` : ""}`;
 
   return React.createElement(
     Box,
@@ -379,14 +404,14 @@ export function TopValuesScreen({
       { flexDirection: "column", borderStyle: "single", paddingX: 1 },
       React.createElement(
         Text,
-        { bold: true, color: scope === "summary" ? "cyan" : severityColor(incident?.severity ?? "info"), wrap: "truncate" },
+        {
+          bold: true,
+          color: scope === "summary" ? "cyan" : severityColor(incident?.severity ?? "info"),
+          wrap: "truncate"
+        },
         fitText(title, headerWidth)
       ),
-      React.createElement(
-        Text,
-        { color: "gray", wrap: "truncate" },
-        fitText(subtitle, headerWidth)
-      )
+      React.createElement(Text, { color: "gray", wrap: "truncate" }, fitText(subtitle, headerWidth))
     ),
     React.createElement(
       Box,

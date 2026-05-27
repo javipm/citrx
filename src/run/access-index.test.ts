@@ -54,10 +54,7 @@ describe("access log temp index", () => {
         })
       ).resolves.toMatchObject({
         total: 2,
-        lines: [
-          expect.objectContaining({ path: "/c" }),
-          expect.objectContaining({ path: "/b" })
-        ]
+        lines: [expect.objectContaining({ path: "/c" }), expect.objectContaining({ path: "/b" })]
       });
 
       await expect(
@@ -70,8 +67,8 @@ describe("access log temp index", () => {
         })
       ).resolves.toMatchObject({
         total: 3,
-          lines: [expect.objectContaining({ path: "/b", row: 1 })]
-        });
+        lines: [expect.objectContaining({ path: "/b", row: 1 })]
+      });
 
       const cache = new AccessLogIndexQueryCache();
       const cases = [

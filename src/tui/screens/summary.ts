@@ -75,7 +75,11 @@ function SummaryPanel({ report }: { report: AnalyzeReport }) {
     Box,
     { flexDirection: "column", borderStyle: "single", paddingX: 1, width: 54 },
     React.createElement(Text, { bold: true }, "Analysis"),
-    React.createElement(Text, null, `inputs: ${report.inputs.length} | formats: ${formats || "unknown"}`),
+    React.createElement(
+      Text,
+      null,
+      `inputs: ${report.inputs.length} | formats: ${formats || "unknown"}`
+    ),
     React.createElement(
       Text,
       null,
@@ -127,11 +131,7 @@ function IncidentTabHeader({
   focus: SummaryFocus;
 }) {
   const tab = (label: string, count: number, isActive: boolean, color: string) =>
-    React.createElement(
-      Text,
-      { color, bold: true, inverse: isActive },
-      `[${label} ${count}]`
-    );
+    React.createElement(Text, { color, bold: true, inverse: isActive }, `[${label} ${count}]`);
 
   return React.createElement(
     Box,
@@ -142,9 +142,7 @@ function IncidentTabHeader({
       tab("SATURATION", saturationCount, focus === "saturation", "yellow"),
       "  ",
       tab("SECURITY", compromiseCount, focus === "compromise", "red"),
-      ...(noiseCount > 0
-        ? ["  ", tab("OTHER", noiseCount, focus === "noise", "gray")]
-        : [])
+      ...(noiseCount > 0 ? ["  ", tab("OTHER", noiseCount, focus === "noise", "gray")] : [])
     )
   );
 }
@@ -171,15 +169,13 @@ export function IncidentList({
     focusedKind === "compromise"
       ? { items: compromise, start: 0 }
       : focusedKind === "saturation"
-      ? { items: saturation, start: compromise.length }
-      : focusedKind === "noise"
-      ? { items: noise, start: compromise.length + saturation.length }
-      : { items: compromise, start: 0 };
+        ? { items: saturation, start: compromise.length }
+        : focusedKind === "noise"
+          ? { items: noise, start: compromise.length + saturation.length }
+          : { items: compromise, start: 0 };
 
   const isPanelActive = focus !== "accesses";
-  const localCursor = isPanelActive
-    ? Math.max(0, incidentIndex - focusedList.start)
-    : 0;
+  const localCursor = isPanelActive ? Math.max(0, incidentIndex - focusedList.start) : 0;
   const sliceStart = Math.max(
     0,
     Math.min(
@@ -192,18 +188,18 @@ export function IncidentList({
     focusedKind === "compromise"
       ? "red"
       : focusedKind === "saturation"
-      ? "yellow"
-      : focusedKind === "noise"
-      ? "gray"
-      : "cyan";
+        ? "yellow"
+        : focusedKind === "noise"
+          ? "gray"
+          : "cyan";
   const titleLabel =
     focusedKind === "compromise"
       ? "Security incidents (attacks)"
       : focusedKind === "saturation"
-      ? "Saturation incidents (traffic abuse)"
-      : focusedKind === "noise"
-      ? "Other (informational)"
-      : "Incidents (press Tab to focus)";
+        ? "Saturation incidents (traffic abuse)"
+        : focusedKind === "noise"
+          ? "Other (informational)"
+          : "Incidents (press Tab to focus)";
 
   return React.createElement(
     Box,
@@ -229,6 +225,12 @@ export function IncidentList({
             active: isPanelActive
           })
         )
-      : [React.createElement(Text, { key: "empty", color: "gray" }, "  (no incidents in this category)")])
+      : [
+          React.createElement(
+            Text,
+            { key: "empty", color: "gray" },
+            "  (no incidents in this category)"
+          )
+        ])
   );
 }

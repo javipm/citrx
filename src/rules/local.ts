@@ -162,14 +162,56 @@ const TOP_PATHS_LIMIT = 10;
 
 /** Cheap substring check — if none match, skip all regex. */
 const PAYLOAD_PREFIXES = [
-  "select", "union", "information_schema", "sleep(", "benchmark(", "waitfor",
-  "prepare", "execute", "0x",
-  "<script", "%3cscript", "onerror", "onload", "javascript:", "%3csvg", "alert(", "document.cookie",
-  "../", "..%2f", "%252e", "/etc/", "/proc/", "php://", "file=http", "path=http", "template=http",
-  "169.254", "metadata.google", "localhost", "127.0.0.1", "0.0.0.0",
-  "url=http", "callback=http", "webhook=http", "redirect=http",
-  ";", "%3b", "|", "%7c", "`", "%60", "$(", "%24%28",
-  ".env", ".git", "composer.json", "phpinfo", ".sql", ".bak", ".old",
+  "select",
+  "union",
+  "information_schema",
+  "sleep(",
+  "benchmark(",
+  "waitfor",
+  "prepare",
+  "execute",
+  "0x",
+  "<script",
+  "%3cscript",
+  "onerror",
+  "onload",
+  "javascript:",
+  "%3csvg",
+  "alert(",
+  "document.cookie",
+  "../",
+  "..%2f",
+  "%252e",
+  "/etc/",
+  "/proc/",
+  "php://",
+  "file=http",
+  "path=http",
+  "template=http",
+  "169.254",
+  "metadata.google",
+  "localhost",
+  "127.0.0.1",
+  "0.0.0.0",
+  "url=http",
+  "callback=http",
+  "webhook=http",
+  "redirect=http",
+  ";",
+  "%3b",
+  "|",
+  "%7c",
+  "`",
+  "%60",
+  "$(",
+  "%24%28",
+  ".env",
+  ".git",
+  "composer.json",
+  "phpinfo",
+  ".sql",
+  ".bak",
+  ".old"
 ];
 
 export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
@@ -181,16 +223,18 @@ export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
     if (["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "PATCH"].includes(entry.method)) {
       return [];
     }
-    return [{
-      ruleId: "rare_method",
-      category: "http_anomaly",
-      kind: "noise" as IncidentKind,
-      severity: "medium" as IncidentSeverity,
-      score: 55,
-      title: "Rare HTTP method",
-      description: "Request uses an uncommon HTTP method for public web traffic.",
-      sample: `${entry.method} ${redactTarget(entry.target)}`
-    }];
+    return [
+      {
+        ruleId: "rare_method",
+        category: "http_anomaly",
+        kind: "noise" as IncidentKind,
+        severity: "medium" as IncidentSeverity,
+        score: 55,
+        title: "Rare HTTP method",
+        description: "Request uses an uncommon HTTP method for public web traffic.",
+        sample: `${entry.method} ${redactTarget(entry.target)}`
+      }
+    ];
   }
 
   const target = normalizeForMatching(entry.target);
@@ -230,11 +274,13 @@ export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
 
 /** Static asset paths produce huge query/path counts naturally (cache-busters,
  *  imagemap variants). They're never the target of an actual attack.  */
-const STATIC_ASSET_RE = /\.(?:js|mjs|css|map|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|otf|eot|ico|bmp|tiff?|mp3|mp4|webm|ogg|m4a|m4v|pdf)(?:\?|$)/i;
+const STATIC_ASSET_RE =
+  /\.(?:js|mjs|css|map|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|otf|eot|ico|bmp|tiff?|mp3|mp4|webm|ogg|m4a|m4v|pdf)(?:\?|$)/i;
 
 /** Admin paths usually have legitimate high-volume activity (admin pagination,
  *  AJAX endpoints, etc). Skip them for aggregate noise-style rules. */
-const ADMIN_PATH_RE = /^\/(?:admin|admincontrol|wp-admin|adminer|administrator|backend|manage|dashboard|panel)(?:\/|$)/i;
+const ADMIN_PATH_RE =
+  /^\/(?:admin|admincontrol|wp-admin|adminer|administrator|backend|manage|dashboard|panel)(?:\/|$)/i;
 
 function isLowSignalAggregatePath(path: string): boolean {
   return STATIC_ASSET_RE.test(path) || ADMIN_PATH_RE.test(path);
@@ -320,9 +366,7 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
   return incidents;
 }
 
-function highVolumeCrawlSignal(
-  stats: PathStats
-): {
+function highVolumeCrawlSignal(stats: PathStats): {
   repeatedIps: number;
   repeatedRequestShare: number;
   queryVariantRatio: number;
@@ -365,9 +409,7 @@ function highVolumeCrawlSignal(
 
 function isLowSignalEntryPath(path: string): boolean {
   const normalized = path.toLowerCase().replace(/\/+$/, "") || "/";
-  return ["/", "/index", "/index.html", "/index.htm", "/index.php", "/home"].includes(
-    normalized
-  );
+  return ["/", "/index", "/index.html", "/index.htm", "/index.php", "/home"].includes(normalized);
 }
 
 function roundRatio(value: number): number {
@@ -456,9 +498,7 @@ function applyStatus(stats: RuleOutcomeStats, status: number): void {
 function readOutcomeStats(evidence: Incident["evidence"]): RuleOutcomeStats {
   const topPathsRaw = evidence.find((item) => item.key === "topPaths")?.value;
   const topPaths = new Set<string>(
-    typeof topPathsRaw === "string" && topPathsRaw.length > 0
-      ? topPathsRaw.split(" | ")
-      : []
+    typeof topPathsRaw === "string" && topPathsRaw.length > 0 ? topPathsRaw.split(" | ") : []
   );
 
   return {
@@ -585,7 +625,6 @@ function buildRuleEvidence(
   return evidence;
 }
 
-
 /**
  * Drop low-signal rule incidents to reduce noise.
  * Keeps any incident with 2xx (possible success), 5xx (possible crash),
@@ -594,9 +633,7 @@ function buildRuleEvidence(
  */
 export function pruneNoise(incidents: Map<string, Incident>): void {
   for (const [id, incident] of incidents) {
-    const count = Number(
-      incident.evidence.find((item) => item.key === "count")?.value ?? 0
-    );
+    const count = Number(incident.evidence.find((item) => item.key === "count")?.value ?? 0);
     const status2xx = Number(
       incident.evidence.find((item) => item.key === "status2xx")?.value ?? 0
     );
@@ -671,7 +708,5 @@ function normalizeForMatching(target: string): string {
 }
 
 function truncateSample(value: string): string {
-  return value.length <= MAX_SAMPLE_LENGTH
-    ? value
-    : `${value.slice(0, MAX_SAMPLE_LENGTH - 3)}...`;
+  return value.length <= MAX_SAMPLE_LENGTH ? value : `${value.slice(0, MAX_SAMPLE_LENGTH - 3)}...`;
 }
