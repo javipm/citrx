@@ -85,6 +85,33 @@ describe("access log analysis incident matches", () => {
     expect(matches?.lines.every((line) => line.status === 200)).toBe(true);
   });
 
+  it("keeps all matching row numbers even when drill-down lines are sampled", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    const lines = Array.from(
+      { length: 250 },
+      (_, index) =>
+        `203.0.113.10 - - [25/May/2026:03:${String(10 + Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")} +0200] "GET /search?q=${index}%20UNION%20SELECT%20password HTTP/1.1" 200 120 "-" "Mozilla/5.0"`
+    );
+
+    await writeFile(logFile, lines.join("\n"));
+
+    const report = await analyzeAccessLogs([logFile], {
+      top: 5,
+      format: "auto"
+    });
+
+    const matches = report.incidentMatches.find((item) => item.incidentId === "sqli:203.0.113.10");
+
+    expect(matches).toEqual(
+      expect.objectContaining({
+        totalMatches: 250,
+        rowNumbers: Array.from({ length: 250 }, (_, index) => index)
+      })
+    );
+    expect(matches?.lines).toHaveLength(200);
+  });
+
   it("builds exact top user-agent and query parameter lists", async () => {
     const directory = await mkdtemp(join(tmpdir(), "citrx-"));
     const logFile = join(directory, "access.log");

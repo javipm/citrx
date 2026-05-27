@@ -1,15 +1,15 @@
 // Derives all visible line sets from raw data, filters, sort, and pagination parameters.
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { setImmediate } from "node:timers/promises";
 import type { IncidentLogLine } from "../../analysis/types.js";
+import { readAccessLogIndexRows } from "../../run/access-index.js";
 import type { CitrxRun } from "../../run/types.js";
 import type { SortKey, SortDirection, OpenAiAnswerState } from "../types.js";
 import { createAccessLogLineFilter } from "../filter.js";
 import { renderMarkdownAnswer, requestDetailLines } from "../utils/text.js";
 import { lineKey, compareLine } from "../utils/table.js";
 
-function incidentLines(run: CitrxRun, incidentId: string | undefined): IncidentLogLine[] {
-  return run.report.incidentMatches.find((item) => item.incidentId === incidentId)?.lines ?? [];
-}
+const INCIDENT_HYDRATION_BATCH = 2000;
 
 function visibleFilteredLines(
   lines: IncidentLogLine[],
@@ -102,7 +102,84 @@ export function useVisibleLines({
   answerRows,
   selectedLineKeys
 }: VisibleLinesOptions) {
-  const allIncidentLines = useMemo(() => incidentLines(run, incidentId), [run, incidentId]);
+  const matchSet = useMemo(
+    () => run.report.incidentMatches.find((item) => item.incidentId === incidentId),
+    [run.report.incidentMatches, incidentId]
+  );
+  const [allIncidentLines, setAllIncidentLines] = useState<IncidentLogLine[]>(() =>
+    matchSet?.lines ?? []
+  );
+  const [incidentLinesLoading, setIncidentLinesLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!matchSet) {
+      setAllIncidentLines([]);
+      setIncidentLinesLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setAllIncidentLines(matchSet.lines);
+
+    if (matchSet.rowNumbers.length <= matchSet.lines.length) {
+      setIncidentLinesLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIncidentLinesLoading(true);
+
+    void (async () => {
+      const loadedRows = new Set(matchSet.lines.map((line) => line.row));
+      let hydrated = matchSet.lines;
+
+      for (let start = 0; start < matchSet.rowNumbers.length; start += INCIDENT_HYDRATION_BATCH) {
+        await setImmediate();
+
+        if (cancelled) {
+          return;
+        }
+
+        const batch = readAccessLogIndexRows(
+          run.accessIndex,
+          matchSet.rowNumbers.slice(start, start + INCIDENT_HYDRATION_BATCH)
+        ).filter((line) => {
+          if (loadedRows.has(line.row)) {
+            return false;
+          }
+
+          loadedRows.add(line.row);
+          return true;
+        });
+
+        if (batch.length === 0) {
+          continue;
+        }
+
+        hydrated = [...hydrated, ...batch];
+
+        if (!cancelled) {
+          setAllIncidentLines(hydrated);
+        }
+      }
+
+      if (!cancelled) {
+        setIncidentLinesLoading(false);
+      }
+    })().catch(() => {
+      if (!cancelled) {
+        setIncidentLinesLoading(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [matchSet, run.accessIndex]);
 
   const lines = useMemo(
     () => visibleFilteredLines(allIncidentLines, filter, sortKey, sortDirection),
@@ -158,6 +235,7 @@ export function useVisibleLines({
     lines,
     selectedLines,
     selectedGlobalLines,
+    incidentLinesLoading,
     pageStart,
     pageLines,
     summaryPageStart,

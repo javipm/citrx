@@ -162,6 +162,46 @@ export async function incidentInsightsFromAccessIndex(
   };
 }
 
+export async function incidentInsightsFromRows(
+  run: CitrxRun,
+  rowNumbers: number[],
+  filter: string
+): Promise<{
+  insights: IncidentInsights;
+  count: number;
+}> {
+  const maps = {
+    ips: new Map<string, number>(),
+    paths: new Map<string, number>(),
+    userAgents: new Map<string, number>(),
+    params: new Map<string, number>(),
+    paramValues: new Map<string, number>()
+  };
+  const matches: (line: IncidentLogLine) => boolean = filter
+    ? createAccessLogLineFilter(filter)
+    : () => true;
+  let count = 0;
+
+  for (let start = 0; start < rowNumbers.length; start += TOP_INSIGHT_READ_BATCH) {
+    for (const line of readAccessLogIndexRows(
+      run.accessIndex,
+      rowNumbers.slice(start, start + TOP_INSIGHT_READ_BATCH)
+    )) {
+      if (matches(line)) {
+        count += 1;
+        addInsightLine(maps, line);
+      }
+    }
+
+    await setImmediate();
+  }
+
+  return {
+    insights: topInsightMaps(maps),
+    count
+  };
+}
+
 export function filteredTopLines(lines: IncidentLogLine[], filter: string): IncidentLogLine[] {
   if (!filter) {
     return lines;
@@ -353,11 +393,15 @@ export function TopValuesScreen({
   columns: number;
 }): React.ReactElement {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
-  const incidentTopValues = useMemo(
+  const incidentSampleTopValues = useMemo(
     () => incidentInsights(filteredTopLines(matchSet?.lines ?? [], filter)),
     [filter, matchSet]
   );
   const [summaryTopValues, setSummaryTopValues] = useState<{
+    insights: IncidentInsights;
+    count: number;
+  }>();
+  const [incidentTopValues, setIncidentTopValues] = useState<{
     insights: IncidentInsights;
     count: number;
   }>();
@@ -367,7 +411,6 @@ export function TopValuesScreen({
 
   useEffect(() => {
     if (scope !== "summary") {
-      setLoading(false);
       return;
     }
 
@@ -404,22 +447,62 @@ export function TopValuesScreen({
     };
   }, [accessQueryCache, filter, run, scope]);
 
+  useEffect(() => {
+    if (scope !== "incident") {
+      return;
+    }
+
+    let cancelled = false;
+
+    if (!matchSet) {
+      setIncidentTopValues(undefined);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIncidentTopValues(undefined);
+    setLoading(true);
+
+    void (async () => {
+      await setImmediate();
+      return incidentInsightsFromRows(run, matchSet.rowNumbers, filter);
+    })()
+      .then((value) => {
+        if (!cancelled) {
+          setIncidentTopValues(value);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIncidentTopValues(undefined);
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filter, matchSet, run, scope]);
+
   const insights =
     scope === "summary"
       ? filter
         ? (summaryTopValues?.insights ?? emptyIncidentInsights())
         : reportInsights(report)
-      : incidentTopValues;
+      : (incidentTopValues?.insights ?? incidentSampleTopValues);
   const sourceCount =
     scope === "summary"
       ? filter
         ? (summaryTopValues?.count ?? 0)
         : report.accessLog.totalLines
-      : (matchSet?.totalMatches ?? 0);
+      : (incidentTopValues?.count ?? matchSet?.lines.length ?? 0);
   const selectedTopItem = selectedTopValue(insights, focus, selectedIndexes[focus]);
 
   useInput((_inputValue, key) => {
-    if (!key.return || !selectedTopItem) {
+    if (loading || !key.return || !selectedTopItem) {
       return;
     }
 
@@ -435,7 +518,7 @@ export function TopValuesScreen({
   const subtitle =
     scope === "summary"
       ? `${loading ? "computing..." : "computed"} from ${sourceCount}/${report.accessLog.totalLines} parsed access-log rows${filter ? ` | filter=${filter}` : ""}`
-      : `computed from ${sourceCount} related requests${filter ? ` | filter=${filter}` : ""}`;
+      : `${loading ? "computing..." : "computed"} from ${sourceCount}/${matchSet?.totalMatches ?? 0} related requests${filter ? ` | filter=${filter}` : ""}`;
 
   return React.createElement(
     Box,

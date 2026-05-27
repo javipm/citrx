@@ -240,6 +240,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     selectedGlobalLines,
     pageStart,
     pageLines,
+    incidentLinesLoading,
     detailLines,
     visibleDetailLines,
     openAiAnswerLines,
@@ -530,7 +531,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
                   sortDirection,
                   selectedLineKeys,
                   columns,
-                  loading: indexLoading
+                  loading: indexLoading || incidentLinesLoading
                 })
     ),
     sortMenu ? React.createElement(SortMenuOverlay, { sortMenu, columns, rows }) : null,

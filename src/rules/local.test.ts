@@ -113,6 +113,7 @@ describe("local rules", () => {
     expect(querySignature("/page?fbclid=abc123")).toBe("");
     expect(querySignature("/page?utm_source=fb&utm_medium=cpc&utm_campaign=summer")).toBe("");
     expect(querySignature("/page?gclid=xyz&msclkid=foo")).toBe("");
+    expect(querySignature("/api?_=1770000000&rand=12345&cachebuster=abc")).toBe("");
 
     // Tracking mixed with real params → only real params kept.
     expect(querySignature("/search?q=zapatos&fbclid=abc&utm_source=ig")).toBe("?q=zapatos");
@@ -181,6 +182,7 @@ describe("local rules", () => {
         status3xx: 0, // 3xx does NOT count toward servedCount
         status4xx: 0,
         status5xx: 0,
+        maxServedPerMinute: 120,
         samples: ["/zapatillas-mujer-trail?page=1&order=asc"]
       }
     ]);
@@ -249,6 +251,7 @@ describe("local rules", () => {
         status3xx: 0,
         status4xx: 0,
         status5xx: 0,
+        maxServedPerMinute: 120,
         samples: ["/producto/123?ref=botnet"]
       }
     ]);
@@ -403,6 +406,157 @@ describe("local rules", () => {
     ]);
   });
 
+  it("flags sustained distributed query churn even when the monthly peak is modest", () => {
+    const path = "/catalog/faceted-category";
+    const incidents = buildAggregateIncidents([
+      {
+        path,
+        count: 8_600,
+        bytes: 430_000_000,
+        ipCounts: ipCounts(2_100, 8_600),
+        queryVariants: new Set(Array.from({ length: 8_400 }, (_, index) => `?q=facet-${index}`)),
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 8_300,
+        status3xx: 250,
+        status4xx: 50,
+        status5xx: 0,
+        maxServedPerMinute: 22,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual([
+      expect.objectContaining({
+        id: `abusive_crawl:${path}`,
+        kind: "saturation",
+        title: "Distributed URL saturation"
+      })
+    ]);
+  });
+
+  it("flags concentrated crawler query churn from a small IP set", () => {
+    const path = "/localized/faceted-category";
+    const incidents = buildAggregateIncidents([
+      {
+        path,
+        count: 10_500,
+        bytes: 445_000_000,
+        ipCounts: ipCounts(22, 10_500),
+        queryVariants: new Set(Array.from({ length: 9_900 }, (_, index) => `?q=facet-${index}`)),
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 10_480,
+        status3xx: 0,
+        status4xx: 20,
+        status5xx: 0,
+        maxServedPerMinute: 58,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual([
+      expect.objectContaining({
+        id: `abusive_crawl:${path}`,
+        kind: "saturation",
+        title: "Distributed URL saturation"
+      })
+    ]);
+  });
+
+  it("flags sustained repeated endpoint pressure below the old 120/minute burst gate", () => {
+    const path = "/module/search/live";
+    const incidents = buildAggregateIncidents([
+      {
+        path,
+        count: 26_700,
+        bytes: 420_000_000,
+        ipCounts: ipCounts(2_400, 26_700),
+        queryVariants: new Set(Array.from({ length: 4_000 }, (_, index) => `?s=term-${index}`)),
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 25_600,
+        status3xx: 0,
+        status4xx: 1_000,
+        status5xx: 40,
+        maxServedPerMinute: 83,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual([
+      expect.objectContaining({
+        id: `abusive_crawl:${path}`,
+        kind: "saturation",
+        title: "Concentrated URL pressure"
+      })
+    ]);
+  });
+
+  it("does not suppress admin endpoints when they show material pressure", () => {
+    const path = "/admin/index.php";
+    const counts = new Map<string, number>();
+    for (let index = 0; index < 13; index += 1) {
+      counts.set(`203.0.113.${index}`, 6_400);
+    }
+
+    const incidents = buildAggregateIncidents([
+      {
+        path,
+        count: 83_200,
+        bytes: 297_000_000,
+        ipCounts: counts,
+        queryVariants: new Set(Array.from({ length: 1_500 }, (_, index) => `?controller=${index}`)),
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 83_000,
+        status3xx: 50,
+        status4xx: 0,
+        status5xx: 150,
+        maxServedPerMinute: 61,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual([
+      expect.objectContaining({
+        id: `abusive_crawl:${path}`,
+        kind: "saturation"
+      })
+    ]);
+  });
+
+  it("keeps mostly blocked query churn out of saturation even with huge request count", () => {
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/catalog/blocked-category",
+        count: 187_000,
+        bytes: 520_000_000,
+        ipCounts: ipCounts(525, 187_000),
+        queryVariants: new Set(Array.from({ length: 185_000 }, (_, index) => `?q=facet-${index}`)),
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 7_300,
+        status3xx: 0,
+        status4xx: 179_700,
+        status5xx: 0,
+        maxServedPerMinute: 21,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "abusive_crawl:/catalog/blocked-category", kind: "noise" })
+      ])
+    );
+  });
+
   it("promotes to saturation at lower volume when query-variant signal is very strong", () => {
     // Real case: /calzado-trekking-hombre-goretex with 1160 req, 1034 unique variants (~89%).
     // Ratio ≥ 0.75 (high-signal threshold) → saturation applies even below 10k served.
@@ -420,6 +574,7 @@ describe("local rules", () => {
         status3xx: 0,
         status4xx: 0,
         status5xx: 0,
+        maxServedPerMinute: 120,
         samples: []
       }
     ]);
@@ -432,6 +587,103 @@ describe("local rules", () => {
         })
       ])
     );
+  });
+
+  it("does not treat missing maxServedPerMinute as an implicit traffic peak", () => {
+    const counts = new Map<string, number>();
+    for (let index = 0; index < 20; index += 1) {
+      counts.set(`203.0.113.${index}`, 300);
+    }
+
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/module/live-search",
+        count: 6_000,
+        bytes: 30_000_000,
+        ipCounts: counts,
+        queryVariants: new Set(),
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 6_000,
+        status3xx: 0,
+        status4xx: 0,
+        status5xx: 0,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "abusive_crawl:/module/live-search", kind: "noise" })
+      ])
+    );
+  });
+
+  it("does not flag sustained repeat pressure below the per-minute peak floor", () => {
+    const counts = new Map<string, number>();
+    for (let index = 0; index < 20; index += 1) {
+      counts.set(`203.0.113.${index}`, 300);
+    }
+
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/module/live-search",
+        count: 6_000,
+        bytes: 30_000_000,
+        ipCounts: counts,
+        queryVariants: new Set(),
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 6_000,
+        status3xx: 0,
+        status4xx: 0,
+        status5xx: 0,
+        maxServedPerMinute: 19,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "abusive_crawl:/module/live-search", kind: "noise" })
+      ])
+    );
+  });
+
+  it("does not suppress admin index endpoints with material pressure and no query", () => {
+    const counts = new Map<string, number>();
+    for (let index = 0; index < 13; index += 1) {
+      counts.set(`203.0.113.${index}`, 6_400);
+    }
+
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/admin/index.php",
+        count: 83_200,
+        bytes: 297_000_000,
+        ipCounts: counts,
+        queryVariants: new Set(),
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 83_200,
+        status3xx: 0,
+        status4xx: 0,
+        status5xx: 0,
+        maxServedPerMinute: 61,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual([
+      expect.objectContaining({
+        id: "abusive_crawl:/admin/index.php",
+        kind: "saturation",
+        title: "Concentrated URL pressure"
+      })
+    ]);
   });
 
   it("does not report entrypoint traffic as distributed crawling", () => {
@@ -449,6 +701,29 @@ describe("local rules", () => {
         status3xx: 0,
         status4xx: 0,
         status5xx: 0,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual([]);
+  });
+
+  it("does not report plain index.php homepage traffic without app query or errors", () => {
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/index.php",
+        count: 10_000,
+        bytes: 250_000_000,
+        ipCounts: ipCounts(500, 10_000),
+        queryVariants: new Set(),
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 10_000,
+        status3xx: 0,
+        status4xx: 0,
+        status5xx: 0,
+        maxServedPerMinute: 60,
         samples: []
       }
     ]);

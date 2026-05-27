@@ -186,6 +186,15 @@ const CRAWL_SATURATION_HIGH_SIGNAL_REPEATED_IPS = 30;
 const CRAWL_SATURATION_MIN_PEAK_SERVED_PER_MINUTE = 120;
 const CRAWL_SATURATION_LARGE_CHURN_MIN_REQUESTS = 20_000;
 const CRAWL_SATURATION_LARGE_CHURN_MIN_PEAK_SERVED_PER_MINUTE = 60;
+const CRAWL_SATURATION_SUSTAINED_QUERY_MIN_REQUESTS = 5_000;
+const CRAWL_SATURATION_SUSTAINED_QUERY_MIN_VARIANTS = 1_000;
+const CRAWL_SATURATION_SUSTAINED_QUERY_MIN_RATIO = 0.5;
+const CRAWL_SATURATION_SUSTAINED_QUERY_MIN_DISTRIBUTED_IPS = 200;
+const CRAWL_SATURATION_SUSTAINED_QUERY_MIN_CONCENTRATED_PEAK = 50;
+const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REQUESTS = 5_000;
+const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REPEATED_IPS = 10;
+const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_SHARE = 0.75;
+const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_PEAK = 20;
 const CRAWL_SATURATION_MIN_5XX_DISTRESS = 100;
 const POST_HOTSPOT_MIN_REQUESTS = 200;
 const QUERY_EXPLOSION_MIN_REQUESTS = 500;
@@ -310,11 +319,6 @@ export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
 const STATIC_ASSET_RE =
   /\.(?:js|mjs|css|map|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|otf|eot|ico|bmp|tiff?|mp3|mp4|webm|ogg|m4a|m4v|pdf)(?:\?|$)/i;
 
-/** Admin paths usually have legitimate high-volume activity (admin pagination,
- *  AJAX endpoints, etc). Skip them for aggregate noise-style rules. */
-const ADMIN_PATH_RE =
-  /^\/(?:admin|admincontrol|wp-admin|adminer|administrator|backend|manage|dashboard|panel)(?:\/|$)/i;
-
 /** Crawler-infra paths hammered by Googlebot/aggregators but never abuse targets. */
 const CRAWLER_INFRA_RE =
   /^\/(?:sitemap[^?]*\.xml|robots\.txt|feed(?:\/|$|\?)|rss(?:\/|$|\?)|\.well-known(?:\/|$|\?)|favicon\.ico)(?:\?|$)/i;
@@ -323,10 +327,10 @@ const CRAWLER_INFRA_RE =
  *  Stripped from query variant signatures to avoid false-positive saturation signals
  *  on popular social-shared or ad-targeted URLs. */
 const TRACKING_PARAM_RE =
-  /^(?:fbclid|gclid|gclsrc|dclid|msclkid|yclid|utm_\w+|_ga\w*|_gl|_gid|mc_eid|mc_cid|igshid|s_kwcid|ef_id)$/i;
+  /^(?:fbclid|gclid|gclsrc|dclid|msclkid|yclid|gbraid|wbraid|gad_\w+|srsltid|utm_\w+|_ga\w*|_gl|_gid|mc_eid|mc_cid|igshid|s_kwcid|ef_id|_|rand|random|cache|cachebuster|cb|ts|timestamp|time)$/i;
 
 function isLowSignalAggregatePath(path: string): boolean {
-  return STATIC_ASSET_RE.test(path) || ADMIN_PATH_RE.test(path) || CRAWLER_INFRA_RE.test(path);
+  return STATIC_ASSET_RE.test(path) || CRAWLER_INFRA_RE.test(path);
 }
 
 export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Incident[] {
@@ -474,8 +478,8 @@ function highVolumeCrawlSignal(stats: PathStats): {
 } | null {
   if (
     isLowSignalEntryPath(stats.path) ||
-    stats.count < CRAWL_MIN_REQUESTS ||
-    stats.ipCounts.size < CRAWL_MIN_UNIQUE_IPS
+    isIndexEntrypointWithoutAppSignal(stats) ||
+    stats.count < CRAWL_MIN_REQUESTS
   ) {
     return null;
   }
@@ -493,6 +497,7 @@ function highVolumeCrawlSignal(stats: PathStats): {
   const repeatedRequestShare = roundRatio(repeatedRequests / stats.count);
   const queryVariantRatio = roundRatio(stats.queryVariants.size / stats.count);
   const hasQueryChurn =
+    stats.ipCounts.size >= CRAWL_MIN_UNIQUE_IPS &&
     stats.queryVariants.size >= CRAWL_MIN_QUERY_VARIANTS &&
     queryVariantRatio >= CRAWL_MIN_QUERY_VARIANT_RATIO;
   const hasRepeatPressure =
@@ -523,7 +528,7 @@ function materialPathSaturationSignal(
   // 4xx (WAF/auth blocks) never reach the application.
   // Neither contributes meaningfully to backend load saturation.
   const servedCount = stats.status2xx + stats.status5xx;
-  const maxServedPerMinute = stats.maxServedPerMinute ?? servedCount;
+  const maxServedPerMinute = stats.maxServedPerMinute ?? 0;
 
   // High signal quality (very high query-variant churn or many repeat IPs) allows
   // saturation at lower served volume — exhaustive scraping at 1 000+ hits is
@@ -539,15 +544,26 @@ function materialPathSaturationSignal(
     return null;
   }
 
+  if (stats.status5xx >= CRAWL_SATURATION_MIN_5XX_DISTRESS) {
+    return crawlSignal.queryVariantRatio >= CRAWL_SATURATION_MIN_QUERY_VARIANT_RATIO
+      ? "query_churn"
+      : "repeat_pressure";
+  }
+
+  if (hasSustainedQuerySaturation(stats, crawlSignal, servedCount, maxServedPerMinute)) {
+    return "query_churn";
+  }
+
+  if (hasSustainedRepeatSaturation(stats, crawlSignal, servedCount, maxServedPerMinute)) {
+    return "repeat_pressure";
+  }
+
   const minPeakServedPerMinute =
     highQuerySignal && servedCount >= CRAWL_SATURATION_LARGE_CHURN_MIN_REQUESTS
       ? CRAWL_SATURATION_LARGE_CHURN_MIN_PEAK_SERVED_PER_MINUTE
       : CRAWL_SATURATION_MIN_PEAK_SERVED_PER_MINUTE;
 
-  if (
-    stats.status5xx < CRAWL_SATURATION_MIN_5XX_DISTRESS &&
-    maxServedPerMinute < minPeakServedPerMinute
-  ) {
+  if (maxServedPerMinute < minPeakServedPerMinute) {
     return null;
   }
 
@@ -569,7 +585,59 @@ function materialPathSaturationSignal(
 
 function isLowSignalEntryPath(path: string): boolean {
   const normalized = path.toLowerCase().replace(/\/+$/, "") || "/";
-  return ["/", "/index", "/index.html", "/index.htm", "/index.php", "/home"].includes(normalized);
+  return ["/", "/index", "/index.html", "/index.htm", "/home"].includes(normalized);
+}
+
+function isIndexEntrypointWithoutAppSignal(stats: PathStats): boolean {
+  const normalized = stats.path.toLowerCase().replace(/\/+$/, "");
+  return normalized === "/index.php" && stats.queryVariants.size === 0 && stats.status5xx === 0;
+}
+
+function hasSustainedQuerySaturation(
+  stats: PathStats,
+  crawlSignal: {
+    repeatedIps: number;
+    repeatedRequestShare: number;
+    queryVariantRatio: number;
+  },
+  servedCount: number,
+  maxServedPerMinute: number
+): boolean {
+  if (
+    servedCount < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_REQUESTS ||
+    stats.queryVariants.size < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_VARIANTS ||
+    crawlSignal.queryVariantRatio < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_RATIO ||
+    stats.status4xx > servedCount * 5 ||
+    stats.status3xx > servedCount * 5
+  ) {
+    return false;
+  }
+
+  if (stats.ipCounts.size >= CRAWL_SATURATION_SUSTAINED_QUERY_MIN_DISTRIBUTED_IPS) {
+    return true;
+  }
+
+  return maxServedPerMinute >= CRAWL_SATURATION_SUSTAINED_QUERY_MIN_CONCENTRATED_PEAK;
+}
+
+function hasSustainedRepeatSaturation(
+  stats: PathStats,
+  crawlSignal: {
+    repeatedIps: number;
+    repeatedRequestShare: number;
+    queryVariantRatio: number;
+  },
+  servedCount: number,
+  maxServedPerMinute: number
+): boolean {
+  return (
+    servedCount >= CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REQUESTS &&
+    crawlSignal.repeatedIps >= CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REPEATED_IPS &&
+    crawlSignal.repeatedRequestShare >= CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_SHARE &&
+    maxServedPerMinute >= CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_PEAK &&
+    stats.status4xx <= servedCount * 5 &&
+    stats.status3xx <= servedCount * 5
+  );
 }
 
 function roundRatio(value: number): number {

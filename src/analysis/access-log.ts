@@ -88,6 +88,7 @@ interface Counters {
 interface MutableIncidentMatches {
   incidentId: string;
   totalMatches: number;
+  rowNumbers: number[];
   lines: IncidentLogLine[];
 }
 
@@ -520,6 +521,7 @@ async function incidentMatches(
       matches.set(incident.id, {
         incidentId: incident.id,
         totalMatches: pathMatches.totalMatches,
+        rowNumbers: pathMatches.rowNumbers,
         lines: pathMatches.lines
       });
     }
@@ -542,7 +544,7 @@ async function incidentMatches(
     .map((matchSet) => ({
       incidentId: matchSet.incidentId,
       totalMatches: matchSet.totalMatches,
-      rowNumbers: matchSet.lines.map((line) => line.row),
+      rowNumbers: matchSet.rowNumbers,
       lines: matchSet.lines
     }));
 }
@@ -555,6 +557,7 @@ async function behaviorIncidentMatches(
   const matchSet: MutableIncidentMatches = {
     incidentId: incident.id,
     totalMatches: 0,
+    rowNumbers: [],
     lines: []
   };
   const predicate = behaviorIncidentPredicate(incident);
@@ -569,6 +572,7 @@ async function behaviorIncidentMatches(
     for (const line of pathMatchSet.lines) {
       if (predicate(line)) {
         matchSet.totalMatches += 1;
+        matchSet.rowNumbers.push(line.row);
         pushSampleLine(matchSet.lines, line);
       }
     }
@@ -679,10 +683,12 @@ function addIncidentLine(
   const current = matches.get(incidentId) ?? {
     incidentId,
     totalMatches: 0,
+    rowNumbers: [],
     lines: []
   };
 
   current.totalMatches += 1;
+  current.rowNumbers.push(line.row);
   pushSampleLine(current.lines, line);
 
   matches.set(incidentId, current);

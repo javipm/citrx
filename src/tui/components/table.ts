@@ -42,6 +42,11 @@ export function LineTable({
   const spinner = useSpinner(loading);
   const tableColumns = accessTableColumns(columns);
   const lineCount = totalLines ?? lines.length;
+  const loadedLabel =
+    totalLines !== undefined && totalLines > lines.length && lines.length > 0
+      ? ` total | loaded: ${lines.length}`
+      : "";
+  const loadingLabel = loading ? ` | ${spinner} ${loadingMessage}` : "";
   const visibleStart = pageLines.length > 0 ? pageStart + 1 : 0;
   const visibleEnd = pageStart + pageLines.length;
   const filterLabel = filter ? ` | filter: ${filter}` : " | filter: none";
@@ -56,7 +61,7 @@ export function LineTable({
         Text,
         { bold: true, color: active ? "cyan" : undefined, wrap: "truncate" },
         fitText(
-          `${label}${active ? " *" : ""}: ${lineCount} | showing: ${visibleStart}-${visibleEnd} | sort: ${sortKey} ${sortDirection}${filterLabel}`,
+          `${label}${active ? " *" : ""}: ${lineCount}${loadedLabel} | showing: ${visibleStart}-${visibleEnd} | sort: ${sortKey} ${sortDirection}${filterLabel}${loadingLabel}`,
           columns - 10
         )
       )
@@ -108,7 +113,7 @@ function tableRows({
   tableColumns: ReturnType<typeof accessTableColumns>;
   emptyMessage: string;
 }): React.ReactElement[] {
-  if (loading) {
+  if (loading && pageLines.length === 0) {
     return [
       React.createElement(
         Text,

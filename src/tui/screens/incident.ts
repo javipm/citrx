@@ -84,8 +84,9 @@ export function IncidentScreen({
       sortDirection,
       selectedLineKeys,
       columns,
+      totalLines: filter ? undefined : matchSet?.totalMatches,
       loading,
-      loadingMessage: "Loading filtered incident rows..."
+      loadingMessage: filter ? "Loading filtered incident rows..." : "Loading incident rows..."
     })
   );
 }
