@@ -447,7 +447,8 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
                 sortKey,
                 sortDirection,
                 selectedLineKeys,
-                columns
+                columns,
+                loading: indexLoading
               })
             : screen === "tops"
               ? React.createElement(TopValuesScreen, {
@@ -482,7 +483,8 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
                   sortKey,
                   sortDirection,
                   selectedLineKeys,
-                  columns
+                  columns,
+                  loading: indexLoading
                 })
     ),
     sortMenu ? React.createElement(SortMenuOverlay, { sortMenu, columns, rows }) : null,

@@ -3,8 +3,12 @@ import { closeSync, createReadStream, openSync, readSync, statSync, writeSync } 
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
+import { setImmediate } from "node:timers/promises";
 
 import type { IncidentLogLine } from "../analysis/types.js";
+
+const INDEX_SCAN_YIELD_INTERVAL = 5000;
+const SORT_CHUNK_SIZE = 10000;
 
 /**
  * Metadata for an indexed access log stored on disk.
@@ -162,7 +166,7 @@ export async function readAccessLogIndexPage(
   if (options.sortKey === "timestamp") {
     return options.filter === passThroughFilter
       ? readSequentialPage(index, options.start, options.limit, options.sortDirection)
-      : readFilteredSequentialPage(index, options);
+      : await readFilteredSequentialPage(index, options);
   }
 
   const lines: IncidentLogLine[] = [];
@@ -173,11 +177,11 @@ export async function readAccessLogIndexPage(
     }
   }
 
-  lines.sort((a, b) => compareLine(a, b, options.sortKey, options.sortDirection));
+  const sortedLines = await sortLines(lines, options.sortKey, options.sortDirection);
 
   return {
-    total: lines.length,
-    lines: lines.slice(options.start, options.start + options.limit)
+    total: sortedLines.length,
+    lines: sortedLines.slice(options.start, options.start + options.limit)
   };
 }
 
@@ -294,7 +298,7 @@ export async function buildAccessLogIndexQuery(
     };
   }
 
-  const rows: Array<{ row: number; value: string | number }> = [];
+  let rows: Array<{ row: number; value: string | number }> = [];
   const fileHandles = openIndexFiles(index);
 
   try {
@@ -307,6 +311,10 @@ export async function buildAccessLogIndexQuery(
           value: sortableValue(line, options.sortKey)
         });
       }
+
+      if (row > 0 && row % INDEX_SCAN_YIELD_INTERVAL === 0) {
+        await setImmediate();
+      }
     }
   } finally {
     closeIndexFiles(fileHandles);
@@ -314,10 +322,12 @@ export async function buildAccessLogIndexQuery(
 
   if (options.sortKey === "timestamp") {
     if (options.sortDirection === "desc") {
+      await setImmediate();
       rows.reverse();
+      await setImmediate();
     }
   } else {
-    rows.sort((a, b) => compareSortableValue(a.value, b.value, options.sortDirection));
+    rows = await sortQueryRows(rows, options.sortDirection);
   }
 
   return {
@@ -358,10 +368,10 @@ function readSequentialPage(
   };
 }
 
-function readFilteredSequentialPage(
+async function readFilteredSequentialPage(
   index: AccessLogIndex,
   options: AccessLogIndexPageOptions
-): AccessLogIndexPage {
+): Promise<AccessLogIndexPage> {
   const lines: IncidentLogLine[] = [];
   const safeStart = Math.max(0, options.start);
   const safeLimit = Math.max(0, options.limit);
@@ -382,6 +392,10 @@ function readFilteredSequentialPage(
       }
 
       total += 1;
+
+      if (offset > 0 && offset % INDEX_SCAN_YIELD_INTERVAL === 0) {
+        await setImmediate();
+      }
     }
   } finally {
     closeIndexFiles(fileHandles);
@@ -391,6 +405,76 @@ function readFilteredSequentialPage(
     total,
     lines
   };
+}
+
+async function sortLines(
+  lines: IncidentLogLine[],
+  sortKey: AccessLogIndexPageOptions["sortKey"],
+  sortDirection: "asc" | "desc"
+): Promise<IncidentLogLine[]> {
+  return sortInChunks(lines, (a, b) => compareLine(a, b, sortKey, sortDirection));
+}
+
+async function sortQueryRows(
+  rows: Array<{ row: number; value: string | number }>,
+  sortDirection: "asc" | "desc"
+): Promise<Array<{ row: number; value: string | number }>> {
+  return sortInChunks(rows, (a, b) => compareSortableValue(a.value, b.value, sortDirection));
+}
+
+async function sortInChunks<T>(items: T[], compare: (a: T, b: T) => number): Promise<T[]> {
+  if (items.length <= SORT_CHUNK_SIZE) {
+    items.sort(compare);
+    return items;
+  }
+
+  let chunks: T[][] = [];
+
+  for (let start = 0; start < items.length; start += SORT_CHUNK_SIZE) {
+    chunks.push(items.slice(start, start + SORT_CHUNK_SIZE).sort(compare));
+    await setImmediate();
+  }
+
+  while (chunks.length > 1) {
+    const merged: T[][] = [];
+
+    for (let index = 0; index < chunks.length; index += 2) {
+      const left = chunks[index]!;
+      const right = chunks[index + 1];
+      merged.push(right ? mergeSorted(left, right, compare) : left);
+      await setImmediate();
+    }
+
+    chunks = merged;
+  }
+
+  return chunks[0] ?? [];
+}
+
+function mergeSorted<T>(left: T[], right: T[], compare: (a: T, b: T) => number): T[] {
+  const merged: T[] = [];
+  let leftIndex = 0;
+  let rightIndex = 0;
+
+  while (leftIndex < left.length && rightIndex < right.length) {
+    if (compare(left[leftIndex]!, right[rightIndex]!) <= 0) {
+      merged.push(left[leftIndex]!);
+      leftIndex += 1;
+    } else {
+      merged.push(right[rightIndex]!);
+      rightIndex += 1;
+    }
+  }
+
+  if (leftIndex < left.length) {
+    merged.push(...left.slice(leftIndex));
+  }
+
+  if (rightIndex < right.length) {
+    merged.push(...right.slice(rightIndex));
+  }
+
+  return merged;
 }
 
 function openIndexFiles(index: AccessLogIndex): {

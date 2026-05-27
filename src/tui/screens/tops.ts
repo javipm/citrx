@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput } from "ink";
+import { setImmediate } from "node:timers/promises";
 import type { AnalyzeReport, Incident, IncidentLogLine, TopItem } from "../../analysis/types.js";
 import {
   requestParamNames,
@@ -14,6 +15,9 @@ import type { TopScope, TopPanelKey, IncidentInsights } from "../types.js";
 import { TOP_PANEL_KEYS } from "../types.js";
 import { severityColor } from "../utils/colors.js";
 import { fitText } from "../utils/format.js";
+import { useSpinner } from "../hooks/useSpinner.js";
+
+const TOP_INSIGHT_READ_BATCH = 1000;
 
 function accessQueryKey(filter: string, sortKey: string, sortDirection: string): string {
   return `${sortKey}:${sortDirection}:${filter}`;
@@ -27,10 +31,33 @@ function incrementMap(map: Map<string, number>, key: string): void {
 }
 
 function topMapItems(map: Map<string, number>, limit: number): TopItem[] {
-  return [...map.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, limit)
-    .map(([value, count]) => ({ value, count }));
+  const top: TopItem[] = [];
+
+  for (const [value, count] of map) {
+    insertTopItem(top, { value, count }, limit);
+  }
+
+  return top;
+}
+
+function insertTopItem(top: TopItem[], item: TopItem, limit: number): void {
+  const insertAt = top.findIndex(
+    (current) =>
+      item.count > current.count || (item.count === current.count && item.value < current.value)
+  );
+
+  if (insertAt === -1) {
+    if (top.length < limit) {
+      top.push(item);
+    }
+    return;
+  }
+
+  top.splice(insertAt, 0, item);
+
+  if (top.length > limit) {
+    top.pop();
+  }
 }
 
 function addInsightLine(
@@ -118,8 +145,15 @@ export async function incidentInsightsFromAccessIndex(
     }
   );
 
-  for (const line of readAccessLogIndexRows(run.accessIndex, query.rows)) {
-    addInsightLine(maps, line);
+  for (let start = 0; start < query.rows.length; start += TOP_INSIGHT_READ_BATCH) {
+    for (const line of readAccessLogIndexRows(
+      run.accessIndex,
+      query.rows.slice(start, start + TOP_INSIGHT_READ_BATCH)
+    )) {
+      addInsightLine(maps, line);
+    }
+
+    await setImmediate();
   }
 
   return {
@@ -253,6 +287,7 @@ function TopListPanel({
   selectedIndex: number;
   loading?: boolean;
 }) {
+  const spinner = useSpinner(loading);
   const safeSelectedIndex = Math.max(0, Math.min(selectedIndex, Math.max(0, items.length - 1)));
 
   return React.createElement(
@@ -273,8 +308,8 @@ function TopListPanel({
       ? [
           React.createElement(
             Text,
-            { key: "loading", color: "yellow" },
-            fitText("computing...", width - 2)
+            { key: "loading", color: "yellow", bold: true },
+            fitText(`${spinner} Loading...`, width - 2)
           )
         ]
       : items.length > 0
@@ -344,7 +379,13 @@ export function TopValuesScreen({
       setSummaryTopValues(undefined);
     }
 
-    void incidentInsightsFromAccessIndex(run, accessQueryCache, filter)
+    void (async () => {
+      if (needsSummaryBuild) {
+        await setImmediate();
+      }
+
+      return incidentInsightsFromAccessIndex(run, accessQueryCache, filter);
+    })()
       .then((value) => {
         if (!cancelled) {
           setSummaryTopValues(value);

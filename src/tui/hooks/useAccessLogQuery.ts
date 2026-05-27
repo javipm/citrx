@@ -1,5 +1,6 @@
 // Reads paginated access log index pages reactively, managing loading state and message feedback.
 import { useEffect, useState } from "react";
+import { setImmediate } from "node:timers/promises";
 import type { IncidentLogLine } from "../../analysis/types.js";
 import type { AccessLogIndexQueryCache } from "../../run/access-index.js";
 import { passThroughFilter, readAccessLogIndexCachedPage } from "../../run/access-index.js";
@@ -98,18 +99,24 @@ export function useAccessLogQuery({
 
     if (needsIndexBuild) {
       setIndexLoading(true);
-      setMessage("Building filter cache...");
+      setMessage(filter ? "Building filter cache..." : "Building sort cache...");
     } else {
       setIndexLoading(false);
     }
 
-    void readAccessLogIndexCachedPage(run.accessIndex, accessQueryCache, cacheKey, {
-      filter: filterFn,
-      sortKey,
-      sortDirection,
-      start: summaryPageStart,
-      limit: summaryPageSize
-    })
+    void (async () => {
+      if (needsIndexBuild) {
+        await setImmediate();
+      }
+
+      return readAccessLogIndexCachedPage(run.accessIndex, accessQueryCache, cacheKey, {
+        filter: filterFn,
+        sortKey,
+        sortDirection,
+        start: summaryPageStart,
+        limit: summaryPageSize
+      });
+    })()
       .then((page) => {
         if (cancelled) {
           return;

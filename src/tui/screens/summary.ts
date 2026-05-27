@@ -20,7 +20,8 @@ export function SummaryScreen({
   sortDirection,
   selectedLineKeys,
   columns,
-  totalLines
+  totalLines,
+  loading
 }: {
   report: AnalyzeReport;
   incidents: Incident[];
@@ -36,6 +37,7 @@ export function SummaryScreen({
   selectedLineKeys: Set<string>;
   columns: number;
   totalLines: number;
+  loading: boolean;
 }): React.ReactElement {
   return React.createElement(
     Box,
@@ -64,7 +66,9 @@ export function SummaryScreen({
       totalLines,
       active: focus === "accesses",
       label: "Access log",
-      emptyMessage: "No indexed access-log lines"
+      emptyMessage: "No indexed access-log lines",
+      loading,
+      loadingMessage: "Loading access-log results..."
     })
   );
 }

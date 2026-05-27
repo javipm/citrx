@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline/promises";
+import { setImmediate } from "node:timers/promises";
 
 import { openTextInputStreams } from "../input/compressed.js";
 import {
@@ -41,6 +42,14 @@ interface AnalyzeOptions {
   since?: Date;
   until?: Date;
   accessLogWriter?: AccessLogIndexWriter;
+  onProgress?: (progress: AnalysisProgress) => void;
+}
+
+interface AnalysisProgress {
+  phase: "reading" | "finalizing";
+  totalLines: number;
+  parsedLines: number;
+  source: string;
 }
 
 interface SourceParserSelection {
@@ -86,6 +95,8 @@ const MIN_SAMPLE_LINES = 1;
 const MIN_PARSE_RATIO = 0.8;
 const MAX_SAMPLE_LINES = 200;
 const MAX_INCIDENT_SAMPLE_LINES = 200;
+const PROGRESS_YIELD_INTERVAL = 5000;
+const FINALIZATION_YIELD_INTERVAL = 5000;
 
 export async function analyzeAccessLogs(
   files: string[],
@@ -150,11 +161,31 @@ export async function analyzeAccessLogSources(
     }
   }
 
+  await yieldForFinalization(counters, options);
   const behavior = counters.behavior.finalize();
+  await yieldForFinalization(counters, options);
   // Drop low-signal rule incidents (single 404 probes, isolated rare methods, etc.)
   pruneNoise(counters.ruleIncidents);
+  await yieldForFinalization(counters, options);
   // Compute once — reused for both incidents list and incidentMatches.
   const aggregateIncidents = buildAggregateIncidents(counters.pathStats.values());
+  await yieldForFinalization(counters, options);
+  const topIps = await topItems(counters.ips, options.top, counters, options);
+  const topPaths = await topItems(counters.paths, options.top, counters, options);
+  const topMethods = await topItems(counters.methods, options.top, counters, options);
+  const topStatuses = await topItems(counters.statuses, options.top, counters, options);
+  const topUserAgents = await topItems(counters.userAgents, options.top, counters, options);
+  const topParams = await topItems(counters.params, options.top, counters, options);
+  const topParamValues = await topItems(counters.paramValues, options.top, counters, options);
+  const incidents = sortIncidents(
+    applyScoringMultipliers([
+      ...counters.ruleIncidents.values(),
+      ...aggregateIncidents,
+      ...behavior.incidents
+    ])
+  );
+  await yieldForFinalization(counters, options);
+  const matches = await incidentMatches(counters, aggregateIncidents, behavior.incidents, options);
 
   return {
     app: "citrx",
@@ -171,13 +202,13 @@ export async function analyzeAccessLogSources(
       invalidLines: counters.invalidLines,
       totalBytes: counters.totalBytes
     },
-    topIps: topItems(counters.ips, options.top),
-    topPaths: topItems(counters.paths, options.top),
-    topMethods: topItems(counters.methods, options.top),
-    topStatuses: topItems(counters.statuses, options.top),
-    topUserAgents: topItems(counters.userAgents, options.top),
-    topParams: topItems(counters.params, options.top),
-    topParamValues: topItems(counters.paramValues, options.top),
+    topIps,
+    topPaths,
+    topMethods,
+    topStatuses,
+    topUserAgents,
+    topParams,
+    topParamValues,
     accessLog: {
       totalLines: counters.parsedLines,
       indexedLines: counters.accessLogWriter?.index.totalRows ?? 0
@@ -185,14 +216,8 @@ export async function analyzeAccessLogSources(
     timeStats: behavior.timeStats,
     ipBehaviorStats: behavior.ipBehaviorStats,
     aiBotStats: behavior.aiBotStats,
-    incidents: sortIncidents(
-      applyScoringMultipliers([
-        ...counters.ruleIncidents.values(),
-        ...aggregateIncidents,
-        ...behavior.incidents
-      ])
-    ),
-    incidentMatches: incidentMatches(counters, aggregateIncidents, behavior.incidents)
+    incidents,
+    incidentMatches: matches
   };
 }
 
@@ -297,13 +322,58 @@ async function analyzeLines(
   sourceLabel: string,
   prefixLines: string[] = []
 ): Promise<void> {
+  let processedSinceYield = 0;
+
   for (const line of prefixLines) {
     analyzeLine(line, parser, counters, options, sourceLabel);
+    processedSinceYield = await yieldForProgress(
+      processedSinceYield + 1,
+      counters,
+      options,
+      sourceLabel
+    );
   }
 
   for await (const line of lines) {
     analyzeLine(line, parser, counters, options, sourceLabel);
+    processedSinceYield = await yieldForProgress(
+      processedSinceYield + 1,
+      counters,
+      options,
+      sourceLabel
+    );
   }
+}
+
+async function yieldForProgress(
+  processedSinceYield: number,
+  counters: Counters,
+  options: AnalyzeOptions,
+  sourceLabel: string
+): Promise<number> {
+  if (processedSinceYield < PROGRESS_YIELD_INTERVAL) {
+    return processedSinceYield;
+  }
+
+  options.onProgress?.({
+    phase: "reading",
+    totalLines: counters.totalLines,
+    parsedLines: counters.parsedLines,
+    source: sourceLabel
+  });
+  await setImmediate();
+
+  return 0;
+}
+
+async function yieldForFinalization(counters: Counters, options: AnalyzeOptions): Promise<void> {
+  options.onProgress?.({
+    phase: "finalizing",
+    totalLines: counters.totalLines,
+    parsedLines: counters.parsedLines,
+    source: "all inputs"
+  });
+  await setImmediate();
 }
 
 function analyzeLine(
@@ -383,22 +453,63 @@ function increment(map: Map<string, number>, key: string): void {
   map.set(key, (map.get(key) ?? 0) + 1);
 }
 
-function topItems(map: Map<string, number>, limit: number): TopItem[] {
-  return [...map.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, limit)
-    .map(([value, count]) => ({ value, count }));
+async function topItems(
+  map: Map<string, number>,
+  limit: number,
+  counters: Counters,
+  options: AnalyzeOptions
+): Promise<TopItem[]> {
+  if (limit <= 0) {
+    return [];
+  }
+
+  const top: TopItem[] = [];
+  let processed = 0;
+
+  for (const [value, count] of map) {
+    insertTopItem(top, { value, count }, limit);
+    processed += 1;
+
+    if (processed % FINALIZATION_YIELD_INTERVAL === 0) {
+      await yieldForFinalization(counters, options);
+    }
+  }
+
+  return top;
 }
 
-function incidentMatches(
+function insertTopItem(top: TopItem[], item: TopItem, limit: number): void {
+  const insertAt = top.findIndex(
+    (current) =>
+      item.count > current.count || (item.count === current.count && item.value < current.value)
+  );
+
+  if (insertAt === -1) {
+    if (top.length < limit) {
+      top.push(item);
+    }
+    return;
+  }
+
+  top.splice(insertAt, 0, item);
+
+  if (top.length > limit) {
+    top.pop();
+  }
+}
+
+async function incidentMatches(
   counters: Counters,
   aggregateIncidents: Incident[],
-  behaviorIncidents: Incident[]
-): IncidentMatchSet[] {
+  behaviorIncidents: Incident[],
+  options: AnalyzeOptions
+): Promise<IncidentMatchSet[]> {
   const matches = new Map<string, MutableIncidentMatches>();
+  let processed = 0;
 
   for (const [incidentId, matchSet] of counters.ruleMatches) {
     matches.set(incidentId, matchSet);
+    processed = await yieldAfterFinalizationItems(processed + 1, counters, options);
   }
 
   for (const incident of aggregateIncidents) {
@@ -412,14 +523,18 @@ function incidentMatches(
         lines: pathMatches.lines
       });
     }
+
+    processed = await yieldAfterFinalizationItems(processed + 1, counters, options);
   }
 
   for (const incident of behaviorIncidents) {
-    const matchSet = behaviorIncidentMatches(incident, counters);
+    const matchSet = await behaviorIncidentMatches(incident, counters, options);
 
     if (matchSet.totalMatches > 0) {
       matches.set(incident.id, matchSet);
     }
+
+    processed = await yieldAfterFinalizationItems(processed + 1, counters, options);
   }
 
   return [...matches.values()]
@@ -432,7 +547,11 @@ function incidentMatches(
     }));
 }
 
-function behaviorIncidentMatches(incident: Incident, counters: Counters): MutableIncidentMatches {
+async function behaviorIncidentMatches(
+  incident: Incident,
+  counters: Counters,
+  options: AnalyzeOptions
+): Promise<MutableIncidentMatches> {
   const matchSet: MutableIncidentMatches = {
     incidentId: incident.id,
     totalMatches: 0,
@@ -444,6 +563,8 @@ function behaviorIncidentMatches(incident: Incident, counters: Counters): Mutabl
     return matchSet;
   }
 
+  let processed = 0;
+
   for (const pathMatchSet of counters.pathMatches.values()) {
     for (const line of pathMatchSet.lines) {
       if (predicate(line)) {
@@ -451,9 +572,25 @@ function behaviorIncidentMatches(incident: Incident, counters: Counters): Mutabl
         pushSampleLine(matchSet.lines, line);
       }
     }
+
+    processed = await yieldAfterFinalizationItems(processed + 1, counters, options);
   }
 
   return matchSet;
+}
+
+async function yieldAfterFinalizationItems(
+  processed: number,
+  counters: Counters,
+  options: AnalyzeOptions
+): Promise<number> {
+  if (processed < FINALIZATION_YIELD_INTERVAL) {
+    return processed;
+  }
+
+  await yieldForFinalization(counters, options);
+
+  return 0;
 }
 
 function behaviorIncidentPredicate(

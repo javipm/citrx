@@ -17,7 +17,8 @@ export function IncidentScreen({
   sortKey,
   sortDirection,
   selectedLineKeys,
-  columns
+  columns,
+  loading
 }: {
   report: AnalyzeReport;
   incident: Incident | undefined;
@@ -30,6 +31,7 @@ export function IncidentScreen({
   sortDirection: SortDirection;
   selectedLineKeys: Set<string>;
   columns: number;
+  loading: boolean;
 }): React.ReactElement {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
 
@@ -81,7 +83,9 @@ export function IncidentScreen({
       sortKey,
       sortDirection,
       selectedLineKeys,
-      columns
+      columns,
+      loading,
+      loadingMessage: "Loading filtered incident rows..."
     })
   );
 }

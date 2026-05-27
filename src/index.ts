@@ -1,6 +1,7 @@
 import { Command, CommanderError } from "commander";
 import { writeFile } from "node:fs/promises";
 import type { Readable, Writable } from "node:stream";
+import { setImmediate } from "node:timers/promises";
 
 import { analyzeAccessLogSources } from "./analysis/access-log.js";
 import type { AnalyzeInputSource } from "./analysis/types.js";
@@ -147,10 +148,19 @@ async function runRootAnalysis(
         formatConfig: typeof options.formatConfig === "string" ? options.formatConfig : undefined,
         since: parseDateOption(options.since, "--since"),
         until: parseDateOption(options.until, "--until"),
-        accessLogWriter
+        accessLogWriter,
+        onProgress: ({ phase, totalLines, parsedLines }) => {
+          const counts = `${formatCount(totalLines)} lines read, ${formatCount(
+            parsedLines
+          )} parsed`;
+          progress.update(
+            phase === "finalizing"
+              ? `Finalizing analysis (${counts})`
+              : `Reading and analyzing access logs (${counts})`
+          );
+        }
       })
     );
-    accessLogWriter.close();
 
     const run: CitrxRun = {
       id: workspace.id,
@@ -162,9 +172,15 @@ async function runRootAnalysis(
     };
 
     if (shouldOpenTui(options, outputFormat, runtime)) {
+      await progress.withStep("Preparing interactive view", async () => {
+        accessLogWriter.close();
+        await setImmediate();
+      });
       await openInteractiveRun(run, runtime);
       return;
     }
+
+    accessLogWriter.close();
 
     if (typeof options.out === "string") {
       const output = await progress.withStep(`Writing report to ${options.out}`, async () =>
@@ -297,6 +313,10 @@ function parseOutputFormat(options: Record<string, unknown>): OutputFormat {
   }
 
   return (requested[0] as OutputFormat | undefined) ?? "terminal";
+}
+
+function formatCount(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
 }
 
 function shouldOpenTui(
