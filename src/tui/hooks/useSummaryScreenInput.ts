@@ -85,6 +85,19 @@ export function availableFocuses(incidents: Incident[]): SummaryFocus[] {
   return order;
 }
 
+export function defaultSummaryFocus(incidents: Incident[]): SummaryFocus {
+  return availableFocuses(incidents)[1] ?? "accesses";
+}
+
+export function firstIncidentIndexForFocus(incidents: Incident[], focus: SummaryFocus): number {
+  return isIncidentFocus(focus)
+    ? Math.max(
+        0,
+        incidents.findIndex((i) => i.kind === focus)
+      )
+    : 0;
+}
+
 /**
  * Main keyboard handler for the summary screen.
  *

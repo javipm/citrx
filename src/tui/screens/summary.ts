@@ -162,30 +162,32 @@ export function IncidentList({
   pageSize: number;
   focus: SummaryFocus;
 }): React.ReactElement {
-  const compromise = incidents.filter((i) => i.kind === "compromise");
-  const saturation = incidents.filter((i) => i.kind === "saturation");
-  const noise = incidents.filter((i) => i.kind === "noise");
+  const compromise = incidentItemsByKind(incidents, "compromise");
+  const saturation = incidentItemsByKind(incidents, "saturation");
+  const noise = incidentItemsByKind(incidents, "noise");
 
   const focusedKind: "compromise" | "saturation" | "noise" | null =
     focus === "accesses" ? null : focus;
 
   const focusedList =
     focusedKind === "compromise"
-      ? { items: compromise, start: 0 }
+      ? compromise
       : focusedKind === "saturation"
-        ? { items: saturation, start: compromise.length }
+        ? saturation
         : focusedKind === "noise"
-          ? { items: noise, start: compromise.length + saturation.length }
-          : { items: compromise, start: 0 };
+          ? noise
+          : saturation.length > 0
+            ? saturation
+            : compromise.length > 0
+              ? compromise
+              : noise;
 
   const isPanelActive = focus !== "accesses";
-  const localCursor = isPanelActive ? Math.max(0, incidentIndex - focusedList.start) : 0;
+  const focusedCursor = focusedList.findIndex((item) => item.index === incidentIndex);
+  const localCursor = isPanelActive ? Math.max(0, focusedCursor) : 0;
   const sliceStart = Math.max(
     0,
-    Math.min(
-      localCursor - Math.floor(pageSize / 2),
-      Math.max(0, focusedList.items.length - pageSize)
-    )
+    Math.min(localCursor - Math.floor(pageSize / 2), Math.max(0, focusedList.length - pageSize))
   );
 
   const titleColor =
@@ -219,12 +221,12 @@ export function IncidentList({
       { bold: true, color: titleColor },
       `${titleLabel}${isPanelActive ? " *" : ""}`
     ),
-    ...(focusedList.items.length > 0
-      ? focusedList.items.slice(sliceStart, sliceStart + pageSize).map((incident, offset) =>
+    ...(focusedList.length > 0
+      ? focusedList.slice(sliceStart, sliceStart + pageSize).map((item) =>
           React.createElement(IncidentRow, {
-            key: incident.id,
-            incident,
-            index: focusedList.start + sliceStart + offset,
+            key: item.incident.id,
+            incident: item.incident,
+            index: item.index,
             incidentIndex,
             active: isPanelActive
           })
@@ -237,4 +239,13 @@ export function IncidentList({
           )
         ])
   );
+}
+
+function incidentItemsByKind(
+  incidents: Incident[],
+  kind: Incident["kind"]
+): Array<{ incident: Incident; index: number }> {
+  return incidents
+    .map((incident, index) => ({ incident, index }))
+    .filter((item) => item.incident.kind === kind);
 }

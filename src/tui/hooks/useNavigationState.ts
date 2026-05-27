@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { Screen, SummaryFocus, TopScope, TopPanelKey } from "../types.js";
 import type { CitrxRun } from "../../run/types.js";
+import { defaultSummaryFocus, firstIncidentIndexForFocus } from "./useSummaryScreenInput.js";
 
 /**
  * Manages navigation-related state for the TUI.
@@ -18,7 +19,9 @@ import type { CitrxRun } from "../../run/types.js";
  */
 export function useNavigationState(run: CitrxRun) {
   const [screen, setScreen] = useState<Screen>("summary");
-  const [summaryFocus, setSummaryFocus] = useState<SummaryFocus>("accesses");
+  const [summaryFocus, setSummaryFocus] = useState<SummaryFocus>(() =>
+    defaultSummaryFocus(run.report.incidents)
+  );
   const [topScope, setTopScope] = useState<TopScope>("summary");
   const [topFocus, setTopFocus] = useState<TopPanelKey>("ips");
   const [topIndexes, setTopIndexes] = useState<Record<TopPanelKey, number>>({
@@ -28,10 +31,9 @@ export function useNavigationState(run: CitrxRun) {
     params: 0,
     paramValues: 0
   });
-  const [incidentIndex, setIncidentIndex] = useState(() => {
-    const satStart = run.report.incidents.findIndex((i) => i.kind === "saturation");
-    return satStart >= 0 ? satStart : 0;
-  });
+  const [incidentIndex, setIncidentIndex] = useState(() =>
+    firstIncidentIndexForFocus(run.report.incidents, defaultSummaryFocus(run.report.incidents))
+  );
 
   return {
     screen,
