@@ -56,6 +56,7 @@ function isPageDown(inputValue: string, key: Key): boolean {
  * @param sortKey     Active sort column, forwarded to the sort menu.
  * @param sortDirection Active sort direction, forwarded to the sort menu.
  * @param runId       Run identifier passed to `exportContext`.
+ * @param exportReady Whether all incident rows are loaded and export can run.
  * @param setLineIndex        Functional updater for the cursor position.
  * @param setFilter           Setter to clear or update the filter string.
  * @param setSelectedLineKeys Setter/updater for the set of selected line keys.
@@ -66,6 +67,7 @@ function isPageDown(inputValue: string, key: Key): boolean {
  * @param setScreen           Navigates to the `"tops"` screen.
  * @param setPrompt           Opens the filter or AI prompt overlay.
  * @param setExportNotice     Shows the post-export confirmation notice.
+ * @param setExportLoading    Toggles the export progress indicator.
  * @param setMessage          Updates the TUI status-bar message.
  * @param exportContext       Async function that serialises lines to a JSON
  *                            file and resolves with the output file path.
@@ -82,6 +84,7 @@ export function handleIncidentScreenInput({
   sortKey,
   sortDirection,
   runId,
+  exportReady,
   setLineIndex,
   setFilter,
   setSelectedLineKeys,
@@ -92,6 +95,7 @@ export function handleIncidentScreenInput({
   setScreen,
   setPrompt,
   setExportNotice,
+  setExportLoading,
   setMessage,
   exportContext
 }: {
@@ -106,6 +110,7 @@ export function handleIncidentScreenInput({
   sortKey: SortKey;
   sortDirection: SortDirection;
   runId: string;
+  exportReady: boolean;
   setLineIndex: (updater: (value: number) => number) => void;
   setFilter: (value: string) => void;
   setSelectedLineKeys: (updaterOrValue: Set<string> | ((v: Set<string>) => Set<string>)) => void;
@@ -118,6 +123,7 @@ export function handleIncidentScreenInput({
   setScreen: (screen: "tops") => void;
   setPrompt: (value: PromptState) => void;
   setExportNotice: (value: { file: string; lines: number }) => void;
+  setExportLoading: (value: boolean) => void;
   setMessage: (value: string) => void;
   exportContext: (
     runId: string,
@@ -199,16 +205,27 @@ export function handleIncidentScreenInput({
   }
 
   if (inputValue === "e") {
+    if (!exportReady) {
+      setMessage("Still loading incident rows before export...");
+      return;
+    }
+
     const exportable = selectedLines.length > 0 ? selectedLines : lines;
+    setExportLoading(true);
     setMessage("Exporting JSON...");
-    void exportContext(runId, incident, exportable)
-      .then((file) => {
-        setExportNotice({ file, lines: exportable.length });
-        setMessage(`Export OK: ${exportable.length} rows saved`);
-      })
-      .catch((error) => {
-        setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
+    setTimeout(() => {
+      void exportContext(runId, incident, exportable)
+        .then((file) => {
+          setExportNotice({ file, lines: exportable.length });
+          setMessage(`Export OK: ${exportable.length} rows saved`);
+        })
+        .catch((error) => {
+          setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+        })
+        .finally(() => {
+          setExportLoading(false);
+        });
+    }, 0);
     return;
   }
 

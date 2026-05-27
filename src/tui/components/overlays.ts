@@ -255,6 +255,7 @@ export function Footer({
   answerOpen,
   busy,
   loading,
+  incidentExportReady,
   message,
   selected,
   columns
@@ -265,11 +266,25 @@ export function Footer({
   answerOpen: boolean;
   busy: boolean;
   loading: boolean;
+  incidentExportReady: boolean;
   message: string;
   selected: number;
   columns: number;
 }): React.ReactElement {
   const spinner = useSpinner(loading || busy);
+  const incidentShortcuts = [
+    "↑/↓ PgUp/PgDn rows",
+    "Enter/d detail",
+    "t tops",
+    "Space select",
+    "A select visible",
+    "f filter",
+    "s sort menu",
+    "a ask",
+    ...(incidentExportReady ? ["e export"] : []),
+    "b back",
+    "q quit"
+  ].join(" | ");
   const shortcuts = answerOpen
     ? "↑/↓ PgUp/PgDn scroll | b/Esc close answer | q quit"
     : detailOpen
@@ -278,7 +293,7 @@ export function Footer({
         ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate panel | Enter/d open | f filter | s sort menu | t tops | a ask | e export | q quit`
         : screen === "tops"
           ? "Tab panel | ↑/↓ row | Enter filter by value | a ask about tops | t/b/Esc back | q quit"
-          : "↑/↓ PgUp/PgDn rows | Enter/d detail | t tops | Space select | A select visible | f filter | s sort menu | a ask | e export | b back | q quit";
+          : incidentShortcuts;
   const prefix = loading || busy ? `${spinner} ` : "";
   const status = `${prefix}${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
 

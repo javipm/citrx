@@ -30,6 +30,7 @@ describe("summary export", () => {
     const exportContext = vi.fn(async () => "selected.json");
     const exportAllFilteredContext = vi.fn(async () => ({ file: "all.json", lines: 42 }));
     const setExportNotice = vi.fn();
+    const setExportLoading = vi.fn();
     const setMessage = vi.fn();
 
     handleSummaryScreenInput({
@@ -39,14 +40,20 @@ describe("summary export", () => {
       exportContext,
       exportAllFilteredContext,
       setExportNotice,
+      setExportLoading,
       setMessage
     });
 
-    await Promise.resolve();
+    expect(setExportLoading).toHaveBeenCalledWith(true);
+    expect(setMessage).toHaveBeenCalledWith("Exporting JSON...");
+    expect(exportAllFilteredContext).not.toHaveBeenCalled();
+
+    await flushDeferredExport();
 
     expect(exportContext).not.toHaveBeenCalled();
     expect(exportAllFilteredContext).toHaveBeenCalledTimes(1);
     expect(setExportNotice).toHaveBeenCalledWith({ file: "all.json", lines: 42 });
+    expect(setExportLoading).toHaveBeenLastCalledWith(false);
     expect(setMessage).toHaveBeenLastCalledWith("Export OK: 42 rows saved");
   });
 
@@ -55,6 +62,7 @@ describe("summary export", () => {
     const exportContext = vi.fn(async () => "selected.json");
     const exportAllFilteredContext = vi.fn(async () => ({ file: "all.json", lines: 42 }));
     const setExportNotice = vi.fn();
+    const setExportLoading = vi.fn();
     const setMessage = vi.fn();
 
     handleSummaryScreenInput({
@@ -64,14 +72,20 @@ describe("summary export", () => {
       exportContext,
       exportAllFilteredContext,
       setExportNotice,
+      setExportLoading,
       setMessage
     });
 
-    await Promise.resolve();
+    expect(setExportLoading).toHaveBeenCalledWith(true);
+    expect(setMessage).toHaveBeenCalledWith("Exporting JSON...");
+    expect(exportContext).not.toHaveBeenCalled();
+
+    await flushDeferredExport();
 
     expect(exportAllFilteredContext).not.toHaveBeenCalled();
     expect(exportContext).toHaveBeenCalledWith("run-1", undefined, [selectedLine]);
     expect(setExportNotice).toHaveBeenCalledWith({ file: "selected.json", lines: 1 });
+    expect(setExportLoading).toHaveBeenLastCalledWith(false);
     expect(setMessage).toHaveBeenLastCalledWith("Export OK: 1 rows saved");
   });
 });
@@ -137,8 +151,16 @@ function summaryInputDefaults(): Parameters<typeof handleSummaryScreenInput>[0] 
     setTopScope: vi.fn(),
     setPrompt: vi.fn(),
     setExportNotice: vi.fn(),
+    setExportLoading: vi.fn(),
     setMessage: vi.fn(),
     exportContext: vi.fn(async () => "summary.json"),
     exportAllFilteredContext: vi.fn(async () => ({ file: "summary.json", lines: 1 }))
   };
+}
+
+async function flushDeferredExport(): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await Promise.resolve();
 }

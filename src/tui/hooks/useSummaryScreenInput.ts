@@ -150,6 +150,7 @@ export function firstIncidentIndexForFocus(incidents: Incident[], focus: Summary
  * @param params.setTopScope            - Sets the scope context before navigating to the tops screen.
  * @param params.setPrompt              - Opens a prompt overlay (filter or AI kind).
  * @param params.setExportNotice        - Displays the post-export confirmation banner.
+ * @param params.setExportLoading       - Toggles the export progress indicator.
  * @param params.setMessage             - Sets the status-bar message string.
  * @param params.exportContext          - Async function that serialises selected lines to a JSON file.
  * @param params.exportAllFilteredContext - Async function that exports the full filtered access-log result.
@@ -183,6 +184,7 @@ export function handleSummaryScreenInput({
   setTopScope,
   setPrompt,
   setExportNotice,
+  setExportLoading,
   setMessage,
   exportContext,
   exportAllFilteredContext
@@ -217,6 +219,7 @@ export function handleSummaryScreenInput({
   setTopScope: (scope: "summary") => void;
   setPrompt: (value: PromptState) => void;
   setExportNotice: (value: { file: string; lines: number }) => void;
+  setExportLoading: (value: boolean) => void;
   setMessage: (value: string) => void;
   exportContext: (
     runId: string,
@@ -352,27 +355,38 @@ export function handleSummaryScreenInput({
   }
 
   if (inputValue === "e") {
+    setExportLoading(true);
     setMessage("Exporting JSON...");
     if (selectedGlobalLines.length > 0) {
       const exportable = selectedGlobalLines;
-      void exportContext(runId, undefined, exportable)
-        .then((file) => {
-          setExportNotice({ file, lines: exportable.length });
-          setMessage(`Export OK: ${exportable.length} rows saved`);
-        })
-        .catch((error) => {
-          setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
-        });
+      setTimeout(() => {
+        void exportContext(runId, undefined, exportable)
+          .then((file) => {
+            setExportNotice({ file, lines: exportable.length });
+            setMessage(`Export OK: ${exportable.length} rows saved`);
+          })
+          .catch((error) => {
+            setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+          })
+          .finally(() => {
+            setExportLoading(false);
+          });
+      }, 0);
       return;
     }
 
-    void exportAllFilteredContext()
-      .then(({ file, lines }) => {
-        setExportNotice({ file, lines });
-        setMessage(`Export OK: ${lines} rows saved`);
-      })
-      .catch((error) => {
-        setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
+    setTimeout(() => {
+      void exportAllFilteredContext()
+        .then(({ file, lines }) => {
+          setExportNotice({ file, lines });
+          setMessage(`Export OK: ${lines} rows saved`);
+        })
+        .catch((error) => {
+          setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+        })
+        .finally(() => {
+          setExportLoading(false);
+        });
+    }, 0);
   }
 }

@@ -206,6 +206,8 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     setMessage,
     busy,
     setBusy,
+    exportLoading,
+    setExportLoading,
     indexLoading,
     setIndexLoading
   } = useFilterSortState();
@@ -396,6 +398,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
         setTopScope,
         setPrompt,
         setExportNotice,
+        setExportLoading,
         setMessage,
         exportContext,
         exportAllFilteredContext: () =>
@@ -443,6 +446,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       sortKey,
       sortDirection,
       runId: run.id,
+      exportReady: !incidentLinesLoading,
       setLineIndex,
       setFilter,
       setSelectedLineKeys,
@@ -453,10 +457,13 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       setScreen,
       setPrompt,
       setExportNotice,
+      setExportLoading,
       setMessage,
       exportContext
     });
   });
+
+  const loading = indexLoading || incidentLinesLoading || exportLoading;
 
   return React.createElement(
     Box,
@@ -543,7 +550,8 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       detailOpen: Boolean(detailLine),
       answerOpen: Boolean(openAiAnswer),
       busy,
-      loading: indexLoading,
+      loading,
+      incidentExportReady: !incidentLinesLoading,
       message,
       selected: selectedLineKeys.size,
       columns

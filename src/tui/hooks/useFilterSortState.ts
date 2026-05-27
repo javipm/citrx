@@ -15,6 +15,7 @@ import type { SortKey, SortDirection, SortMenuFocus, PromptState } from "../type
  *   - `exportNotice` / `setExportNotice` — Post-export confirmation payload (`{ file, lines }`), or `undefined`.
  *   - `message` / `setMessage` — Status-bar message string; defaults to `"Ready"`.
  *   - `busy` / `setBusy` — `true` while an async operation (e.g. AI query) is in-flight.
+ *   - `exportLoading` / `setExportLoading` — `true` while JSON export is in-flight.
  *   - `indexLoading` / `setIndexLoading` — `true` while the access-log index is being built/cached.
  */
 export function useFilterSortState() {
@@ -34,6 +35,7 @@ export function useFilterSortState() {
   }>();
   const [message, setMessage] = useState("Ready");
   const [busy, setBusy] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
   const [indexLoading, setIndexLoading] = useState(false);
 
   return {
@@ -55,6 +57,8 @@ export function useFilterSortState() {
     setMessage,
     busy,
     setBusy,
+    exportLoading,
+    setExportLoading,
     indexLoading,
     setIndexLoading
   };
