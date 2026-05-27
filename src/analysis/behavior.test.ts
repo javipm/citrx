@@ -351,8 +351,12 @@ describe("behavior tracker", () => {
   it("detects user-agent rotation from one IP", () => {
     const tracker = new BehaviorTracker();
 
+    // Generate burst (10 req/s) so peakRps gate is met — slow trickling traffic
+    // with many UAs is more likely shared NAT, not a rotating bot.
     for (let index = 0; index < 100; index += 1) {
-      tracker.observe(entry({ userAgent: `Browser/${index % 8}`, timestamp: ts(index) }));
+      tracker.observe(
+        entry({ userAgent: `Browser/${index % 8}`, timestamp: ts(Math.floor(index / 10)) })
+      );
     }
 
     expect(tracker.finalize().incidents).toEqual(
@@ -419,7 +423,10 @@ describe("behavior tracker", () => {
 
   it("detects fake Googlebot claims outside official ranges", () => {
     const tracker = new BehaviorTracker();
-    tracker.observe(entry({ ip: "1.2.3.4", userAgent: "Googlebot/2.1" }));
+    // Min 10 requests required — single requests are noise.
+    for (let index = 0; index < 10; index += 1) {
+      tracker.observe(entry({ ip: "1.2.3.4", userAgent: "Googlebot/2.1", timestamp: ts(index) }));
+    }
 
     expect(tracker.finalize().incidents).toEqual(
       expect.arrayContaining([
@@ -452,7 +459,9 @@ describe("behavior tracker", () => {
 
   it("detects fake bingbot claims outside official ranges", () => {
     const tracker = new BehaviorTracker();
-    tracker.observe(entry({ ip: "1.2.3.4", userAgent: "bingbot/2.0" }));
+    for (let index = 0; index < 10; index += 1) {
+      tracker.observe(entry({ ip: "1.2.3.4", userAgent: "bingbot/2.0", timestamp: ts(index) }));
+    }
 
     expect(tracker.finalize().incidents).toEqual(
       expect.arrayContaining([

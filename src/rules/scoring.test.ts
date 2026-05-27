@@ -110,7 +110,7 @@ describe("scoring multipliers", () => {
     expect(scored.map((item) => item.score)).toEqual([60, 70]);
   });
 
-  it("adds persistence bonus from firstSeen and lastSeen", () => {
+  it("does not add persistence bonus to AI scrapers (they naturally run for weeks)", () => {
     const [scored] = applyScoringMultipliers([
       incident("ai_scraper_known:GPTBot", 25, [
         { key: "firstSeen", value: "2026-05-25T00:00:00.000Z" },
@@ -118,7 +118,7 @@ describe("scoring multipliers", () => {
       ])
     ]);
 
-    expect(scored?.score).toBe(40);
+    expect(scored?.score).toBe(25);
   });
 
   it("penalizes moderate AI bots that requested robots.txt", () => {

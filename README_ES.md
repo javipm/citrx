@@ -179,13 +179,26 @@ a pantalla completa en terminal.
 Muestra:
 
 - resumen del análisis
-- lista navegable de incidencias
+- paneles de incidencias con tres pestañas
 - tabla completa del access log indexado
+
+El área de incidencias tiene tres pestañas navegables con `Tab`:
+
+| Pestaña | Contenido |
+|---|---|
+| **SATURATION** (por defecto) | Bursts de rate, DDoS, crawlers IA, bots abusivos — abuso de tráfico/recursos |
+| **SECURITY** | Payloads SQLi/XSS/LFI, recon, bots falsos, scanner UA — intentos de compromiso |
+| **OTHER** | Incidencias de bajo nivel o ruido filtradas de los paneles principales |
+
+`Tab` cicla: access log → SATURATION → SECURITY → OTHER → access log.
+
+Las incidencias marcadas con `!SUCCESS` tuvieron al menos una respuesta `2xx`,
+lo que significa que el payload o probe recibió una respuesta exitosa.
 
 Atajos:
 
 ```text
-Tab              cambia foco entre access log e incidencias
+Tab              cambia foco entre access log y paneles de incidencias
 ↑/↓              mueve fila
 PgUp/PgDn        navega por páginas
 Enter / d        abre incidencia o detalle de request
@@ -348,59 +361,85 @@ Reportes HTML:
 
 ## Tipos De Incidencias
 
+Cada incidencia tiene un campo `kind` que determina en qué panel de la TUI aparece:
+
+| Kind | Panel | Ejemplos |
+|---|---|---|
+| `compromise` | SECURITY | Payloads SQLi/XSS/LFI, probes de recon, bots falsos, scanner tools |
+| `saturation` | SATURATION | Bursts DDoS, crawlers IA, crawlers abusivos, hotspots POST |
+| `noise` | OTHER | Patrones de bajo nivel poco accionables de forma inmediata |
+
 `citrx` emite actualmente estas familias de incidencias.
 
 ### Payloads Y Recon
 
-| Prefijo ID | Categoría | Qué significa |
-|---|---|---|
-| `sqli:` | `sql_injection` | indicadores de SQL injection como `union select`, sleep/benchmark, SQL codificado, prepared statements |
-| `xss:` | `xss` | indicadores de ejecución en navegador |
-| `lfi_rfi:` | `path_traversal` | traversal, inclusión local/remota, `php://filter`, paths sensibles |
-| `ssrf:` | `ssrf` | localhost, metadata IPs/hosts, params con URLs internas/callback |
-| `command_injection:` | `command_injection` | metacaracteres shell más indicadores de ejecución |
-| `recon_sensitive_file:` | `recon` | probes a `.env`, `.git`, backups, dumps e internos |
-| `rare_method:` | `http_anomaly` | métodos HTTP poco habituales en tráfico público |
+| Prefijo ID | Categoría | Kind | Qué significa |
+|---|---|---|---|
+| `sqli:` | `sql_injection` | compromise | indicadores de SQL injection como `union select`, sleep/benchmark, SQL codificado |
+| `xss:` | `xss` | compromise | indicadores de ejecución en navegador |
+| `lfi_rfi:` | `path_traversal` | compromise | traversal, inclusión local/remota, `php://filter`, paths sensibles |
+| `ssrf:` | `ssrf` | compromise | localhost, metadata IPs/hosts, params con URLs internas/callback |
+| `command_injection:` | `command_injection` | compromise | metacaracteres shell más indicadores de ejecución |
+| `recon_sensitive_file:` | `recon` | compromise | probes a `.env`, `.git`, backups, dumps e internos |
+| `rare_method:` | `http_anomaly` | compromise | métodos HTTP poco habituales (`CONNECT`, `TRACE`, `OPTIONS`) |
 
-Las incidencias de payload se agrupan por regla y path. Si todas las respuestas
-son 404/4xx, el score baja para que los probes muertos no parezcan tan urgentes
-como payloads que devuelven éxito.
+Las incidencias de payload se agrupan **por IP atacante**, no por path, de modo
+que hay una incidencia por IP independientemente de cuántos paths pruebe. Scoring
+según el resultado de las respuestas:
+
+- Cualquier respuesta `2xx` → `critical/100` + flag `!SUCCESS` (el payload llegó a destino)
+- Cualquier respuesta `5xx` → `critical/90`
+- Solo respuestas `4xx` → `medium/55` (probes bloqueados)
+
+`recon_sensitive_file` requiere al menos **2 respuestas exitosas** o una **ratio de éxito
+del 10%** para evitar alertar sobre scanners de 404 típicos.
 
 ### Reglas Agregadas Por Path
 
-| Prefijo ID | Categoría | Qué significa |
-|---|---|---|
-| `abusive_crawl:` | `abusive_crawling` | path no entrypoint con alto volumen repetido por muchos clientes |
-| `query_explosion:` | `abusive_crawling` | un path con muchas variantes de query string |
-| `post_hotspot:` | `post_hotspot` | endpoint con muchas peticiones POST |
+| Prefijo ID | Categoría | Kind | Qué significa |
+|---|---|---|---|
+| `abusive_crawl:` | `abusive_crawling` | noise | path no entrypoint con alto volumen repetido por muchos clientes |
+| `query_explosion:` | `abusive_crawling` | noise | un path con muchas variantes de query string |
+| `post_hotspot:` | `post_hotspot` | saturation | endpoint con muchas peticiones POST |
 
 ### Rate Y DDoS
 
-| Prefijo ID | Categoría | Qué significa |
-|---|---|---|
-| `ddos_rps_burst_single_ip:` | `ddos` | una IP supera el umbral de RPS durante varios segundos consecutivos |
-| `ddos_global_rps_spike` | `ddos` | el RPS global supera la línea base durante varios segundos |
-| `http_head_flood:` | `ddos` | una IP manda una proporción alta y un pico alto de HEAD |
-| `ddos_distributed_subnet:` | `ddos` | IPv4 `/24` o IPv6 `/48` supera umbrales de RPS e IPs únicas |
+| Prefijo ID | Categoría | Kind | Qué significa |
+|---|---|---|---|
+| `ddos_rps_burst_single_ip:` | `ddos` | saturation | una IP supera el umbral de RPS durante varios segundos consecutivos |
+| `ddos_global_rps_spike` | `ddos` | saturation | el RPS global supera la línea base durante varios segundos |
+| `http_head_flood:` | `ddos` | saturation | una IP manda una proporción alta y un pico alto de HEAD |
+| `ddos_distributed_subnet:` | `ddos` | saturation | IPv4 `/24` o IPv6 `/48` supera umbrales de RPS e IPs únicas |
 
 ### Tormentas De Errores HTTP
 
-| Prefijo ID | Categoría | Qué significa |
-|---|---|---|
-| `http_4xx_storm:` | `http_anomaly` | una IP genera muchas respuestas 4xx en buckets de minuto adyacentes |
-| `http_5xx_storm:` | `http_anomaly` | una IP genera muchas respuestas 5xx en buckets de minuto adyacentes |
+| Prefijo ID | Categoría | Kind | Qué significa |
+|---|---|---|---|
+| `http_4xx_storm:` | `http_anomaly` | saturation | una IP genera muchas respuestas 4xx en buckets de minuto adyacentes |
+| `http_5xx_storm:` | `http_anomaly` | saturation | una IP genera muchas respuestas 5xx en buckets de minuto adyacentes |
 
 ### Bots Y Scanners
 
-| Prefijo ID | Categoría | Qué significa |
-|---|---|---|
-| `ai_scraper_known:` | `ai_scraper` | crawler IA o user-agent de asistente IA conocido, agrupado por bot |
-| `scanner_ua_known:` | `scanner` | user-agent de scanner o tooling ofensivo conocido |
-| `scanner_signature_paths:` | `scanner` | una IP toca muchos paths fingerprint de scanners |
-| `single_ip_path_explosion:` | `abusive_crawling` | una IP toca cientos de paths únicos |
-| `ua_rotation_same_ip:` | `http_anomaly` | una IP usa muchos user-agents distintos |
-| `fake_bot_googlebot:` | `fake_bot` | UA declara Googlebot core pero la IP no está en rangos Googlebot publicados |
-| `fake_bot_bingbot:` | `fake_bot` | UA declara bingbot pero la IP no está en rangos Bing publicados |
+| Prefijo ID | Categoría | Kind | Qué significa |
+|---|---|---|---|
+| `ai_scraper_known:` | `ai_scraper` | saturation/noise | crawler IA o user-agent de asistente IA conocido, agrupado por bot |
+| `scanner_ua_known:` | `scanner` | compromise | user-agent de scanner o tooling ofensivo conocido |
+| `scanner_signature_paths:` | `scanner` | compromise | una IP toca muchos paths fingerprint de scanners |
+| `single_ip_path_explosion:` | `abusive_crawling` | saturation | una IP supera **10 paths únicos/minuto** de forma sostenida |
+| `ua_rotation_same_ip:` | `http_anomaly` | saturation | una IP usa muchos user-agents distintos **y** peak RPS ≥ 5 |
+| `fake_bot_googlebot:` | `fake_bot` | compromise | UA declara Googlebot core pero la IP no está en rangos Googlebot publicados |
+| `fake_bot_bingbot:` | `fake_bot` | compromise | UA declara bingbot pero la IP no está en rangos Bing publicados |
+
+Notas de detección:
+
+- `single_ip_path_explosion` requiere **pathsPerMinute ≥ 10**, no solo conteo total.
+  Las páginas normales que cargan muchos assets no lo disparan.
+- `ua_rotation_same_ip` requiere **peak RPS ≥ 5**. NAT compartido (p.ej. oficinas AWS)
+  genera muchos user-agents a baja tasa sin ser malicioso.
+- `fake_bot_*` requiere **al menos 10 requests** de esa IP.
+- Las IPs confirmadas como Googlebot o Bingbot legítimo (verificadas contra rangos
+  publicados) quedan excluidas de todas las detecciones de bots y scanners.
+- `ai_scraper_known` es `saturation` con score ≥ 70, `noise` en caso contrario.
 
 Los snapshots de rangos Googlebot/Bingbot están en el código. Se refrescan con:
 
@@ -412,18 +451,35 @@ pnpm run update-bot-ranges
 
 Cada incidencia tiene:
 
+- `kind`: `compromise`, `saturation` o `noise` (determina el panel en la TUI)
 - `severity`: `info`, `low`, `medium`, `high`, `critical`
 - `score`: `0` a `100`
 - `evidence`: key/value tipado para auditoría
 - `samples`: ejemplos redactados cuando aplica
+- `successful?`: `true` cuando al menos una respuesta fue `2xx`
 
-El scoring aplica multiplicadores post-proceso:
+Umbrales de severidad:
 
-- `+10` si la misma `evidence.ip` aparece en dos o más incidencias
-- `+15` si el patrón persiste durante al menos 30 minutos
+| Rango de score | Severidad |
+|---|---|
+| 0–24 | `info` |
+| 25–49 | `low` |
+| 50–74 | `medium` |
+| 75–89 | `high` |
+| 90–100 | `critical` |
+
+Multiplicadores post-proceso aplicados tras el scoring base:
+
+- `+10` si la misma `evidence.ip` aparece en dos o más incidencias (atacante correlado)
+- `+15` si el patrón persiste durante al menos 30 minutos (bonus de persistencia)
 - `-10` para crawlers IA moderados que pidieron `robots.txt`
 
-El score final se limita a `[0, 100]` y después se recalcula la severidad.
+Notas:
+- El bonus de persistencia **no aplica** a `ai_scraper_known:*` — los crawlers IA
+  funcionan durante semanas de forma natural, así que la duración sola no es señal.
+- Las incidencias se ordenan dentro de cada panel por peso de `kind` primero
+  (compromise → saturation → noise), luego por score descendente.
+- El score final se limita a `[0, 100]` y después se recalcula la severidad.
 
 ## Seguridad Y Privacidad
 

@@ -16,6 +16,7 @@ import {
   buildAggregateIncidents,
   detectRequestHits,
   mergeRuleHit,
+  pruneNoise,
   redactTarget,
   querySignature
 } from "../rules/local.js";
@@ -150,6 +151,10 @@ export async function analyzeAccessLogSources(
   }
 
   const behavior = counters.behavior.finalize();
+  // Drop low-signal rule incidents (single 404 probes, isolated rare methods, etc.)
+  pruneNoise(counters.ruleIncidents);
+  // Compute once — reused for both incidents list and incidentMatches.
+  const aggregateIncidents = buildAggregateIncidents(counters.pathStats.values());
 
   return {
     app: "citrx",
@@ -183,11 +188,11 @@ export async function analyzeAccessLogSources(
     incidents: sortIncidents(
       applyScoringMultipliers([
         ...counters.ruleIncidents.values(),
-        ...buildAggregateIncidents(counters.pathStats.values()),
+        ...aggregateIncidents,
         ...behavior.incidents
       ])
     ),
-    incidentMatches: incidentMatches(counters, behavior.incidents)
+    incidentMatches: incidentMatches(counters, aggregateIncidents, behavior.incidents)
   };
 }
 
@@ -390,9 +395,9 @@ function topItems(map: Map<string, number>, limit: number): TopItem[] {
 
 function incidentMatches(
   counters: Counters,
+  aggregateIncidents: Incident[],
   behaviorIncidents: Incident[]
 ): IncidentMatchSet[] {
-  const aggregateIncidents = buildAggregateIncidents(counters.pathStats.values());
   const matches = new Map<string, MutableIncidentMatches>();
 
   for (const [incidentId, matchSet] of counters.ruleMatches) {
@@ -604,9 +609,15 @@ function sortIncidents(incidents: Incident[]): Incident[] {
     low: 2,
     info: 1
   };
+  const kindWeight: Record<Incident["kind"], number> = {
+    compromise: 3,
+    saturation: 2,
+    noise: 1
+  };
 
   return incidents.sort(
     (a, b) =>
+      kindWeight[b.kind] - kindWeight[a.kind] ||
       severityWeight[b.severity] - severityWeight[a.severity] ||
       b.score - a.score ||
       a.id.localeCompare(b.id)

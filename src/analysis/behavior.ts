@@ -4,7 +4,7 @@ import { BINGBOT_RANGES } from "../rules/data/bingbot-ranges.js";
 import { FINGERPRINT_PATHS } from "../rules/data/scanner-fingerprint-paths.js";
 import { GOOGLEBOT_RANGES } from "../rules/data/googlebot-ranges.js";
 import { SCANNER_UA_PATTERNS } from "../rules/data/scanner-uas.js";
-import type { AiBotStats, Incident, IpBehaviorStats, TimeStats } from "./types.js";
+import type { AiBotStats, Incident, IncidentKind, IpBehaviorStats, TimeStats } from "./types.js";
 import { expandIPv6, ipInPreparedRanges, prepareRanges } from "./ip-ranges.js";
 import { accessLogTimestampToEpochSeconds } from "./timestamp.js";
 
@@ -32,8 +32,15 @@ const AI_BOT_HIGH_PATH_MINUTES = 3;
 const FINGERPRINT_BUCKET_SECONDS = 60;
 const FINGERPRINT_PATH_THRESHOLD = 20;
 const SINGLE_IP_PATH_EXPLOSION_THRESHOLD = 500;
+/** Minimum unique paths per minute for path explosion to be considered saturation.
+ *  Normal users browsing for hours/days hit 500+ paths organically at low rates.
+ *  Real path-explosion attacks/crawlers fan out fast: 10+ new paths every minute. */
+const SINGLE_IP_PATH_EXPLOSION_MIN_RATE_PER_MIN = 10;
 const UA_ROTATION_THRESHOLD = 8;
 const UA_ROTATION_MIN_REQUESTS = 100;
+/** UA rotation gate: real rotating bots burst hard. Shared NAT (AWS, mobile carriers,
+ *  corporate proxies) generate many UAs slowly. Require peak RPS to be in attacker range. */
+const UA_ROTATION_MIN_PEAK_RPS = 5;
 const HEAD_FLOOD_MIN_REQUESTS = 500;
 const HEAD_FLOOD_RATIO = 0.7;
 const HEAD_FLOOD_PEAK_RPS = 25;
@@ -43,6 +50,9 @@ const SUBNET_BURST_SECONDS = 5;
 const SUBNET_IPS_SENTINEL = 5001;
 const MAX_TRACKED_SUBNETS = 50_000;
 const STALE_SUBNET_SECONDS = 900;
+/** Fake-bot threshold: 1-2 requests from a misconfigured bot or a typo'd UA aren't actionable.
+ *  Real impersonation campaigns probe at scale. */
+const FAKE_BOT_MIN_REQUESTS = 10;
 
 interface BehaviorTrackerOptions {
   maxTrackedIps?: number;
@@ -895,9 +905,12 @@ export class BehaviorTracker {
         continue;
       }
 
+      if (this.isLegitimateBot(state.ip)) continue;
+
       incidents.push({
         id: `ddos_rps_burst_single_ip:${state.ip}`,
         category: "ddos",
+        kind: "saturation",
         severity: "critical",
         score: 95,
         title: "Single IP RPS burst",
@@ -957,6 +970,7 @@ export class BehaviorTracker {
       {
         id: "ddos_global_rps_spike",
         category: "ddos",
+        kind: "saturation",
         severity: "high",
         score: 75,
         title: "Global RPS spike",
@@ -983,9 +997,12 @@ export class BehaviorTracker {
         continue;
       }
 
+      if (this.isLegitimateBot(state.ip)) continue;
+
       incidents.push({
         id: `http_4xx_storm:${state.ip}`,
         category: "http_anomaly",
+        kind: "saturation",
         severity: "medium",
         score: 60,
         title: "4xx response storm",
@@ -1012,9 +1029,12 @@ export class BehaviorTracker {
         continue;
       }
 
+      if (this.isLegitimateBot(state.ip)) continue;
+
       incidents.push({
         id: `http_5xx_storm:${state.ip}`,
         category: "http_anomaly",
+        kind: "saturation",
         severity: "medium",
         score: 60,
         title: "5xx response storm",
@@ -1037,6 +1057,11 @@ export class BehaviorTracker {
     const incidents: Incident[] = [];
 
     for (const state of this.ips.values()) {
+      // Single-request impersonations are noise (misconfigured bots, tests, malformed UAs).
+      if (state.totalRequests < FAKE_BOT_MIN_REQUESTS) {
+        continue;
+      }
+
       if (state.claimedGooglebot && !ipInPreparedRanges(state.ip, this.googlebotRanges)) {
         incidents.push(fakeBotIncident({
           id: `fake_bot_googlebot:${state.ip}`,
@@ -1079,16 +1104,21 @@ export class BehaviorTracker {
 
   private buildAiScraperIncidents(): Incident[] {
     return [...this.botRollup.values()].map((bot) => {
+      // Only sustained high-volume AI scraping counts as saturation. Low-volume
+      // bot traffic is informational — kind: "noise" so it stays out of the
+      // saturation panel.
       const high =
         bot.requests > AI_BOT_HIGH_REQUESTS ||
         bot.highPathMinuteCount >= AI_BOT_HIGH_PATH_MINUTES;
       const medium = bot.requests >= AI_BOT_MEDIUM_REQUESTS;
+      const kind: IncidentKind = high ? "saturation" : "noise";
 
       return {
         id: `ai_scraper_known:${bot.botName}`,
         category: "ai_scraper",
-        severity: high ? "high" : medium ? "medium" : "info",
-        score: high ? 75 : medium ? 55 : 25,
+        kind,
+        severity: high ? "high" : medium ? "low" : "info",
+        score: high ? 70 : medium ? 35 : 15,
         title: "Known AI crawler",
         description: "Requests came from a known AI crawler or AI assistant user-agent.",
         evidence: [
@@ -1115,9 +1145,12 @@ export class BehaviorTracker {
         continue;
       }
 
+      if (this.isLegitimateBot(state.ip)) continue;
+
       incidents.push({
         id: `scanner_ua_known:${state.scannerMatch}:${state.ip}`,
         category: "scanner",
+        kind: "compromise",
         severity: "high",
         score: 85,
         title: "Known scanner user-agent",
@@ -1144,9 +1177,12 @@ export class BehaviorTracker {
         continue;
       }
 
+      if (this.isLegitimateBot(state.ip)) continue;
+
       incidents.push({
         id: `scanner_signature_paths:${state.ip}`,
         category: "scanner",
+        kind: "compromise",
         severity: "high",
         score: 75,
         title: "Scanner fingerprint paths",
@@ -1165,6 +1201,13 @@ export class BehaviorTracker {
     return incidents;
   }
 
+  private isLegitimateBot(ip: string): boolean {
+    return (
+      ipInPreparedRanges(ip, this.googlebotRanges) ||
+      ipInPreparedRanges(ip, this.bingbotRanges)
+    );
+  }
+
   private buildSingleIpPathExplosionIncidents(): Incident[] {
     const incidents: Incident[] = [];
 
@@ -1173,17 +1216,35 @@ export class BehaviorTracker {
         continue;
       }
 
+      // Skip verified Googlebot/Bingbot — legitimate crawlers touch many paths.
+      if (this.isLegitimateBot(state.ip)) {
+        continue;
+      }
+
+      // Rate-based gate: 500+ paths over hours/days at low rate is normal browsing,
+      // not saturation. Require sustained high path-fan-out per minute.
+      const durationSeconds = Math.max(1, state.lastSeen - state.firstSeen);
+      const durationMinutes = durationSeconds / 60;
+      const pathsPerMinute = state.paths.size / durationMinutes;
+
+      if (pathsPerMinute < SINGLE_IP_PATH_EXPLOSION_MIN_RATE_PER_MIN) {
+        continue;
+      }
+
       incidents.push({
         id: `single_ip_path_explosion:${state.ip}`,
         category: "abusive_crawling",
+        kind: "saturation",
         severity: "high",
         score: 75,
         title: "Single IP path explosion",
-        description: "One IP touched hundreds of unique paths.",
+        description: "One IP touched hundreds of unique paths at a high rate.",
         evidence: [
           { key: "ip", value: state.ip },
           { key: "pathCount", value: state.paths.size },
           { key: "totalRequests", value: state.totalRequests },
+          { key: "pathsPerMinute", value: Math.round(pathsPerMinute * 10) / 10 },
+          { key: "peakRps", value: state.peakRps },
           { key: "firstSeen", value: formatEpoch(state.firstSeen) },
           { key: "lastSeen", value: formatEpoch(state.lastSeen) }
         ],
@@ -1200,14 +1261,18 @@ export class BehaviorTracker {
     for (const state of this.ips.values()) {
       if (
         state.userAgents.size < UA_ROTATION_THRESHOLD ||
-        state.totalRequests < UA_ROTATION_MIN_REQUESTS
+        state.totalRequests < UA_ROTATION_MIN_REQUESTS ||
+        state.peakRps < UA_ROTATION_MIN_PEAK_RPS
       ) {
         continue;
       }
 
+      if (this.isLegitimateBot(state.ip)) continue;
+
       incidents.push({
         id: `ua_rotation_same_ip:${state.ip}`,
         category: "http_anomaly",
+        kind: "compromise",
         severity: "high",
         score: 70,
         title: "User-agent rotation from one IP",
@@ -1233,6 +1298,8 @@ export class BehaviorTracker {
         continue;
       }
 
+      if (this.isLegitimateBot(state.ip)) continue;
+
       const headRatio = state.headCount / state.totalRequests;
 
       if (headRatio < HEAD_FLOOD_RATIO || state.peakHeadRps < HEAD_FLOOD_PEAK_RPS) {
@@ -1242,6 +1309,7 @@ export class BehaviorTracker {
       incidents.push({
         id: `http_head_flood:${state.ip}`,
         category: "ddos",
+        kind: "saturation",
         severity: "high",
         score: 70,
         title: "HEAD request flood",
@@ -1272,6 +1340,7 @@ export class BehaviorTracker {
       incidents.push({
         id: `ddos_distributed_subnet:${subnet.prefix}`,
         category: "ddos",
+        kind: "saturation",
         severity: "critical",
         score: 90,
         title: "Distributed DDoS from subnet",
@@ -1336,6 +1405,7 @@ function fakeBotIncident(input: {
   return {
     id: input.id,
     category: "fake_bot",
+    kind: "compromise",
     severity: "high",
     score: 80,
     title: `Fake ${input.claimedBot} impersonation`,

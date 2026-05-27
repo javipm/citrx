@@ -20,6 +20,8 @@ export const SCANNER_UA_PATTERNS: UserAgentPattern[] = [
   { name: "arachni", regex: /arachni/i },
   { name: "whatweb", regex: /whatweb/i },
   { name: "httpx", regex: /httpx/i },
-  { name: "katana", regex: /katana/i },
+  // Anchor katana to a slash + version to avoid matching Facebook Android app
+  // ("com.facebook.katana"). Real katana scanner UA is e.g. "katana/v1.0".
+  { name: "katana", regex: /\bkatana\/\d/i },
   { name: "subfinder", regex: /subfinder/i }
 ];

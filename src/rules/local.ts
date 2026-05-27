@@ -1,9 +1,10 @@
 import type { AccessLogEntry } from "../parser/access-log.js";
-import type { Incident, IncidentSeverity } from "../analysis/types.js";
+import type { Incident, IncidentKind, IncidentSeverity } from "../analysis/types.js";
 
 export interface RuleHit {
   ruleId: string;
   category: string;
+  kind: IncidentKind;
   severity: IncidentSeverity;
   score: number;
   title: string;
@@ -14,6 +15,7 @@ export interface RuleHit {
 interface RuleDefinition {
   id: string;
   category: string;
+  kind: IncidentKind;
   severity: IncidentSeverity;
   score: number;
   title: string;
@@ -28,6 +30,7 @@ interface RuleOutcomeStats {
   status4xx: number;
   status5xx: number;
   status404: number;
+  topPaths: Set<string>;
 }
 
 export interface PathStats {
@@ -42,6 +45,7 @@ export interface PathStats {
 const RULES: RuleDefinition[] = [
   {
     id: "sqli",
+    kind: "compromise" as IncidentKind,
     category: "sql_injection",
     severity: "critical",
     score: 95,
@@ -61,6 +65,7 @@ const RULES: RuleDefinition[] = [
   },
   {
     id: "xss",
+    kind: "compromise" as IncidentKind,
     category: "xss",
     severity: "high",
     score: 85,
@@ -79,6 +84,7 @@ const RULES: RuleDefinition[] = [
   },
   {
     id: "lfi_rfi",
+    kind: "compromise" as IncidentKind,
     category: "path_traversal",
     severity: "high",
     score: 85,
@@ -96,6 +102,7 @@ const RULES: RuleDefinition[] = [
   },
   {
     id: "ssrf",
+    kind: "compromise" as IncidentKind,
     category: "ssrf",
     severity: "high",
     score: 80,
@@ -110,6 +117,7 @@ const RULES: RuleDefinition[] = [
   },
   {
     id: "command_injection",
+    kind: "compromise" as IncidentKind,
     category: "command_injection",
     severity: "critical",
     score: 95,
@@ -121,6 +129,7 @@ const RULES: RuleDefinition[] = [
   },
   {
     id: "recon_sensitive_file",
+    kind: "compromise" as IncidentKind,
     category: "recon",
     severity: "medium",
     score: 65,
@@ -136,6 +145,7 @@ const RULES: RuleDefinition[] = [
     ]
   }
 ];
+
 const MAX_SAMPLE_LENGTH = 300;
 const CRAWL_MIN_REQUESTS = 1000;
 const CRAWL_MIN_UNIQUE_IPS = 20;
@@ -144,8 +154,45 @@ const CRAWL_MIN_QUERY_VARIANT_RATIO = 0.2;
 const CRAWL_MIN_REPEATED_IPS = 10;
 const CRAWL_REPEATED_IP_REQUESTS = 5;
 const CRAWL_MIN_REPEATED_REQUEST_SHARE = 0.45;
+const POST_HOTSPOT_MIN_REQUESTS = 200;
+const QUERY_EXPLOSION_MIN_REQUESTS = 500;
+const QUERY_EXPLOSION_MIN_VARIANTS = 150;
+const QUERY_EXPLOSION_MIN_VARIANT_RATIO = 0.5;
+const TOP_PATHS_LIMIT = 10;
+
+/** Cheap substring check — if none match, skip all regex. */
+const PAYLOAD_PREFIXES = [
+  "select", "union", "information_schema", "sleep(", "benchmark(", "waitfor",
+  "prepare", "execute", "0x",
+  "<script", "%3cscript", "onerror", "onload", "javascript:", "%3csvg", "alert(", "document.cookie",
+  "../", "..%2f", "%252e", "/etc/", "/proc/", "php://", "file=http", "path=http", "template=http",
+  "169.254", "metadata.google", "localhost", "127.0.0.1", "0.0.0.0",
+  "url=http", "callback=http", "webhook=http", "redirect=http",
+  ";", "%3b", "|", "%7c", "`", "%60", "$(", "%24%28",
+  ".env", ".git", "composer.json", "phpinfo", ".sql", ".bak", ".old",
+];
 
 export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
+  const rawLower = entry.target.toLowerCase();
+
+  // Fast path: skip expensive decode + regex if no known payload prefix present
+  if (!PAYLOAD_PREFIXES.some((prefix) => rawLower.includes(prefix))) {
+    // Still check rare method (PUT/DELETE/PATCH are standard REST and excluded).
+    if (["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "PATCH"].includes(entry.method)) {
+      return [];
+    }
+    return [{
+      ruleId: "rare_method",
+      category: "http_anomaly",
+      kind: "noise" as IncidentKind,
+      severity: "medium" as IncidentSeverity,
+      score: 55,
+      title: "Rare HTTP method",
+      description: "Request uses an uncommon HTTP method for public web traffic.",
+      sample: `${entry.method} ${redactTarget(entry.target)}`
+    }];
+  }
+
   const target = normalizeForMatching(entry.target);
   const hits: RuleHit[] = [];
 
@@ -154,6 +201,7 @@ export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
       hits.push({
         ruleId: rule.id,
         category: rule.category,
+        kind: rule.kind,
         severity: rule.severity,
         score: rule.score,
         title: rule.title,
@@ -163,11 +211,13 @@ export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
     }
   }
 
-  if (!["GET", "POST", "HEAD", "OPTIONS"].includes(entry.method)) {
+  // PUT/DELETE/PATCH are standard REST methods. Truly rare = TRACE/CONNECT/DEBUG.
+  if (!["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "PATCH"].includes(entry.method)) {
     hits.push({
       ruleId: "rare_method",
       category: "http_anomaly",
-      severity: "medium",
+      kind: "noise" as IncidentKind,
+      severity: "medium" as IncidentSeverity,
       score: 55,
       title: "Rare HTTP method",
       description: "Request uses an uncommon HTTP method for public web traffic.",
@@ -178,18 +228,40 @@ export function detectRequestHits(entry: AccessLogEntry): RuleHit[] {
   return hits;
 }
 
+/** Static asset paths produce huge query/path counts naturally (cache-busters,
+ *  imagemap variants). They're never the target of an actual attack.  */
+const STATIC_ASSET_RE = /\.(?:js|mjs|css|map|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|otf|eot|ico|bmp|tiff?|mp3|mp4|webm|ogg|m4a|m4v|pdf)(?:\?|$)/i;
+
+/** Admin paths usually have legitimate high-volume activity (admin pagination,
+ *  AJAX endpoints, etc). Skip them for aggregate noise-style rules. */
+const ADMIN_PATH_RE = /^\/(?:admin|admincontrol|wp-admin|adminer|administrator|backend|manage|dashboard|panel)(?:\/|$)/i;
+
+function isLowSignalAggregatePath(path: string): boolean {
+  return STATIC_ASSET_RE.test(path) || ADMIN_PATH_RE.test(path);
+}
+
 export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Incident[] {
   const incidents: Incident[] = [];
 
   for (const stats of pathStats) {
+    // Skip static assets (cache-busters) and admin paths (legit high-volume).
+    if (isLowSignalAggregatePath(stats.path)) {
+      continue;
+    }
+
     const crawlSignal = highVolumeCrawlSignal(stats);
 
     if (crawlSignal) {
+      // Distributed multi-IP crawling on popular pages is indistinguishable from
+      // normal high-traffic e-commerce browsing (cart, category, search). Keep
+      // the data for forensics but classify as noise so it stays out of the
+      // saturation panel.
       incidents.push({
         id: `abusive_crawl:${stats.path}`,
         category: "abusive_crawling",
-        severity: "high",
-        score: 80,
+        kind: "noise",
+        severity: "medium",
+        score: 55,
         title: "Distributed high-volume path crawling",
         description: "Many clients repeatedly requested a non-entrypoint path.",
         evidence: [
@@ -206,14 +278,16 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
       });
     } else if (
       !isLowSignalEntryPath(stats.path) &&
-      stats.queryVariants.size >= 100 &&
-      stats.count >= 200
+      stats.queryVariants.size >= QUERY_EXPLOSION_MIN_VARIANTS &&
+      stats.count >= QUERY_EXPLOSION_MIN_REQUESTS &&
+      roundRatio(stats.queryVariants.size / stats.count) >= QUERY_EXPLOSION_MIN_VARIANT_RATIO
     ) {
       incidents.push({
         id: `query_explosion:${stats.path}`,
         category: "abusive_crawling",
-        severity: "medium",
-        score: 65,
+        kind: "noise",
+        severity: "low",
+        score: 40,
         title: "Query explosion",
         description: "One path was requested with many query variants.",
         evidence: [
@@ -225,10 +299,11 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
       });
     }
 
-    if (stats.postCount >= 50) {
+    if (stats.postCount >= POST_HOTSPOT_MIN_REQUESTS) {
       incidents.push({
         id: `post_hotspot:${stats.path}`,
         category: "post_hotspot",
+        kind: "noise",
         severity: "medium",
         score: 60,
         title: "POST hotspot",
@@ -304,14 +379,15 @@ export function mergeRuleHit(
   hit: RuleHit,
   entry: AccessLogEntry
 ): string {
-  const path = entry.path;
-  const id = `${hit.ruleId}:${path}`;
+  const ip = entry.ip;
+  const id = `${hit.ruleId}:${ip}`;
   const existing = incidents.get(id);
 
   if (existing) {
     const stats = readOutcomeStats(existing.evidence);
     applyStatus(stats, entry.status);
-    applyOutcomeScore(existing, hit, stats, path);
+    addTopPath(stats, entry.path);
+    applyOutcomeScore(existing, hit, stats, ip);
 
     if (existing.samples.length < 5 && !existing.samples.includes(hit.sample)) {
       existing.samples.push(hit.sample);
@@ -322,10 +398,12 @@ export function mergeRuleHit(
 
   const stats = createOutcomeStats();
   applyStatus(stats, entry.status);
+  addTopPath(stats, entry.path);
 
   const incident: Incident = {
     id,
     category: hit.category,
+    kind: hit.kind,
     severity: hit.severity,
     score: hit.score,
     title: hit.title,
@@ -333,7 +411,7 @@ export function mergeRuleHit(
     evidence: [],
     samples: [hit.sample]
   };
-  applyOutcomeScore(incident, hit, stats, path);
+  applyOutcomeScore(incident, hit, stats, ip);
   incidents.set(id, incident);
 
   return id;
@@ -346,8 +424,15 @@ function createOutcomeStats(): RuleOutcomeStats {
     status3xx: 0,
     status4xx: 0,
     status5xx: 0,
-    status404: 0
+    status404: 0,
+    topPaths: new Set()
   };
+}
+
+function addTopPath(stats: RuleOutcomeStats, path: string): void {
+  if (stats.topPaths.size < TOP_PATHS_LIMIT) {
+    stats.topPaths.add(path);
+  }
 }
 
 function applyStatus(stats: RuleOutcomeStats, status: number): void {
@@ -369,13 +454,21 @@ function applyStatus(stats: RuleOutcomeStats, status: number): void {
 }
 
 function readOutcomeStats(evidence: Incident["evidence"]): RuleOutcomeStats {
+  const topPathsRaw = evidence.find((item) => item.key === "topPaths")?.value;
+  const topPaths = new Set<string>(
+    typeof topPathsRaw === "string" && topPathsRaw.length > 0
+      ? topPathsRaw.split(" | ")
+      : []
+  );
+
   return {
     count: numberEvidence(evidence, "count"),
     status2xx: numberEvidence(evidence, "status2xx"),
     status3xx: numberEvidence(evidence, "status3xx"),
     status4xx: numberEvidence(evidence, "status4xx"),
     status5xx: numberEvidence(evidence, "status5xx"),
-    status404: numberEvidence(evidence, "status404")
+    status404: numberEvidence(evidence, "status404"),
+    topPaths
   };
 }
 
@@ -387,47 +480,91 @@ function applyOutcomeScore(
   incident: Incident,
   hit: RuleHit,
   stats: RuleOutcomeStats,
-  path: string
+  ip: string
 ): void {
   const outcome = outcomeFor(hit.ruleId, stats);
   incident.severity = outcome.severity ?? hit.severity;
   incident.score = outcome.score ?? hit.score;
-  incident.evidence = buildRuleEvidence(path, stats, outcome.label);
+  if (outcome.successful) {
+    incident.successful = true;
+  }
+  incident.evidence = buildRuleEvidence(ip, stats, outcome.label);
 }
 
 function outcomeFor(
   ruleId: string,
   stats: RuleOutcomeStats
-): { label: string; severity?: IncidentSeverity; score?: number } {
+): { label: string; severity?: IncidentSeverity; score?: number; successful?: boolean } {
+  if (isReconRule(ruleId)) {
+    // Recon is info-disclosure, not exploitation. Scale severity by outcome but never go critical/100.
+    // Require ≥2 successes OR a non-trivial success ratio — a single 2xx out of
+    // hundreds is almost always a fluke (robots.txt, security.txt, redirects to
+    // a default page, etc.) and shouldn't escalate.
+    const successRatio = stats.count > 0 ? stats.status2xx / stats.count : 0;
+    const meaningfulSuccess = stats.status2xx >= 2 || successRatio >= 0.1;
+    if (meaningfulSuccess) {
+      return { label: "file_served", severity: "high", score: 80, successful: true };
+    }
+    if (stats.status5xx > 0) {
+      return { label: "server_error", severity: "medium", score: 55 };
+    }
+    if (stats.status404 === stats.count) {
+      return { label: "all_404", severity: "low", score: 20 };
+    }
+    if (stats.status4xx === stats.count) {
+      return { label: "all_4xx", severity: "low", score: 30 };
+    }
+    return { label: "mixed", severity: "medium", score: 50 };
+  }
+
   if (!isPayloadRule(ruleId)) {
     return { label: "mixed" };
   }
 
+  // 2xx = possible successful exploit — highest priority
+  if (stats.status2xx > 0) {
+    return { label: "successful", severity: "critical", score: 100, successful: true };
+  }
+
+  // 5xx = application crash/error — likely vulnerable code path hit
+  if (stats.status5xx > 0) {
+    return { label: "server_error", severity: "critical", score: 90 };
+  }
+
+  // No 2xx, no 5xx → attack was blocked or redirected (WAF / auth / 404).
+  // Score by how the blocks happened, but never escalate to critical.
   if (stats.status404 === stats.count) {
-    return { label: "all_404", severity: "medium", score: 45 };
+    return { label: "all_404", severity: "low", score: 30 };
   }
-
   if (stats.status4xx === stats.count) {
-    return { label: "all_4xx", severity: "medium", score: 55 };
+    return { label: "all_4xx", severity: "medium", score: 50 };
   }
-
-  return { label: "mixed" };
+  // Mixed 3xx + 4xx — still blocked (redirects to login/error pages).
+  return { label: "blocked", severity: "medium", score: 55 };
 }
 
 function isPayloadRule(ruleId: string): boolean {
   return ["sqli", "xss", "lfi_rfi", "ssrf", "command_injection"].includes(ruleId);
 }
 
+function isReconRule(ruleId: string): boolean {
+  return ruleId === "recon_sensitive_file";
+}
+
 function buildRuleEvidence(
-  path: string,
+  ip: string,
   stats: RuleOutcomeStats,
   outcome: string
 ): Incident["evidence"] {
   const evidence: Incident["evidence"] = [
-    { key: "path", value: path },
+    { key: "ip", value: ip },
     { key: "count", value: stats.count },
     { key: "outcome", value: outcome }
   ];
+
+  if (stats.topPaths.size > 0) {
+    evidence.push({ key: "topPaths", value: [...stats.topPaths].join(" | ") });
+  }
 
   if (stats.status2xx > 0) {
     evidence.push({ key: "status2xx", value: stats.status2xx });
@@ -448,6 +585,54 @@ function buildRuleEvidence(
   return evidence;
 }
 
+
+/**
+ * Drop low-signal rule incidents to reduce noise.
+ * Keeps any incident with 2xx (possible success), 5xx (possible crash),
+ * sustained activity (count >= 3) or fan-out (paths > 1).
+ * Drops single 404 probes — these are constant on the internet and not actionable.
+ */
+export function pruneNoise(incidents: Map<string, Incident>): void {
+  for (const [id, incident] of incidents) {
+    const count = Number(
+      incident.evidence.find((item) => item.key === "count")?.value ?? 0
+    );
+    const status2xx = Number(
+      incident.evidence.find((item) => item.key === "status2xx")?.value ?? 0
+    );
+    const status5xx = Number(
+      incident.evidence.find((item) => item.key === "status5xx")?.value ?? 0
+    );
+    const topPathsRaw = incident.evidence.find((item) => item.key === "topPaths")?.value;
+    const pathCount =
+      typeof topPathsRaw === "string" && topPathsRaw.length > 0
+        ? topPathsRaw.split(" | ").length
+        : 0;
+
+    // Always keep any incident with a 2xx (possible success) or 5xx (possible vuln hit).
+    if (status2xx > 0 || status5xx > 0) {
+      continue;
+    }
+
+    // rare_method spam: needs ≥5 events from same IP to be interesting.
+    if (incident.id.startsWith("rare_method:") && count < 5) {
+      incidents.delete(id);
+      continue;
+    }
+
+    // Single 404 probe on one path — extremely common, almost always noise.
+    if (count < 2 && pathCount <= 1) {
+      incidents.delete(id);
+      continue;
+    }
+
+    // Recon all-404 with ≤2 paths and low count — still noise.
+    if (incident.id.startsWith("recon_sensitive_file:") && count < 3 && pathCount <= 2) {
+      incidents.delete(id);
+      continue;
+    }
+  }
+}
 
 export function redactTarget(target: string): string {
   return truncateSample(redactSensitiveTarget(target));

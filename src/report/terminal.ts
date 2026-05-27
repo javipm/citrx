@@ -42,7 +42,18 @@ export function renderTerminalReport(
   if (report.aiBotStats.length > 0) {
     lines.push(aiBotSection(report, colors));
   }
-  lines.push(incidentSection(report.incidents, colors));
+  const compromise = report.incidents.filter((i) => i.kind === "compromise");
+  const saturation = report.incidents.filter((i) => i.kind === "saturation");
+
+  if (compromise.length > 0) {
+    lines.push(incidentPanel("Security incidents (attacks)", compromise, colors));
+  }
+  if (saturation.length > 0) {
+    lines.push(incidentPanel("Saturation incidents (traffic abuse)", saturation, colors));
+  }
+  if (compromise.length === 0 && saturation.length === 0) {
+    lines.push(colors.bold("Incidents") + "\n  none");
+  }
 
   return `${lines.join("\n")}\n`;
 }
@@ -81,32 +92,53 @@ function section(
   return lines.join("\n");
 }
 
-function incidentSection(
+function incidentPanel(
+  title: string,
   incidents: Incident[],
   colors: ReturnType<typeof pc.createColors>
 ): string {
-  const lines = [colors.bold("Incidents")];
+  const lines = [colors.bold(title)];
 
-  if (incidents.length === 0) {
-    lines.push("  none");
-    return lines.join("\n");
-  }
-
-  for (const incident of incidents.slice(0, 10)) {
+  for (const incident of incidents.slice(0, 15)) {
     const count = incident.evidence.find((item) => item.key === "count")?.value;
-    const suffix = count ? ` count=${count}` : "";
+    const requests = incident.evidence.find((item) => item.key === "requests")?.value;
+    const displayCount = count ?? requests;
+    const suffix = displayCount ? ` count=${displayCount}` : "";
+
+    const successTag = incident.successful ? colors.red(" !SUCCESS") : "";
+
     lines.push(
-      `  ${severity(incident.severity, colors)} ${incident.score.toString().padStart(3, " ")}  ${incident.title}${suffix}`
+      `  ${severity(incident.severity, colors)} ${incident.score.toString().padStart(3, " ")}  ${incident.title}${suffix}${successTag}`
     );
 
+    const ip = incident.evidence.find((item) => item.key === "ip")?.value;
     const path = incident.evidence.find((item) => item.key === "path")?.value;
+    const topPaths = incident.evidence.find((item) => item.key === "topPaths")?.value;
+    const prefix = incident.evidence.find((item) => item.key === "prefix")?.value;
+
+    if (ip) {
+      lines.push(`       ip: ${ip}`);
+    }
     if (path) {
       lines.push(`       ${path}`);
+    }
+    if (topPaths) {
+      const paths = String(topPaths).split(" | ").slice(0, 3);
+      for (const p of paths) {
+        lines.push(`       ${p}`);
+      }
+    }
+    if (prefix) {
+      lines.push(`       subnet: ${prefix}`);
     }
 
     for (const sample of incident.samples.slice(0, 2)) {
       lines.push(`       sample: ${sample}`);
     }
+  }
+
+  if (incidents.length > 15) {
+    lines.push(`  ... and ${incidents.length - 15} more`);
   }
 
   return lines.join("\n");

@@ -26,7 +26,34 @@ export interface TuiRuntime {
 }
 
 type Screen = "summary" | "incident" | "tops";
-type SummaryFocus = "accesses" | "incidents";
+type SummaryFocus = "accesses" | "compromise" | "saturation" | "noise";
+
+function isIncidentFocus(focus: SummaryFocus): focus is "compromise" | "saturation" | "noise" {
+  return focus !== "accesses";
+}
+
+function kindRange(
+  incidents: Incident[],
+  kind: "compromise" | "saturation" | "noise"
+): { start: number; end: number } {
+  let start = -1;
+  let end = -1;
+  for (let index = 0; index < incidents.length; index += 1) {
+    if (incidents[index]!.kind === kind) {
+      if (start === -1) start = index;
+      end = index + 1;
+    }
+  }
+  return { start, end };
+}
+
+function availableFocuses(incidents: Incident[]): SummaryFocus[] {
+  const order: SummaryFocus[] = ["accesses"];
+  if (incidents.some((i) => i.kind === "saturation")) order.push("saturation");
+  if (incidents.some((i) => i.kind === "compromise")) order.push("compromise");
+  if (incidents.some((i) => i.kind === "noise")) order.push("noise");
+  return order;
+}
 type TopScope = "summary" | "incident";
 type TopPanelKey = "ips" | "paths" | "userAgents" | "params" | "paramValues";
 type SortKey = "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
@@ -79,6 +106,7 @@ interface AccessTableColumns {
 }
 
 const TOP_PANEL_KEYS: TopPanelKey[] = ["ips", "paths", "userAgents", "params", "paramValues"];
+const SPINNER_FRAMES = ["-", "\\", "|", "/"];
 
 export async function openRunTui(
   run: CitrxRun,
@@ -110,7 +138,8 @@ function CitrxExplorer({
   const { exit } = useApp();
   const { rows, columns } = useWindowSize();
   const [screen, setScreen] = useState<Screen>("summary");
-  const [summaryFocus, setSummaryFocus] = useState<SummaryFocus>("accesses");
+  // Default focus is the saturation panel — that's the most-used view.
+  const [summaryFocus, setSummaryFocus] = useState<SummaryFocus>("saturation");
   const [topScope, setTopScope] = useState<TopScope>("summary");
   const [topFocus, setTopFocus] = useState<TopPanelKey>("ips");
   const [topIndexes, setTopIndexes] = useState<Record<TopPanelKey, number>>({
@@ -120,7 +149,11 @@ function CitrxExplorer({
     params: 0,
     paramValues: 0
   });
-  const [incidentIndex, setIncidentIndex] = useState(0);
+  const [incidentIndex, setIncidentIndex] = useState(() => {
+    // Align cursor with the default-focused saturation panel so arrow keys land there.
+    const satStart = run.report.incidents.findIndex((i) => i.kind === "saturation");
+    return satStart >= 0 ? satStart : 0;
+  });
   const [lineIndex, setLineIndex] = useState(0);
   const [summaryLineIndex, setSummaryLineIndex] = useState(0);
   const [filter, setFilter] = useState("");
@@ -134,6 +167,7 @@ function CitrxExplorer({
   const [prompt, setPrompt] = useState<PromptState | undefined>();
   const [message, setMessage] = useState("Ready");
   const [busy, setBusy] = useState(false);
+  const [indexLoading, setIndexLoading] = useState(false);
   const [globalTotal, setGlobalTotal] = useState(run.report.accessLog.indexedLines);
   const [summaryPageLines, setSummaryPageLines] = useState<IncidentLogLine[]>([]);
   const accessQueryCache = useMemo(() => new AccessLogIndexQueryCache(), [run.accessIndex]);
@@ -188,9 +222,13 @@ function CitrxExplorer({
     let cancelled = false;
     const filterFn = filter ? createAccessLogLineFilter(filter) : passThroughFilter;
     const cacheKey = accessQueryKey(filter, sortKey, sortDirection);
+    const needsIndexBuild = !accessQueryCache.has(cacheKey) && (filter || sortKey !== "timestamp");
 
-    if (!accessQueryCache.has(cacheKey) && (filter || sortKey !== "timestamp")) {
+    if (needsIndexBuild) {
+      setIndexLoading(true);
       setMessage("Building filter cache...");
+    } else {
+      setIndexLoading(false);
     }
 
     void readAccessLogIndexCachedPage(run.accessIndex, accessQueryCache, cacheKey, {
@@ -207,12 +245,18 @@ function CitrxExplorer({
 
         setGlobalTotal(page.total);
         setSummaryPageLines(page.lines);
+        if (needsIndexBuild) {
+          setIndexLoading(false);
+        }
         setMessage(filter || sortKey !== "timestamp" ? "Filter cache ready" : "Ready");
 
         setSummaryLineIndex((value) => Math.min(Math.max(0, page.total - 1), value));
       })
       .catch((error) => {
         if (!cancelled) {
+          if (needsIndexBuild) {
+            setIndexLoading(false);
+          }
           setMessage(error instanceof Error ? error.message : String(error));
         }
       });
@@ -346,9 +390,13 @@ function CitrxExplorer({
     }
 
     if (screen === "summary") {
+      const incidentBounds = isIncidentFocus(summaryFocus)
+        ? kindRange(incidents, summaryFocus)
+        : { start: -1, end: -1 };
+
       if (key.upArrow) {
-        if (summaryFocus === "incidents") {
-          setIncidentIndex((value) => Math.max(0, value - 1));
+        if (isIncidentFocus(summaryFocus) && incidentBounds.start >= 0) {
+          setIncidentIndex((value) => Math.max(incidentBounds.start, value - 1));
         } else {
           setSummaryLineIndex((value) => Math.max(0, value - 1));
         }
@@ -356,8 +404,8 @@ function CitrxExplorer({
       }
 
       if (key.downArrow) {
-        if (summaryFocus === "incidents") {
-          setIncidentIndex((value) => Math.min(Math.max(0, incidents.length - 1), value + 1));
+        if (isIncidentFocus(summaryFocus) && incidentBounds.start >= 0) {
+          setIncidentIndex((value) => Math.min(incidentBounds.end - 1, value + 1));
         } else {
           setSummaryLineIndex((value) => Math.min(Math.max(0, globalTotal - 1), value + 1));
         }
@@ -365,8 +413,8 @@ function CitrxExplorer({
       }
 
       if (isPageUp(inputValue, key)) {
-        if (summaryFocus === "incidents") {
-          setIncidentIndex((value) => Math.max(0, value - 7));
+        if (isIncidentFocus(summaryFocus) && incidentBounds.start >= 0) {
+          setIncidentIndex((value) => Math.max(incidentBounds.start, value - 7));
         } else {
           setSummaryLineIndex((value) => Math.max(0, value - summaryPageSize));
         }
@@ -374,8 +422,8 @@ function CitrxExplorer({
       }
 
       if (isPageDown(inputValue, key)) {
-        if (summaryFocus === "incidents") {
-          setIncidentIndex((value) => Math.min(Math.max(0, incidents.length - 1), value + 7));
+        if (isIncidentFocus(summaryFocus) && incidentBounds.start >= 0) {
+          setIncidentIndex((value) => Math.min(incidentBounds.end - 1, value + 7));
         } else {
           setSummaryLineIndex((value) => Math.min(Math.max(0, globalTotal - 1), value + summaryPageSize));
         }
@@ -383,11 +431,20 @@ function CitrxExplorer({
       }
 
       if (key.tab) {
-        setSummaryFocus((value) => (value === "accesses" ? "incidents" : "accesses"));
+        const order = availableFocuses(incidents);
+        const idx = order.indexOf(summaryFocus);
+        const next = order[(idx === -1 ? 0 : idx + 1) % order.length]!;
+        setSummaryFocus(next);
+        if (isIncidentFocus(next)) {
+          const range = kindRange(incidents, next);
+          if (range.start >= 0) {
+            setIncidentIndex(range.start);
+          }
+        }
         return;
       }
 
-      if (key.return && summaryFocus === "incidents" && incident) {
+      if (key.return && isIncidentFocus(summaryFocus) && incident) {
         setScreen("incident");
         setLineIndex(0);
         setFilter("");
@@ -666,6 +723,7 @@ function CitrxExplorer({
                 focus: topFocus,
                 selectedIndexes: topIndexes,
                 onApplyFilter: (nextFilter) => {
+                  setIndexLoading(true);
                   setFilter(nextFilter);
                   setSelectedLineKeys(new Set());
                   setLineIndex(0);
@@ -697,6 +755,7 @@ function CitrxExplorer({
       detailOpen: Boolean(detailLine),
       answerOpen: Boolean(openAiAnswer),
       busy,
+      loading: indexLoading,
       message,
       selected: selectedLineKeys.size,
       columns
@@ -758,7 +817,7 @@ function SummaryScreen({
         incidents,
         incidentIndex,
         pageSize: 7,
-        active: focus === "incidents"
+        focus
       })
     ),
     React.createElement(LineTable, {
@@ -798,43 +857,152 @@ function SummaryPanel({ report }: { report: AnalyzeReport }) {
   );
 }
 
+function IncidentRow({
+  incident,
+  index,
+  incidentIndex,
+  active
+}: {
+  incident: Incident;
+  index: number;
+  incidentIndex: number;
+  active: boolean;
+}) {
+  const selected = active && index === incidentIndex;
+  const successMark = incident.successful ? " !SUCCESS" : "";
+  const ip = incident.evidence.find((item) => item.key === "ip")?.value;
+  const ipTag = ip ? ` ${String(ip)}` : "";
+  return React.createElement(
+    Text,
+    {
+      key: incident.id,
+      color: selected ? "black" : severityColor(incident.severity),
+      backgroundColor: selected ? "cyan" : undefined,
+      wrap: "truncate"
+    },
+    `${selected ? ">" : " "} ${incident.severity.padEnd(8)} ${String(incident.score).padStart(3)}${successMark}${ipTag} ${truncate(incident.title, 40)}`
+  );
+}
+
+function IncidentTabHeader({
+  compromiseCount,
+  saturationCount,
+  noiseCount,
+  focus
+}: {
+  compromiseCount: number;
+  saturationCount: number;
+  noiseCount: number;
+  focus: SummaryFocus;
+}) {
+  // Wrap in a Box so this row is guaranteed to occupy its own line in the
+  // parent column layout — two adjacent <Text> siblings can render on the same
+  // physical line in Ink under wide terminals.
+  const tab = (label: string, count: number, isActive: boolean, color: string) =>
+    React.createElement(
+      Text,
+      { color, bold: true, inverse: isActive },
+      `[${label} ${count}]`
+    );
+
+  return React.createElement(
+    Box,
+    { flexShrink: 0 },
+    React.createElement(
+      Text,
+      null,
+      tab("SATURATION", saturationCount, focus === "saturation", "yellow"),
+      "  ",
+      tab("SECURITY", compromiseCount, focus === "compromise", "red"),
+      ...(noiseCount > 0
+        ? ["  ", tab("OTHER", noiseCount, focus === "noise", "gray")]
+        : [])
+    )
+  );
+}
+
 function IncidentList({
   incidents,
   incidentIndex,
   pageSize,
-  active = true
+  focus
 }: {
   incidents: Incident[];
   incidentIndex: number;
   pageSize: number;
-  active?: boolean;
+  focus: SummaryFocus;
 }) {
-  const start = Math.max(
+  const compromise = incidents.filter((i) => i.kind === "compromise");
+  const saturation = incidents.filter((i) => i.kind === "saturation");
+  const noise = incidents.filter((i) => i.kind === "noise");
+
+  const focusedKind: "compromise" | "saturation" | "noise" | null =
+    focus === "accesses" ? null : focus;
+
+  // Which list to display + its flat-array start offset for cursor mapping.
+  const focusedList =
+    focusedKind === "compromise"
+      ? { items: compromise, start: 0 }
+      : focusedKind === "saturation"
+      ? { items: saturation, start: compromise.length }
+      : focusedKind === "noise"
+      ? { items: noise, start: compromise.length + saturation.length }
+      : { items: compromise, start: 0 };
+
+  const isPanelActive = focus !== "accesses";
+  const localCursor = isPanelActive
+    ? Math.max(0, incidentIndex - focusedList.start)
+    : 0;
+  const sliceStart = Math.max(
     0,
-    Math.min(incidentIndex - Math.floor(pageSize / 2), Math.max(0, incidents.length - pageSize))
+    Math.min(
+      localCursor - Math.floor(pageSize / 2),
+      Math.max(0, focusedList.items.length - pageSize)
+    )
   );
+
+  const titleColor =
+    focusedKind === "compromise"
+      ? "red"
+      : focusedKind === "saturation"
+      ? "yellow"
+      : focusedKind === "noise"
+      ? "gray"
+      : "cyan";
+  const titleLabel =
+    focusedKind === "compromise"
+      ? "Security incidents (attacks)"
+      : focusedKind === "saturation"
+      ? "Saturation incidents (traffic abuse)"
+      : focusedKind === "noise"
+      ? "Other (informational)"
+      : "Incidents (press Tab to focus)";
 
   return React.createElement(
     Box,
     { flexDirection: "column", borderStyle: "single", paddingX: 1, flexGrow: 1 },
-    React.createElement(Text, { bold: true, color: active ? "cyan" : undefined }, `Incidents${active ? " *" : ""}`),
-    ...(incidents.length > 0
-      ? incidents.slice(start, start + pageSize).map((incident, offset) => {
-          const index = start + offset;
-          return (
-          React.createElement(
-            Text,
-            {
-              key: incident.id,
-              color: active && index === incidentIndex ? "black" : severityColor(incident.severity),
-              backgroundColor: active && index === incidentIndex ? "cyan" : undefined,
-              wrap: "truncate"
-            },
-            `${index === incidentIndex ? ">" : " "} ${incident.severity.padEnd(8)} ${String(incident.score).padStart(3)} ${truncate(incident.id, 38)} ${truncate(incident.title, 48)}`
-          )
-          );
-        })
-      : [React.createElement(Text, { key: "empty" }, "No incidents found")])
+    React.createElement(IncidentTabHeader, {
+      compromiseCount: compromise.length,
+      saturationCount: saturation.length,
+      noiseCount: noise.length,
+      focus
+    }),
+    React.createElement(
+      Text,
+      { bold: true, color: titleColor },
+      `${titleLabel}${isPanelActive ? " *" : ""}`
+    ),
+    ...(focusedList.items.length > 0
+      ? focusedList.items.slice(sliceStart, sliceStart + pageSize).map((incident, offset) =>
+          React.createElement(IncidentRow, {
+            key: incident.id,
+            incident,
+            index: focusedList.start + sliceStart + offset,
+            incidentIndex,
+            active: isPanelActive
+          })
+        )
+      : [React.createElement(Text, { key: "empty", color: "gray" }, "  (no incidents in this category)")])
   );
 }
 
@@ -880,9 +1048,9 @@ function IncidentScreen({
       React.createElement(
         Text,
         { bold: true, color: severityColor(incident.severity), wrap: "truncate" },
-        fitText(`${incident.severity.toUpperCase()} ${incident.score} | ${incident.title}`, headerWidth)
+        fitText(`[${incident.kind.toUpperCase()}] ${incident.severity.toUpperCase()} ${incident.score}${incident.successful ? " !SUCCESS" : ""} | ${incident.title}`, headerWidth)
       ),
-      React.createElement(Text, { wrap: "truncate" }, fitText(`${incident.id} | ${incident.category}`, headerWidth)),
+      React.createElement(Text, { wrap: "truncate" }, fitText(`${incident.id} | ${incident.category} | ${incident.kind}`, headerWidth)),
       React.createElement(Text, { color: "gray", wrap: "truncate" }, fitText(incident.evidence.map((item) => `${item.key}=${item.value}`).join(" | "), headerWidth)),
       React.createElement(
         Text,
@@ -939,19 +1107,33 @@ function TopValuesScreen({
     insights: IncidentInsights;
     count: number;
   }>();
+  const [loading, setLoading] = useState(false);
   const panelWidth = Math.max(30, Math.floor((columns - 7) / 2));
   const headerWidth = Math.max(40, columns - 10);
 
   useEffect(() => {
     if (scope !== "summary") {
+      setLoading(false);
       return;
     }
 
     let cancelled = false;
+    const needsSummaryBuild = Boolean(filter);
+
+    if (needsSummaryBuild) {
+      setLoading(true);
+      setSummaryTopValues(undefined);
+    }
 
     void incidentInsightsFromAccessIndex(run, accessQueryCache, filter).then((value) => {
       if (!cancelled) {
         setSummaryTopValues(value);
+        setLoading(false);
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setSummaryTopValues(undefined);
+        setLoading(false);
       }
     });
 
@@ -986,7 +1168,7 @@ function TopValuesScreen({
 
   const title = scope === "summary" ? "Global top values" : `Top values for ${incident?.id ?? "incident"}`;
   const subtitle = scope === "summary"
-    ? `computed from ${sourceCount}/${report.accessLog.totalLines} parsed access-log rows${filter ? ` | filter=${filter}` : ""}`
+    ? `${loading ? "computing..." : "computed"} from ${sourceCount}/${report.accessLog.totalLines} parsed access-log rows${filter ? ` | filter=${filter}` : ""}`
     : `computed from ${sourceCount} related requests${filter ? ` | filter=${filter}` : ""}`;
 
   return React.createElement(
@@ -1018,7 +1200,8 @@ function TopValuesScreen({
           items: insights.ips,
           width: panelWidth,
           active: focus === "ips",
-          selectedIndex: selectedIndexes.ips
+          selectedIndex: selectedIndexes.ips,
+          loading
         }),
         React.createElement(TopListPanel, {
           title: "Top paths",
@@ -1026,7 +1209,8 @@ function TopValuesScreen({
           items: insights.paths,
           width: panelWidth,
           active: focus === "paths",
-          selectedIndex: selectedIndexes.paths
+          selectedIndex: selectedIndexes.paths,
+          loading
         })
       ),
       React.createElement(
@@ -1038,7 +1222,8 @@ function TopValuesScreen({
           items: insights.userAgents,
           width: panelWidth,
           active: focus === "userAgents",
-          selectedIndex: selectedIndexes.userAgents
+          selectedIndex: selectedIndexes.userAgents,
+          loading
         }),
         React.createElement(TopListPanel, {
           title: "Top query params",
@@ -1046,7 +1231,8 @@ function TopValuesScreen({
           items: insights.params,
           width: panelWidth,
           active: focus === "params",
-          selectedIndex: selectedIndexes.params
+          selectedIndex: selectedIndexes.params,
+          loading
         })
       ),
       React.createElement(
@@ -1058,7 +1244,8 @@ function TopValuesScreen({
           items: insights.paramValues,
           width: panelWidth,
           active: focus === "paramValues",
-          selectedIndex: selectedIndexes.paramValues
+          selectedIndex: selectedIndexes.paramValues,
+          loading
         })
       )
     )
@@ -1071,7 +1258,8 @@ function TopListPanel({
   items,
   width,
   active,
-  selectedIndex
+  selectedIndex,
+  loading = false
 }: {
   title: string;
   panelKey: TopPanelKey;
@@ -1079,6 +1267,7 @@ function TopListPanel({
   width: number;
   active: boolean;
   selectedIndex: number;
+  loading?: boolean;
 }) {
   const safeSelectedIndex = Math.max(0, Math.min(selectedIndex, Math.max(0, items.length - 1)));
 
@@ -1096,7 +1285,9 @@ function TopListPanel({
       { bold: true, color: active ? "cyan" : undefined, wrap: "truncate" },
       fitText(`${active ? "> " : "  "}${title}`, width - 2)
     ),
-    ...(items.length > 0
+    ...(loading
+      ? [React.createElement(Text, { key: "loading", color: "yellow" }, fitText("computing...", width - 2))]
+      : items.length > 0
       ? items.map((item, index) =>
           React.createElement(
             Text,
@@ -1346,6 +1537,7 @@ function Footer({
   detailOpen,
   answerOpen,
   busy,
+  loading,
   message,
   selected,
   columns
@@ -1355,27 +1547,51 @@ function Footer({
   detailOpen: boolean;
   answerOpen: boolean;
   busy: boolean;
+  loading: boolean;
   message: string;
   selected: number;
   columns: number;
 }) {
+  const spinner = useSpinner(loading || busy);
   const shortcuts = answerOpen
     ? "↑/↓ PgUp/PgDn scroll | b/Esc close answer | q quit"
     : detailOpen
     ? "↑/↓ PgUp/PgDn scroll | d/b/Esc close | q quit"
     : screen === "summary"
-      ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate | Enter/d open | f filter | s sort | S dir | t tops | a ask | e export | q quit`
+      ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate panel | Enter/d open | f filter | s sort | S dir | t tops | a ask | e export | q quit`
       : screen === "tops"
         ? "Tab panel | ↑/↓ row | Enter filter by value | a ask about tops | t/b/Esc back | q quit"
         : "↑/↓ PgUp/PgDn rows | Enter/d detail | t tops | Space select | A select visible | f filter | s sort | S dir | a ask | e export | b back | q quit";
-  const status = `${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
+  const prefix = loading || busy ? `${spinner} ` : "";
+  const status = `${prefix}${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
 
   return React.createElement(
     Box,
     { flexDirection: "column" },
-    React.createElement(Text, { color: busy ? "yellow" : "cyan", wrap: "truncate" }, fitText(status, columns - 2)),
+    React.createElement(Text, { color: busy || loading ? "yellow" : "cyan", wrap: "truncate" }, fitText(status, columns - 2)),
     React.createElement(Text, { color: "cyan", wrap: "truncate" }, fitText(shortcuts, columns - 2))
   );
+}
+
+function useSpinner(active: boolean): string {
+  const [frame, setFrame] = useState(0);
+
+  useEffect(() => {
+    if (!active) {
+      setFrame(0);
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setFrame((value) => (value + 1) % SPINNER_FRAMES.length);
+    }, 120);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [active]);
+
+  return SPINNER_FRAMES[frame] ?? "-";
 }
 
 function incidentLines(report: AnalyzeReport, incidentId: string | undefined): IncidentLogLine[] {

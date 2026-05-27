@@ -17,7 +17,10 @@ export function applyScoringMultipliers(incidents: Incident[]): Incident[] {
       score += CORRELATION_BONUS;
     }
 
-    if (isPersistent(incident)) {
+    // Persistence bonus rewards attacks/abuse that go on for a long time.
+    // AI scrapers/crawlers naturally run for weeks — exclude them so legit
+    // bots don't auto-inflate to high severity.
+    if (!incident.id.startsWith("ai_scraper_known:") && isPersistent(incident)) {
       score += PERSISTENCE_BONUS;
     }
 

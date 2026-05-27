@@ -178,13 +178,26 @@ full-screen terminal UI.
 Shows:
 
 - analysis summary
-- navigable incident watchlist
+- navigable incident panels (three tabs)
 - complete indexed access-log table
+
+The incident area has three tabs navigable with `Tab`:
+
+| Tab | Contents |
+|---|---|
+| **SATURATION** (default) | Rate bursts, DDoS, AI crawlers, abusive bots — traffic/resource abuse |
+| **SECURITY** | SQLi/XSS/LFI payloads, recon, fake bots, scanner UA — compromise attempts |
+| **OTHER** | Low-signal or noise incidents filtered from the main panels |
+
+`Tab` cycles: access log → SATURATION → SECURITY → OTHER → access log.
+
+Incidents marked `!SUCCESS` had at least one `2xx` response, meaning the
+payload or probe received a successful reply.
 
 Keys:
 
 ```text
-Tab              switch focus between access log and incidents
+Tab              switch focus between access log and incident panels
 ↑/↓              move row
 PgUp/PgDn        page through rows
 Enter / d        open incident or request detail
@@ -346,59 +359,84 @@ HTML reports:
 
 ## Incident Types
 
+Every incident has a `kind` field that drives which TUI panel it appears in:
+
+| Kind | Panel | Examples |
+|---|---|---|
+| `compromise` | SECURITY | SQLi/XSS/LFI payloads, recon probes, fake bots, scanner tools |
+| `saturation` | SATURATION | DDoS bursts, AI crawlers, abusive crawlers, POST hotspots |
+| `noise` | OTHER | Low-signal patterns unlikely to need immediate action |
+
 `citrx` currently emits these incident families.
 
 ### Payload And Recon Rules
 
-| ID prefix | Category | Meaning |
-|---|---|---|
-| `sqli:` | `sql_injection` | SQL injection payload indicators such as `union select`, sleep/benchmark, encoded SQL, prepared statements |
-| `xss:` | `xss` | script/browser execution indicators |
-| `lfi_rfi:` | `path_traversal` | traversal, local/remote file inclusion, `php://filter`, sensitive paths |
-| `ssrf:` | `ssrf` | localhost, metadata IPs/hosts, callback-like URL params |
-| `command_injection:` | `command_injection` | shell metacharacters plus command indicators |
-| `recon_sensitive_file:` | `recon` | probes for `.env`, `.git`, backups, dumps, internals |
-| `rare_method:` | `http_anomaly` | uncommon HTTP methods on public traffic |
+| ID prefix | Category | Kind | Meaning |
+|---|---|---|---|
+| `sqli:` | `sql_injection` | compromise | SQL injection payload indicators such as `union select`, sleep/benchmark, encoded SQL |
+| `xss:` | `xss` | compromise | script/browser execution indicators |
+| `lfi_rfi:` | `path_traversal` | compromise | traversal, local/remote file inclusion, `php://filter`, sensitive paths |
+| `ssrf:` | `ssrf` | compromise | localhost, metadata IPs/hosts, callback-like URL params |
+| `command_injection:` | `command_injection` | compromise | shell metacharacters plus command indicators |
+| `recon_sensitive_file:` | `recon` | compromise | probes for `.env`, `.git`, backups, dumps, internals |
+| `rare_method:` | `http_anomaly` | compromise | uncommon HTTP methods (`CONNECT`, `TRACE`, `OPTIONS`) |
 
-Payload incidents are grouped by rule and path. If every matching response is
-404/4xx, score is downgraded so dead probes do not look as urgent as successful
-payloads.
+Payload incidents are grouped **by attacker IP**, not by path, so one incident
+per IP regardless of how many paths they probe. Scoring by response outcome:
+
+- Any `2xx` response → `critical/100` + `!SUCCESS` flag (payload landed)
+- Any `5xx` response → `critical/90`
+- Only `4xx` responses → `medium/55` (blocked probes)
+
+`recon_sensitive_file` requires at least **2 successful responses** or a **10% success
+ratio** to avoid flagging typical 404 scanners.
 
 ### Aggregate Path Rules
 
-| ID prefix | Category | Meaning |
-|---|---|---|
-| `abusive_crawl:` | `abusive_crawling` | high-volume non-entrypoint path repeatedly requested by many clients |
-| `query_explosion:` | `abusive_crawling` | one path requested with many query variants |
-| `post_hotspot:` | `post_hotspot` | endpoint receives unusually many POST requests |
+| ID prefix | Category | Kind | Meaning |
+|---|---|---|---|
+| `abusive_crawl:` | `abusive_crawling` | noise | high-volume non-entrypoint path repeatedly requested by many clients |
+| `query_explosion:` | `abusive_crawling` | noise | one path requested with many query variants |
+| `post_hotspot:` | `post_hotspot` | saturation | endpoint receives unusually many POST requests |
 
 ### Rate And DDoS Rules
 
-| ID prefix | Category | Meaning |
-|---|---|---|
-| `ddos_rps_burst_single_ip:` | `ddos` | one IP exceeds per-second RPS threshold for consecutive seconds |
-| `ddos_global_rps_spike` | `ddos` | global RPS exceeds baseline for consecutive seconds |
-| `http_head_flood:` | `ddos` | one IP sends a high ratio and high peak of HEAD requests |
-| `ddos_distributed_subnet:` | `ddos` | IPv4 `/24` or IPv6 `/48` exceeds RPS and unique-IP thresholds for consecutive seconds |
+| ID prefix | Category | Kind | Meaning |
+|---|---|---|---|
+| `ddos_rps_burst_single_ip:` | `ddos` | saturation | one IP exceeds per-second RPS threshold for consecutive seconds |
+| `ddos_global_rps_spike` | `ddos` | saturation | global RPS exceeds baseline for consecutive seconds |
+| `http_head_flood:` | `ddos` | saturation | one IP sends a high ratio and high peak of HEAD requests |
+| `ddos_distributed_subnet:` | `ddos` | saturation | IPv4 `/24` or IPv6 `/48` exceeds RPS and unique-IP thresholds for consecutive seconds |
 
 ### HTTP Error Storm Rules
 
-| ID prefix | Category | Meaning |
-|---|---|---|
-| `http_4xx_storm:` | `http_anomaly` | one IP generates many 4xx responses in adjacent minute buckets |
-| `http_5xx_storm:` | `http_anomaly` | one IP generates many 5xx responses in adjacent minute buckets |
+| ID prefix | Category | Kind | Meaning |
+|---|---|---|---|
+| `http_4xx_storm:` | `http_anomaly` | saturation | one IP generates many 4xx responses in adjacent minute buckets |
+| `http_5xx_storm:` | `http_anomaly` | saturation | one IP generates many 5xx responses in adjacent minute buckets |
 
 ### Bot And Scanner Rules
 
-| ID prefix | Category | Meaning |
-|---|---|---|
-| `ai_scraper_known:` | `ai_scraper` | known AI crawler or AI assistant user-agent, grouped by bot |
-| `scanner_ua_known:` | `scanner` | known scanner/offensive tooling user-agent |
-| `scanner_signature_paths:` | `scanner` | one IP touches many known fingerprint paths in adjacent minute buckets |
-| `single_ip_path_explosion:` | `abusive_crawling` | one IP touches hundreds of unique paths |
-| `ua_rotation_same_ip:` | `http_anomaly` | one IP uses many different user-agents |
-| `fake_bot_googlebot:` | `fake_bot` | UA claims core Googlebot but IP is outside published Googlebot ranges |
-| `fake_bot_bingbot:` | `fake_bot` | UA claims bingbot but IP is outside published Bing ranges |
+| ID prefix | Category | Kind | Meaning |
+|---|---|---|---|
+| `ai_scraper_known:` | `ai_scraper` | saturation/noise | known AI crawler or AI assistant user-agent, grouped by bot |
+| `scanner_ua_known:` | `scanner` | compromise | known scanner/offensive tooling user-agent |
+| `scanner_signature_paths:` | `scanner` | compromise | one IP touches many known fingerprint paths in adjacent minute buckets |
+| `single_ip_path_explosion:` | `abusive_crawling` | saturation | one IP exceeds **10 unique paths/minute** sustained |
+| `ua_rotation_same_ip:` | `http_anomaly` | saturation | one IP uses many different user-agents **and** peak RPS ≥ 5 |
+| `fake_bot_googlebot:` | `fake_bot` | compromise | UA claims core Googlebot but IP is outside published Googlebot ranges |
+| `fake_bot_bingbot:` | `fake_bot` | compromise | UA claims bingbot but IP is outside published Bing ranges |
+
+Detection notes:
+
+- `single_ip_path_explosion` requires **pathsPerMinute ≥ 10**, not just raw count.
+  Normal page loads fetching many assets do not trigger it.
+- `ua_rotation_same_ip` requires **peak RPS ≥ 5**. Shared NAT (e.g. AWS offices)
+  naturally generates many user-agents at low rate without being malicious.
+- `fake_bot_*` incidents require **at least 10 requests** from that IP.
+- IPs confirmed as legitimate Googlebot or Bingbot (verified against published
+  ranges) are excluded from all bot and scanner detections.
+- `ai_scraper_known` is `saturation` when score ≥ 70, `noise` otherwise.
 
 Googlebot and Bingbot range snapshots are stored in source. Refresh them with:
 
@@ -410,19 +448,35 @@ pnpm run update-bot-ranges
 
 Each incident has:
 
+- `kind`: `compromise`, `saturation`, or `noise` (drives TUI panel placement)
 - `severity`: `info`, `low`, `medium`, `high`, `critical`
 - `score`: `0` to `100`
 - `evidence`: typed key/value data for audit
 - `samples`: redacted examples when relevant
+- `successful?`: `true` when at least one matching response was `2xx`
 
-Scoring includes post-processing multipliers:
+Severity thresholds:
 
-- `+10` when the same `evidence.ip` appears in two or more incidents
-- `+15` when a pattern persists for at least 30 minutes
+| Score range | Severity |
+|---|---|
+| 0–24 | `info` |
+| 25–49 | `low` |
+| 50–74 | `medium` |
+| 75–89 | `high` |
+| 90–100 | `critical` |
+
+Post-processing multipliers applied after base scoring:
+
+- `+10` when the same `evidence.ip` appears in two or more incidents (correlated attacker)
+- `+15` when a pattern persists for at least 30 minutes (persistence bonus)
 - `-10` for moderate known AI crawlers that requested `robots.txt`
 
-Scores are capped to `[0, 100]`, then severity is recalculated from the final
-score.
+Notes:
+- Persistence bonus does **not** apply to `ai_scraper_known:*` — AI crawlers naturally
+  run for weeks, so duration alone is not a signal.
+- Scores are sorted within each panel by `kind` weight first
+  (compromise → saturation → noise), then by score descending.
+- Scores are capped to `[0, 100]`, then severity is recalculated from the final score.
 
 ## Security And Privacy
 

@@ -5,6 +5,9 @@ export interface TopItem {
 
 export type IncidentSeverity = "info" | "low" | "medium" | "high" | "critical";
 
+/** Compromise: attack attempt or success. Saturation: load/abuse/DoS. Noise: low-signal informational. */
+export type IncidentKind = "compromise" | "saturation" | "noise";
+
 export interface IncidentEvidence {
   key: string;
   value: string | number | boolean;
@@ -13,12 +16,16 @@ export interface IncidentEvidence {
 export interface Incident {
   id: string;
   category: string;
+  /** Whether this incident represents a compromise/attack attempt vs. volumetric abuse vs. low-signal noise. */
+  kind: IncidentKind;
   severity: IncidentSeverity;
   score: number;
   title: string;
   description: string;
   evidence: IncidentEvidence[];
   samples: string[];
+  /** True when attack payload received a 2xx response (possible successful exploit). */
+  successful?: boolean;
 }
 
 export interface IncidentLogLine {

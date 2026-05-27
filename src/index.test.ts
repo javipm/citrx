@@ -206,7 +206,10 @@ describe("citrx CLI", () => {
       logFile,
       [
         '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /search?q=1%20UNION%20SELECT%20password%20FROM%20information_schema HTTP/1.1" 200 123 "-" "Mozilla/5.0"',
-        '203.0.113.11 - - [25/May/2026:03:12:50 +0200] "GET /.env?token=secret HTTP/1.1" 404 12 "-" "Mozilla/5.0"'
+        // 3 recon probes from same IP across 3 different paths — survives noise pruning.
+        '203.0.113.11 - - [25/May/2026:03:12:50 +0200] "GET /.env?token=secret HTTP/1.1" 404 12 "-" "Mozilla/5.0"',
+        '203.0.113.11 - - [25/May/2026:03:12:51 +0200] "GET /.git/config HTTP/1.1" 404 12 "-" "Mozilla/5.0"',
+        '203.0.113.11 - - [25/May/2026:03:12:52 +0200] "GET /phpinfo.php HTTP/1.1" 404 12 "-" "Mozilla/5.0"'
       ].join("\n")
     );
     const stdout = memoryStream();
@@ -234,10 +237,11 @@ describe("citrx CLI", () => {
       }>;
     };
 
+    // Incidents are now keyed by ruleId:ip (grouped per attacker, not per path).
     expect(report.incidents).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: "sqli:/search" }),
-        expect.objectContaining({ id: "recon_sensitive_file:/.env" })
+        expect.objectContaining({ id: "sqli:203.0.113.10" }),
+        expect.objectContaining({ id: "recon_sensitive_file:203.0.113.11" })
       ])
     );
     expect(report.incidents.flatMap((incident) => incident.samples).join("\n")).toContain(
@@ -245,14 +249,14 @@ describe("citrx CLI", () => {
     );
     expect(report.accessLog).toEqual(
       expect.objectContaining({
-        totalLines: 2,
-        indexedLines: 2
+        totalLines: 4,
+        indexedLines: 4
       })
     );
     expect(report.incidentMatches).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          incidentId: "sqli:/search",
+          incidentId: "sqli:203.0.113.10",
           totalMatches: 1,
           lines: [
             expect.objectContaining({
@@ -262,12 +266,13 @@ describe("citrx CLI", () => {
           ]
         }),
         expect.objectContaining({
-          incidentId: "recon_sensitive_file:/.env",
-          lines: [
+          incidentId: "recon_sensitive_file:203.0.113.11",
+          totalMatches: 3,
+          lines: expect.arrayContaining([
             expect.objectContaining({
               raw: expect.stringContaining("token=[REDACTED]")
             })
-          ]
+          ])
         })
       ])
     );
@@ -318,7 +323,12 @@ describe("citrx CLI", () => {
     const htmlFile = join(directory, "report.html");
     await writeFile(
       logFile,
-      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /.env?token=secret HTTP/1.1" 404 12 "-" "Mozilla/5.0"\n'
+      // Multiple recon paths from one IP — survives noise pruning.
+      [
+        '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /.env?token=secret HTTP/1.1" 404 12 "-" "Mozilla/5.0"',
+        '203.0.113.10 - - [25/May/2026:03:12:50 +0200] "GET /.git/config HTTP/1.1" 404 12 "-" "Mozilla/5.0"',
+        '203.0.113.10 - - [25/May/2026:03:12:51 +0200] "GET /phpinfo.php HTTP/1.1" 404 12 "-" "Mozilla/5.0"'
+      ].join("\n") + "\n"
     );
 
     const markdownOut = memoryStream();
@@ -450,8 +460,10 @@ describe("citrx CLI", () => {
 
     expect(code).toBe(0);
     expect(opened).toEqual([]);
-    expect(stdout.output()).toContain("citrx access log analysis");
-    expect(stdout.output()).toContain("/plain");
+    // Strip ANSI codes before checking — color may be enabled depending on env.
+    const plainOutput = stdout.output().replace(/\[[0-9;]*m/g, "");
+    expect(plainOutput).toContain("citrx access log analysis");
+    expect(plainOutput).toContain("/plain");
   });
 
   it("reads access logs from stdin", async () => {

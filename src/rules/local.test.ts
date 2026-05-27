@@ -65,8 +65,8 @@ describe("local rules", () => {
     mergeRuleHit(incidents, secondHit!, second);
 
     expect(incidents.get(incidentId)).toMatchObject({
-      severity: "medium",
-      score: 45,
+      severity: "low",
+      score: 30,
       evidence: expect.arrayContaining([
         { key: "count", value: 2 },
         { key: "outcome", value: "all_404" },
@@ -88,10 +88,11 @@ describe("local rules", () => {
 
     expect(incidents.get(incidentId)).toMatchObject({
       severity: "critical",
-      score: 95,
+      score: 100,
+      successful: true,
       evidence: expect.arrayContaining([
         { key: "count", value: 2 },
-        { key: "outcome", value: "mixed" },
+        { key: "outcome", value: "successful" },
         { key: "status2xx", value: 1 },
         { key: "status4xx", value: 1 },
         { key: "status404", value: 1 }
@@ -123,11 +124,11 @@ describe("local rules", () => {
       },
       {
         path: "/login",
-        count: 60,
+        count: 200,
         bytes: 1000,
-        ipCounts: ipCounts(1, 60),
+        ipCounts: ipCounts(1, 200),
         queryVariants: new Set(),
-        postCount: 60
+        postCount: 200
       }
     ]);
 
