@@ -1,4 +1,5 @@
 // Handles keyboard input in the prompt bar overlay (filter input and AI query input).
+import type { IncidentLogLine } from "../../analysis/types.js";
 import type { PromptState } from "../types.js";
 import { validateAccessLogFilter } from "../filter.js";
 
@@ -39,7 +40,7 @@ export function handlePromptInput({
   setPrompt,
   setFilter,
   setLineIndex,
-  setSelectedLineKeys,
+  setSelection,
   setMessage,
   submitAi
 }: {
@@ -57,7 +58,7 @@ export function handlePromptInput({
   setPrompt: (value: PromptState | undefined) => void;
   setFilter: (value: string) => void;
   setLineIndex: (value: number) => void;
-  setSelectedLineKeys: (value: Set<string>) => void;
+  setSelection: (value: Map<string, IncidentLogLine>) => void;
   setMessage: (value: string) => void;
   submitAi: (question: string, state: Extract<PromptState, { kind: "ai" }>) => void;
 }): void {
@@ -82,7 +83,7 @@ export function handlePromptInput({
       setPrompt(undefined);
       setFilter(value);
       setLineIndex(0);
-      setSelectedLineKeys(new Set());
+      setSelection(new Map());
       setMessage(value ? `Filter: ${value}` : "Filter cleared");
       return;
     }

@@ -1,7 +1,10 @@
 // Handles keyboard input on the incident screen: line navigation, sort, filter, export, AI.
 import type { Incident, IncidentLogLine } from "../../analysis/types.js";
 import type { SortKey, SortDirection, PromptState } from "../types.js";
-import { lineKey, toggleSelection } from "../utils/table.js";
+import { lineKey } from "../utils/table.js";
+import { addLinesToSelectionWithCap, INCIDENT_MANUAL_SELECT_LIMIT, INCIDENT_SELECT_ALL_LIMIT } from "../utils/selection.js";
+
+const AI_CONTEXT_MAX_ROWS = 200;
 
 /**
  * Subset of ink's Key object representing keys used by the incident screen.
@@ -13,6 +16,7 @@ type Key = {
   tab?: boolean;
   pageUp?: boolean;
   pageDown?: boolean;
+  escape?: boolean;
 };
 
 function isPageUp(inputValue: string, key: Key): boolean {
@@ -33,56 +37,34 @@ function isPageDown(inputValue: string, key: Key): boolean {
  * - `↑` / `↓`          — move cursor one line up/down.
  * - `PageUp` / `[5~`   — move cursor one page up.
  * - `PageDown` / `[6~` — move cursor one page down.
+ * - `Esc`              — go back (activeAbort handled by caller before this fires).
  * - `s` / `S`          — open sort menu.
  * - `Space`            — toggle selection on the focused line.
  * - `d` / `Enter`      — open line detail view.
  * - `t`                — switch to top-values screen scoped to incident.
- * - `A`                — select all visible lines.
+ * - `A`                — select all: page-only above INCIDENT_SELECT_ALL_LIMIT, async full below.
  * - `r`                — reset filter and selection.
  * - `/` / `f` / `F`    — open filter prompt.
  * - `e`                — open the export format menu.
  * - `a`                — open AI prompt scoped to incident.
- *
- * @param inputValue  Raw character string from ink's `useInput`.
- * @param key         Structured key flags from ink's `useInput`.
- * @param incident    Currently displayed incident, or `undefined` if none.
- * @param lines       Filtered and sorted log lines currently visible.
- * @param selectedLines  Lines explicitly selected by the user (subset of `lines`).
- * @param lineIndex   Zero-based cursor position within `lines`.
- * @param pageSize    Number of lines per page, used for page-up/down jumps.
- * @param filter      Current filter string, forwarded to the filter prompt.
- * @param sortKey     Active sort column, forwarded to the sort menu.
- * @param sortDirection Active sort direction, forwarded to the sort menu.
- * @param runId       Run identifier carried by the caller for export context.
- * @param exportReady Whether all incident rows are loaded and export can run.
- * @param setLineIndex        Functional updater for the cursor position.
- * @param setFilter           Setter to clear or update the filter string.
- * @param setSelectedLineKeys Setter/updater for the set of selected line keys.
- * @param setDetailLine       Opens the detail panel for a log line.
- * @param setDetailScroll     Resets the detail panel scroll offset.
- * @param setSortMenu         Opens or closes the sort menu overlay.
- * @param setTopScope         Scopes the tops screen to `"incident"`.
- * @param setScreen           Navigates to the `"tops"` screen.
- * @param setPrompt           Opens the filter or AI prompt overlay.
- * @param setMessage          Updates the TUI status-bar message.
- * @param setExportMenu       Opens the export format menu.
  */
 export function handleIncidentScreenInput({
   inputValue,
   key,
   incident,
-  lines,
+  total,
+  pageLines,
+  pageStart,
+  pageLoading,
   selectedLines,
   lineIndex,
   pageSize,
   filter,
   sortKey,
   sortDirection,
-  runId,
-  exportReady,
   setLineIndex,
   setFilter,
-  setSelectedLineKeys,
+  setSelection,
   setDetailLine,
   setDetailScroll,
   setSortMenu,
@@ -90,23 +72,29 @@ export function handleIncidentScreenInput({
   setScreen,
   setPrompt,
   setExportMenu,
-  setMessage
+  setMessage,
+  onSelectAll
 }: {
   inputValue: string;
   key: Key;
   incident: Incident | undefined;
-  lines: IncidentLogLine[];
+  /** Total filtered lines for the incident (from useIncidentQuery). */
+  total: number;
+  /** Currently rendered page of log lines. */
+  pageLines: IncidentLogLine[];
+  /** Absolute offset of the first line in pageLines. */
+  pageStart: number;
+  /** True while the bucket for the current cursor position is loading. */
+  pageLoading: boolean;
   selectedLines: IncidentLogLine[];
   lineIndex: number;
   pageSize: number;
   filter: string;
   sortKey: SortKey;
   sortDirection: SortDirection;
-  runId: string;
-  exportReady: boolean;
   setLineIndex: (updater: (value: number) => number) => void;
   setFilter: (value: string) => void;
-  setSelectedLineKeys: (updaterOrValue: Set<string> | ((v: Set<string>) => Set<string>)) => void;
+  setSelection: (updater: (prev: Map<string, IncidentLogLine>) => Map<string, IncidentLogLine>) => void;
   setDetailLine: (line: IncidentLogLine | undefined) => void;
   setDetailScroll: (value: number) => void;
   setSortMenu: (
@@ -117,15 +105,21 @@ export function handleIncidentScreenInput({
   setPrompt: (value: PromptState) => void;
   setExportMenu: (value: { format: "csv" | "json" | "tsv" }) => void;
   setMessage: (value: string) => void;
+  /** Called when A is pressed and total <= INCIDENT_SELECT_ALL_LIMIT to do async full select. */
+  onSelectAll?: () => void;
 }): void {
-  void runId;
+  if (key.escape) {
+    // Esc without active abort → handled by caller (back navigation)
+    return;
+  }
+
   if (key.upArrow) {
     setLineIndex((value) => Math.max(0, value - 1));
     return;
   }
 
   if (key.downArrow) {
-    setLineIndex((value) => Math.min(Math.max(0, lines.length - 1), value + 1));
+    setLineIndex((value) => Math.min(Math.max(0, total - 1), value + 1));
     return;
   }
 
@@ -135,7 +129,7 @@ export function handleIncidentScreenInput({
   }
 
   if (isPageDown(inputValue, key)) {
-    setLineIndex((value) => Math.min(Math.max(0, lines.length - 1), value + pageSize));
+    setLineIndex((value) => Math.min(Math.max(0, total - 1), value + pageSize));
     return;
   }
 
@@ -149,16 +143,35 @@ export function handleIncidentScreenInput({
     return;
   }
 
+  // Row actions blocked while page is loading to avoid operating on stale snapshot
+  if (pageLoading) {
+    setMessage("Loading…");
+    return;
+  }
+
   if (inputValue === " ") {
-    const line = lines[lineIndex];
+    const line = pageLines[lineIndex - pageStart];
     if (line) {
-      setSelectedLineKeys((current) => toggleSelection(current, line));
+      setSelection((prev) => {
+        const next = new Map(prev);
+        const k = lineKey(line);
+        if (next.has(k)) {
+          next.delete(k);
+        } else {
+          if (next.size < INCIDENT_MANUAL_SELECT_LIMIT) {
+            next.set(k, line);
+          } else {
+            setMessage(`Selection cap reached (${INCIDENT_MANUAL_SELECT_LIMIT})`);
+          }
+        }
+        return next;
+      });
     }
     return;
   }
 
   if (inputValue === "d" || key.return) {
-    const line = lines[lineIndex];
+    const line = pageLines[lineIndex - pageStart];
     if (line) {
       setDetailLine(line);
       setDetailScroll(0);
@@ -174,15 +187,27 @@ export function handleIncidentScreenInput({
   }
 
   if (inputValue === "A") {
-    setSelectedLineKeys(new Set(lines.map(lineKey)));
-    setMessage(`Selected ${lines.length} visible lines`);
+    if (total > INCIDENT_SELECT_ALL_LIMIT || !onSelectAll) {
+      setSelection((prev) => {
+        const { selection: next, capHit } = addLinesToSelectionWithCap(
+          prev,
+          pageLines,
+          INCIDENT_MANUAL_SELECT_LIMIT
+        );
+        if (capHit) setMessage(`Selection cap reached (${INCIDENT_MANUAL_SELECT_LIMIT})`);
+        return next;
+      });
+      setMessage(`Selected ${pageLines.length} visible lines`);
+    } else {
+      onSelectAll();
+    }
     return;
   }
 
   if (inputValue === "r") {
     setFilter("");
     setLineIndex(() => 0);
-    setSelectedLineKeys(new Set());
+    setSelection(() => new Map());
     setMessage("Filter and selection reset");
     return;
   }
@@ -193,26 +218,32 @@ export function handleIncidentScreenInput({
   }
 
   if (inputValue === "e") {
-    if (!exportReady) {
-      setMessage("Still loading incident rows before export...");
+    if (selectedLines.length === 0 && total > 0) {
+      setExportMenu({ format: "json" });
+      setMessage("Choose export format");
       return;
     }
-
-    setExportMenu({ format: "json" });
-    setMessage(
-      selectedLines.length > 0 ? "Choose export format for selected rows" : "Choose export format"
-    );
+    if (selectedLines.length > 0) {
+      setExportMenu({ format: "json" });
+      setMessage("Choose export format for selected rows");
+      return;
+    }
+    setMessage("No rows to export");
     return;
   }
 
   if (inputValue === "a") {
+    const contextLines = (selectedLines.length > 0 ? selectedLines : pageLines).slice(
+      0,
+      AI_CONTEXT_MAX_ROWS
+    );
     setPrompt({
       kind: "ai",
       value: "",
       cursor: 0,
       scope: "incident",
       incident,
-      lines: selectedLines.length > 0 ? selectedLines : lines
+      lines: contextLines
     });
   }
 }

@@ -7,7 +7,6 @@ import { accessTableColumns, accessTableHeader, accessTableRow, lineKey } from "
 import { useSpinner } from "../hooks/useSpinner.js";
 
 export function LineTable({
-  lines,
   pageLines,
   pageStart,
   lineIndex,
@@ -16,14 +15,13 @@ export function LineTable({
   sortDirection,
   selectedLineKeys,
   columns,
-  totalLines,
+  totalLines = 0,
   active = true,
   label = "Accesses",
   emptyMessage = "No related lines for this incident",
   loading = false,
   loadingMessage = "Loading..."
 }: {
-  lines: IncidentLogLine[];
   pageLines: IncidentLogLine[];
   pageStart: number;
   lineIndex: number;
@@ -41,15 +39,16 @@ export function LineTable({
 }): React.ReactElement {
   const spinner = useSpinner(loading);
   const tableColumns = accessTableColumns(columns);
-  const lineCount = totalLines ?? lines.length;
-  const loadedLabel =
-    totalLines !== undefined && totalLines > lines.length && lines.length > 0
-      ? ` total | loaded: ${lines.length}`
-      : "";
-  const loadingLabel = loading ? ` | ${spinner} ${loadingMessage}` : "";
+  const lineCount = totalLines;
+  const loadingLabel = loading ? `${spinner} ${loadingMessage}` : "";
   const visibleStart = pageLines.length > 0 ? pageStart + 1 : 0;
   const visibleEnd = pageStart + pageLines.length;
   const filterLabel = filter ? ` | filter: ${filter}` : " | filter: none";
+  const baseHeader = `${label}${active ? " *" : ""}: ${lineCount} | showing: ${visibleStart}-${visibleEnd} | sort: ${sortKey} ${sortDirection}${filterLabel}`;
+  const maxWidth = columns - 10;
+  const fittedBase = fitText(baseHeader + (loadingLabel ? " | " : ""), maxWidth);
+  const remainingWidth = Math.max(0, maxWidth - fittedBase.length);
+  const fittedLoading = loadingLabel ? fitText(loadingLabel, remainingWidth) : "";
 
   return React.createElement(
     Box,
@@ -60,11 +59,15 @@ export function LineTable({
       React.createElement(
         Text,
         { bold: true, color: active ? "cyan" : undefined, wrap: "truncate" },
-        fitText(
-          `${label}${active ? " *" : ""}: ${lineCount}${loadedLabel} | showing: ${visibleStart}-${visibleEnd} | sort: ${sortKey} ${sortDirection}${filterLabel}${loadingLabel}`,
-          columns - 10
-        )
-      )
+        fittedBase
+      ),
+      fittedLoading
+        ? React.createElement(
+            Text,
+            { bold: true, color: "yellow", wrap: "truncate" },
+            fittedLoading
+          )
+        : null
     ),
     React.createElement(
       Box,

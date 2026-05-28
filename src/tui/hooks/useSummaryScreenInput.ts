@@ -1,7 +1,8 @@
 // Handles keyboard input on the summary screen: navigation, filtering, selection, export, AI.
 import type { Incident, IncidentLogLine } from "../../analysis/types.js";
 import type { SummaryFocus, SortKey, SortDirection, PromptState } from "../types.js";
-import { lineKey, toggleSelection } from "../utils/table.js";
+import { lineKey } from "../utils/table.js";
+import { addLinesToSelectionWithCap, INCIDENT_MANUAL_SELECT_LIMIT } from "../utils/selection.js";
 
 type Key = {
   upArrow?: boolean;
@@ -143,7 +144,7 @@ export function firstIncidentIndexForFocus(incidents: Incident[], focus: Summary
  * @param params.setScreen              - Navigates to a named screen (`"incident"`, `"tops"`, or `"summary"`).
  * @param params.setLineIndex           - Sets the line index on the incident detail screen (reset to 0 on drill-in).
  * @param params.setFilter              - Sets the active filter string.
- * @param params.setSelectedLineKeys    - Sets or updates the set of selected line keys.
+ * @param params.setSelection           - Functional updater for the selection map (line key → line).
  * @param params.setDetailLine          - Sets the line shown in the inline detail panel (undefined to close).
  * @param params.setDetailScroll        - Resets the detail panel scroll position.
  * @param params.setSortMenu            - Opens the sort menu with a pre-populated state, or closes it (undefined).
@@ -174,7 +175,7 @@ export function handleSummaryScreenInput({
   setScreen,
   setLineIndex,
   setFilter,
-  setSelectedLineKeys,
+  setSelection,
   setDetailLine,
   setDetailScroll,
   setSortMenu,
@@ -204,7 +205,7 @@ export function handleSummaryScreenInput({
   setScreen: (screen: "incident" | "tops" | "summary") => void;
   setLineIndex: (value: number) => void;
   setFilter: (value: string) => void;
-  setSelectedLineKeys: (updaterOrValue: Set<string> | ((v: Set<string>) => Set<string>)) => void;
+  setSelection: (updater: (prev: Map<string, IncidentLogLine>) => Map<string, IncidentLogLine>) => void;
   setDetailLine: (line: IncidentLogLine | undefined) => void;
   setDetailScroll: (value: number) => void;
   setSortMenu: (
@@ -276,7 +277,7 @@ export function handleSummaryScreenInput({
     setScreen("incident");
     setLineIndex(0);
     setFilter("");
-    setSelectedLineKeys(new Set());
+    setSelection(() => new Map());
     setDetailLine(undefined);
     setMessage(`Opened ${incident.id}`);
     return;
@@ -300,21 +301,45 @@ export function handleSummaryScreenInput({
   if (inputValue === " ") {
     const line = summaryPageLines[summaryLineIndex - computedSummaryPageStart];
     if (line) {
-      setSelectedLineKeys((current) => toggleSelection(current, line));
+      setSelection((prev) => {
+        const next = new Map(prev);
+        const k = lineKey(line);
+        if (next.has(k)) {
+          next.delete(k);
+        } else {
+          if (next.size < INCIDENT_MANUAL_SELECT_LIMIT) {
+            next.set(k, line);
+          } else {
+            setMessage(`Selection cap reached (${INCIDENT_MANUAL_SELECT_LIMIT})`);
+          }
+        }
+        return next;
+      });
     }
     return;
   }
 
   if (inputValue === "A") {
-    setSelectedLineKeys(new Set(summaryPageLines.map(lineKey)));
-    setMessage(`Selected ${summaryPageLines.length} visible lines`);
+    setSelection((prev) => {
+      const { selection: next, capHit } = addLinesToSelectionWithCap(
+        prev,
+        summaryPageLines,
+        INCIDENT_MANUAL_SELECT_LIMIT
+      );
+      if (capHit) {
+        setMessage(`Selection cap reached (${INCIDENT_MANUAL_SELECT_LIMIT})`);
+      } else {
+        setMessage(`Selected ${summaryPageLines.length} visible lines`);
+      }
+      return next;
+    });
     return;
   }
 
   if (inputValue === "r") {
     setFilter("");
     setSummaryLineIndex(() => 0);
-    setSelectedLineKeys(new Set());
+    setSelection(() => new Map());
     setMessage("Filter and selection reset");
     return;
   }

@@ -56,7 +56,7 @@ function chunkEvidence(evidence: Incident["evidence"], lineWidth: number): strin
 export function IncidentScreen({
   report,
   incident,
-  lines,
+  incidentTotal,
   pageLines,
   pageStart,
   lineIndex,
@@ -65,11 +65,13 @@ export function IncidentScreen({
   sortDirection,
   selectedLineKeys,
   columns,
-  loading
+  loading,
+  loadingMessage = "Loading page…"
 }: {
   report: AnalyzeReport;
   incident: Incident | undefined;
-  lines: IncidentLogLine[];
+  /** Total filtered rows for this incident (from useIncidentQuery). */
+  incidentTotal: number;
   pageLines: IncidentLogLine[];
   pageStart: number;
   lineIndex: number;
@@ -79,6 +81,7 @@ export function IncidentScreen({
   selectedLineKeys: Set<string>;
   columns: number;
   loading: boolean;
+  loadingMessage?: string;
 }): React.ReactElement {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
 
@@ -130,7 +133,6 @@ export function IncidentScreen({
       )
     ),
     React.createElement(LineTable, {
-      lines,
       pageLines,
       pageStart,
       lineIndex,
@@ -139,9 +141,9 @@ export function IncidentScreen({
       sortDirection,
       selectedLineKeys,
       columns,
-      totalLines: filter ? undefined : matchSet?.totalMatches,
+      totalLines: incidentTotal,
       loading,
-      loadingMessage: filter ? "Loading filtered incident rows..." : "Loading incident rows..."
+      loadingMessage
     })
   );
 }

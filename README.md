@@ -232,15 +232,23 @@ q                ask before quit
 h                contextual help overlay
 ```
 
-Incident export is shown only after all related rows have finished loading, so
-exports do not accidentally contain a partial background-hydrated sample.
+Incident rows load on demand — the screen is responsive immediately even for
+very large incidents. Filtering or sorting a large incident shows background
+progress in the status bar; press Esc to cancel and revert to the previous
+result.
+
+Incident export streams rows directly from the access index and is available
+immediately, with or without a selection. Selected-rows export uses the in-memory
+selection; full-incident export streams all filtered rows to a tmp file and
+atomically renames it when finished. Esc aborts a running export.
 
 ### Export Menu
 
 Press `e` from the summary or incident screen to choose an export format before
 writing the current context. Summary exports write the selected rows, or the
 full filtered access-log result when nothing is selected. Incident exports write
-the selected incident rows, or all currently filtered incident rows.
+the selected rows when a selection exists, or all currently filtered incident
+rows via streaming when nothing is selected.
 
 ```text
 ↑/↓              choose CSV, JSON, or TSV

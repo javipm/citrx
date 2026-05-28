@@ -1,5 +1,6 @@
 import type { IncidentLogLine, Incident } from "../analysis/types.js";
 import type { IncidentQuestionClient } from "../ai/incident-question.js";
+import type { LineCompareKey } from "../utils/line-compare.js";
 import type { Readable, Writable } from "node:stream";
 
 /** I/O handles and optional AI client injected into the TUI at startup. */
@@ -30,6 +31,10 @@ export type TopPanelKey = "ips" | "paths" | "userAgents" | "params" | "paramValu
 
 /** Column by which the access log table is currently sorted. */
 export type SortKey = "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
+
+// Compile-time check: SortKey must satisfy LineCompareKey.
+const _checkTuiSortKey: LineCompareKey = "timestamp" as SortKey;
+void _checkTuiSortKey;
 
 /** Direction of the current sort applied to the access log table. */
 export type SortDirection = "asc" | "desc";
@@ -145,6 +150,13 @@ export interface AccessTableColumns {
   path: number;
   /** Width of the User-Agent column. */
   ua: number;
+}
+
+/** An in-flight cancellable operation registered in the global abort slot. */
+export interface ActiveAbortEntry {
+  kind: "export" | "tops" | "select-all" | "incident-query";
+  controller: AbortController;
+  label: string;
 }
 
 export const TOP_PANEL_KEYS: TopPanelKey[] = [

@@ -6,9 +6,55 @@ import { createInterface } from "node:readline/promises";
 import { setImmediate } from "node:timers/promises";
 
 import type { IncidentLogLine } from "../analysis/types.js";
+import {
+  type LineCompareKey,
+  compareLine as compareLineFromUtil,
+  compareSortableValue as compareSortableValueFromUtil,
+  compareRow as compareRowFromUtil
+} from "../utils/line-compare.js";
+
+export type { LineCompareKey };
+export { compareSortableValueFromUtil as compareSortableValue, compareRowFromUtil as compareRow };
 
 const INDEX_SCAN_YIELD_INTERVAL = 5000;
 const SORT_CHUNK_SIZE = 10000;
+const ITERATE_CHUNK_SIZE = 2000;
+
+/**
+ * Read-only ordered sequence of row numbers backed by either a real array or
+ * a virtual accessor (e.g. reverse iteration over matchSet.rowNumbers without
+ * copying). `rowAt(i)` must throw `RangeError` for i < 0 or i >= length.
+ * Row numbers are guaranteed numerically ascending (stream order) after
+ * analysis finalization; the virtual reverse accessor produces desc order.
+ */
+export interface OrderedRowNumbers {
+  readonly length: number;
+  rowAt(index: number): number;
+}
+
+/**
+ * Wraps a `number[]` as an `OrderedRowNumbers`. Throws `RangeError` for
+ * out-of-range indices so callers catch bugs rather than silently reading
+ * undefined.
+ */
+export function arrayOrderedRowNumbers(arr: readonly number[]): OrderedRowNumbers {
+  return {
+    get length() {
+      return arr.length;
+    },
+    rowAt(i: number): number {
+      if (i < 0 || i >= arr.length) {
+        throw new RangeError(`arrayOrderedRowNumbers: index ${i} out of range [0, ${arr.length})`);
+      }
+      return arr[i]!;
+    }
+  };
+}
+
+// Compile-time check: AccessLogIndexPageOptions["sortKey"] must satisfy LineCompareKey.
+// If access-index.ts adds a sort key not in LineCompareKey, this line fails typecheck.
+const _checkSortKey: LineCompareKey = "timestamp" as AccessLogIndexPageOptions["sortKey"];
+void _checkSortKey;
 
 /**
  * Metadata for an indexed access log stored on disk.
@@ -278,6 +324,61 @@ export function readAccessLogIndexRows(
 }
 
 /**
+ * Async generator that reads `rowNumbers` in fixed-size chunks, yielding one
+ * chunk of `IncidentLogLine[]` per iteration. Opens index files once and closes
+ * them in `finally`, so callers never need to manage descriptors.
+ *
+ * Checks `options.signal` between chunks and throws `AbortError` if aborted.
+ * Validates each row number against `index.totalRows`; throws `RangeError` for
+ * out-of-range values so bugs surface rather than silently producing empty rows.
+ */
+export async function* iterateAccessLogIndexChunks(
+  index: AccessLogIndex,
+  rowNumbers: OrderedRowNumbers,
+  options: { chunkSize?: number; signal?: AbortSignal } = {}
+): AsyncGenerator<IncidentLogLine[]> {
+  const chunkSize = options.chunkSize ?? ITERATE_CHUNK_SIZE;
+
+  if (rowNumbers.length === 0) {
+    return;
+  }
+
+  const fileHandles = openIndexFiles(index);
+
+  try {
+    let chunk: IncidentLogLine[] = [];
+
+    for (let i = 0; i < rowNumbers.length; i++) {
+      const row = rowNumbers.rowAt(i);
+
+      if (row < 0 || row >= index.totalRows) {
+        throw new RangeError(
+          `iterateAccessLogIndexChunks: row ${row} out of range [0, ${index.totalRows})`
+        );
+      }
+
+      chunk.push(readAccessLogIndexRowFromOpenFiles(index, row, fileHandles));
+
+      if (chunk.length >= chunkSize) {
+        yield chunk;
+        chunk = [];
+        await setImmediate();
+
+        if (options.signal?.aborted) {
+          throw new DOMException("iterateAccessLogIndexChunks aborted", "AbortError");
+        }
+      }
+    }
+
+    if (chunk.length > 0) {
+      yield chunk;
+    }
+  } finally {
+    closeIndexFiles(fileHandles);
+  }
+}
+
+/**
  * Perform a full scan of the index, applying filter and sort, and return the
  * resulting ordered row numbers.
  * Uses a fast O(n) path (no sort) when the sort key is `timestamp`, since rows
@@ -422,7 +523,11 @@ async function sortQueryRows(
   return sortInChunks(rows, (a, b) => compareSortableValue(a.value, b.value, sortDirection));
 }
 
-async function sortInChunks<T>(items: T[], compare: (a: T, b: T) => number): Promise<T[]> {
+export async function sortInChunks<T>(
+  items: T[],
+  compare: (a: T, b: T) => number,
+  options?: { signal?: AbortSignal }
+): Promise<T[]> {
   if (items.length <= SORT_CHUNK_SIZE) {
     items.sort(compare);
     return items;
@@ -431,11 +536,17 @@ async function sortInChunks<T>(items: T[], compare: (a: T, b: T) => number): Pro
   let chunks: T[][] = [];
 
   for (let start = 0; start < items.length; start += SORT_CHUNK_SIZE) {
+    if (options?.signal?.aborted) {
+      throw new DOMException("sortInChunks aborted", "AbortError");
+    }
     chunks.push(items.slice(start, start + SORT_CHUNK_SIZE).sort(compare));
     await setImmediate();
   }
 
   while (chunks.length > 1) {
+    if (options?.signal?.aborted) {
+      throw new DOMException("sortInChunks aborted", "AbortError");
+    }
     const merged: T[][] = [];
 
     for (let index = 0; index < chunks.length; index += 2) {
@@ -524,17 +635,7 @@ function compareLine(
   sortKey: AccessLogIndexPageOptions["sortKey"],
   direction: "asc" | "desc"
 ): number {
-  const multiplier = direction === "asc" ? 1 : -1;
-
-  if (sortKey === "bytes") {
-    return ((a.bytes ?? 0) - (b.bytes ?? 0)) * multiplier;
-  }
-
-  if (sortKey === "status") {
-    return (a.status - b.status) * multiplier;
-  }
-
-  return String(a[sortKey]).localeCompare(String(b[sortKey])) * multiplier;
+  return compareLineFromUtil(a, b, sortKey, direction);
 }
 
 function sequentialRows(totalRows: number, direction: "asc" | "desc"): number[] {
@@ -574,13 +675,7 @@ function compareSortableValue(
   b: string | number,
   direction: "asc" | "desc"
 ): number {
-  const multiplier = direction === "asc" ? 1 : -1;
-
-  if (typeof a === "number" && typeof b === "number") {
-    return (a - b) * multiplier;
-  }
-
-  return String(a).localeCompare(String(b)) * multiplier;
+  return compareSortableValueFromUtil(a, b, direction);
 }
 
 class SyncAccessLogIndexWriter implements AccessLogIndexWriter {

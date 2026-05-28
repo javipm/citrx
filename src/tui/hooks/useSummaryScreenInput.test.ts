@@ -128,7 +128,7 @@ function summaryInputDefaults(): Parameters<typeof handleSummaryScreenInput>[0] 
     setScreen: vi.fn(),
     setLineIndex: vi.fn(),
     setFilter: vi.fn(),
-    setSelectedLineKeys: vi.fn(),
+    setSelection: vi.fn(),
     setDetailLine: vi.fn(),
     setDetailScroll: vi.fn(),
     setSortMenu: vi.fn(),

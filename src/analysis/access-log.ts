@@ -88,6 +88,13 @@ interface Counters {
 interface MutableIncidentMatches {
   incidentId: string;
   totalMatches: number;
+  /**
+   * Row numbers in numerically ascending (stream) order. For "alias" kind this
+   * array is shared by reference with pathMatches — treat as read-only after
+   * assignment. For "stream" kind it is built via addIncidentLine in stream
+   * order — also read-only. For "grouped" kind it is a fresh array sorted by
+   * normalizeIncidentRowNumbers before finalization.
+   */
   rowNumbers: number[];
   lines: IncidentLogLine[];
 }
@@ -502,6 +509,28 @@ function insertTopItem(top: TopItem[], item: TopItem, limit: number): void {
   }
 }
 
+/**
+ * Ensures rowNumbers is numerically ascending (stream order). Must be called
+ * once per matchSet before finalization. "alias" and "stream" kinds are already
+ * monotonic; "grouped" (behavior incidents) may have path-interleaved rows.
+ */
+function normalizeIncidentRowNumbers(
+  matchSet: MutableIncidentMatches,
+  kind: "alias" | "grouped" | "stream"
+): void {
+  if (kind === "grouped") {
+    matchSet.rowNumbers.sort((a, b) => a - b);
+  } else if (process.env.NODE_ENV !== "production") {
+    for (let i = 1; i < matchSet.rowNumbers.length; i++) {
+      if (matchSet.rowNumbers[i] < matchSet.rowNumbers[i - 1]) {
+        throw new Error(
+          `rowNumbers not monotonic at index ${i} (kind=${kind}): ${matchSet.rowNumbers[i - 1]} > ${matchSet.rowNumbers[i]}`
+        );
+      }
+    }
+  }
+}
+
 async function incidentMatches(
   counters: Counters,
   aggregateIncidents: Incident[],
@@ -512,6 +541,7 @@ async function incidentMatches(
   let processed = 0;
 
   for (const [incidentId, matchSet] of counters.ruleMatches) {
+    normalizeIncidentRowNumbers(matchSet, "stream");
     matches.set(incidentId, matchSet);
     processed = await yieldAfterFinalizationItems(processed + 1, counters, options);
   }
@@ -521,12 +551,14 @@ async function incidentMatches(
     const pathMatches = counters.pathMatches.get(path);
 
     if (pathMatches) {
-      matches.set(incident.id, {
+      const entry: MutableIncidentMatches = {
         incidentId: incident.id,
         totalMatches: pathMatches.totalMatches,
         rowNumbers: pathMatches.rowNumbers,
         lines: pathMatches.lines
-      });
+      };
+      normalizeIncidentRowNumbers(entry, "alias");
+      matches.set(incident.id, entry);
     }
 
     processed = await yieldAfterFinalizationItems(processed + 1, counters, options);
@@ -536,6 +568,7 @@ async function incidentMatches(
     const matchSet = await behaviorIncidentMatches(incident, counters, options);
 
     if (matchSet.totalMatches > 0) {
+      normalizeIncidentRowNumbers(matchSet, "grouped");
       matches.set(incident.id, matchSet);
     }
 

@@ -112,6 +112,71 @@ describe("access log analysis incident matches", () => {
     expect(matches?.lines).toHaveLength(200);
   });
 
+  it("normalizes stream-kind rowNumbers to monotonic ascending (rule incidents)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    const lines = Array.from(
+      { length: 10 },
+      (_, i) =>
+        `203.0.113.10 - - [25/May/2026:03:12:${String(i).padStart(2, "0")} +0200] "GET /search?q=${i}%20UNION%20SELECT%20password HTTP/1.1" 200 120 "-" "Mozilla/5.0"`
+    );
+    await writeFile(logFile, lines.join("\n"));
+    const report = await analyzeAccessLogs([logFile], { top: 5, format: "auto" });
+    const matches = report.incidentMatches.find((m) => m.incidentId === "sqli:203.0.113.10");
+    expect(matches).toBeDefined();
+    const rows = matches!.rowNumbers;
+    for (let i = 1; i < rows.length; i++) {
+      expect(rows[i]).toBeGreaterThanOrEqual(rows[i - 1]);
+    }
+  });
+
+  it("normalizes alias-kind rowNumbers to monotonic ascending (aggregate path incidents)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    const lines: string[] = [];
+    for (let i = 0; i < 60; i++) {
+      lines.push(
+        `203.0.113.${i % 20} - - [25/May/2026:03:12:${String(i % 60).padStart(2, "0")} +0200] "GET /checkout HTTP/1.1" 200 1200 "-" "Mozilla/5.0"`
+      );
+    }
+    await writeFile(logFile, lines.join("\n"));
+    const report = await analyzeAccessLogs([logFile], { top: 5, format: "auto" });
+    const saturationMatch = report.incidentMatches.find(
+      (m) => m.incidentId.startsWith("path_saturation:") || m.incidentId.startsWith("single_path_")
+    );
+    // Any aggregate incident that aliases pathMatches.rowNumbers must be monotonic
+    for (const m of report.incidentMatches) {
+      const rows = m.rowNumbers;
+      for (let i = 1; i < rows.length; i++) {
+        expect(rows[i]).toBeGreaterThanOrEqual(rows[i - 1]);
+      }
+    }
+    void saturationMatch;
+  });
+
+  it("normalizes grouped-kind rowNumbers to monotonic ascending (behavior incidents)", async () => {
+    // GPTBot hits two interleaved paths → path-grouped rowNumbers would NOT be
+    // monotonic without normalization: path A rows [0,2,4], path B rows [1,3,5]
+    // → raw grouped = [0,2,4,1,3,5], normalized = [0,1,2,3,4,5]
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    const lines: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const path = i % 2 === 0 ? "/page-a" : "/page-b";
+      lines.push(
+        `203.0.113.10 - - [25/May/2026:03:12:${String(i).padStart(2, "0")} +0200] "GET ${path} HTTP/1.1" 200 200 "-" "GPTBot/1.0"`
+      );
+    }
+    await writeFile(logFile, lines.join("\n"));
+    const report = await analyzeAccessLogs([logFile], { top: 5, format: "auto" });
+    const match = report.incidentMatches.find((m) => m.incidentId === "ai_scraper_known:GPTBot");
+    expect(match).toBeDefined();
+    const rows = match!.rowNumbers;
+    for (let i = 1; i < rows.length; i++) {
+      expect(rows[i]).toBeGreaterThanOrEqual(rows[i - 1]);
+    }
+  });
+
   it("builds exact top user-agent and query parameter lists", async () => {
     const directory = await mkdtemp(join(tmpdir(), "citrx-"));
     const logFile = join(directory, "access.log");

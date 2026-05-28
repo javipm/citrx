@@ -1,5 +1,6 @@
 import type { IncidentLogLine } from "../../analysis/types.js";
 import { userAgentLabel } from "../../analysis/query-params.js";
+import { compareLine as compareLineFromUtil } from "../../utils/line-compare.js";
 import type { AccessTableColumns, SortKey, SortDirection } from "../types.js";
 import { compactDateTime, fitText } from "./format.js";
 
@@ -75,17 +76,7 @@ export function compareLine(
   sortKey: SortKey,
   direction: SortDirection
 ): number {
-  const multiplier = direction === "asc" ? 1 : -1;
-
-  if (sortKey === "bytes") {
-    return ((a.bytes ?? 0) - (b.bytes ?? 0)) * multiplier;
-  }
-
-  if (sortKey === "status") {
-    return (a.status - b.status) * multiplier;
-  }
-
-  return String(a[sortKey]).localeCompare(String(b[sortKey])) * multiplier;
+  return compareLineFromUtil(a, b, sortKey, direction);
 }
 
 export function sortLabel(sortKey: SortKey): string {

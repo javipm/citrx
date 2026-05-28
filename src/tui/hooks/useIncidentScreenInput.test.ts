@@ -2,52 +2,213 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Incident, IncidentLogLine } from "../../analysis/types.js";
 import { handleIncidentScreenInput } from "./useIncidentScreenInput.js";
+import { lineKey } from "../utils/table.js";
 
 describe("incident export", () => {
-  it("does not export while incident rows are still loading", async () => {
-    const exportContext = vi.fn(async () => "incident.json");
-    const setExportLoading = vi.fn();
+  it("opens export menu when no rows selected but incident loaded", () => {
     const setExportMenu = vi.fn();
     const setMessage = vi.fn();
 
     handleIncidentScreenInput({
       ...incidentInputDefaults(),
       inputValue: "e",
-      exportReady: false,
-      setExportLoading,
+      selectedLines: [],
+      total: 5,
       setExportMenu,
       setMessage
     });
 
-    await flushDeferredExport();
-
-    expect(exportContext).not.toHaveBeenCalled();
-    expect(setExportMenu).not.toHaveBeenCalled();
-    expect(setExportLoading).not.toHaveBeenCalled();
-    expect(setMessage).toHaveBeenCalledWith("Still loading incident rows before export...");
+    expect(setExportMenu).toHaveBeenCalledWith({ format: "json" });
+    expect(setMessage).toHaveBeenCalledWith("Choose export format");
   });
 
   it("opens the export menu for selected rows", () => {
     const selectedLine = line(7);
-    const exportContext = vi.fn(async () => "incident.json");
     const setExportMenu = vi.fn();
-    const setExportLoading = vi.fn();
     const setMessage = vi.fn();
 
     handleIncidentScreenInput({
       ...incidentInputDefaults(),
       inputValue: "e",
-      lines: [line(1)],
       selectedLines: [selectedLine],
       setExportMenu,
-      setExportLoading,
       setMessage
     });
 
     expect(setExportMenu).toHaveBeenCalledWith({ format: "json" });
     expect(setMessage).toHaveBeenCalledWith("Choose export format for selected rows");
-    expect(setExportLoading).not.toHaveBeenCalled();
-    expect(exportContext).not.toHaveBeenCalled();
+  });
+});
+
+describe("incident navigation", () => {
+  it("clamps cursor to total on down arrow", () => {
+    const setLineIndex = vi.fn();
+
+    handleIncidentScreenInput({
+      ...incidentInputDefaults(),
+      inputValue: "",
+      key: { downArrow: true },
+      lineIndex: 4,
+      total: 5,
+      setLineIndex
+    });
+
+    // total-1 = 4, so setLineIndex updater should clamp to 4
+    const updater = (setLineIndex.mock.calls[0] as [Function])[0] as (v: number) => number;
+    expect(updater(4)).toBe(4);
+    expect(updater(3)).toBe(4);
+  });
+
+  it("does not abort on Escape (global abort handles this now)", () => {
+    // Esc in the new design is handled by app.ts activeAbort check before
+    // handleIncidentScreenInput is called; the handler itself just returns.
+    const setMessage = vi.fn();
+
+    handleIncidentScreenInput({
+      ...incidentInputDefaults(),
+      inputValue: "",
+      key: { escape: true },
+      setMessage
+    });
+
+    // No abort called, no message set — caller handles it
+    expect(setMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("A select-all", () => {
+  it("merges page lines into selection map when above limit", () => {
+    const setSelection = vi.fn();
+    const setMessage = vi.fn();
+    const pages = [line(10), line(11), line(12)];
+
+    handleIncidentScreenInput({
+      ...incidentInputDefaults(),
+      inputValue: "A",
+      pageLines: pages,
+      total: 10000, // above INCIDENT_SELECT_ALL_LIMIT → page-only path
+      setSelection,
+      setMessage
+    });
+
+    expect(setSelection).toHaveBeenCalledOnce();
+    // The updater should add the 3 lines to an empty map
+    const updater = (setSelection.mock.calls[0] as [Function])[0] as (
+      v: Map<string, IncidentLogLine>
+    ) => Map<string, IncidentLogLine>;
+    const result = updater(new Map());
+    expect(result.size).toBe(3);
+    expect(result.has(lineKey(pages[0]!))).toBe(true);
+    expect(setMessage).toHaveBeenCalledWith("Selected 3 visible lines");
+  });
+
+  it("calls onSelectAll when total is within limit", () => {
+    const onSelectAll = vi.fn();
+    const setSelection = vi.fn();
+    const setMessage = vi.fn();
+    const pages = [line(10), line(11)];
+
+    handleIncidentScreenInput({
+      ...incidentInputDefaults(),
+      inputValue: "A",
+      pageLines: pages,
+      total: 100, // within INCIDENT_SELECT_ALL_LIMIT
+      setSelection,
+      setMessage,
+      onSelectAll
+    });
+
+    expect(onSelectAll).toHaveBeenCalledOnce();
+    expect(setSelection).not.toHaveBeenCalled();
+  });
+
+  it("falls back to page-only if onSelectAll not provided", () => {
+    const setSelection = vi.fn();
+    const setMessage = vi.fn();
+    const pages = [line(10)];
+
+    handleIncidentScreenInput({
+      ...incidentInputDefaults(),
+      inputValue: "A",
+      pageLines: pages,
+      total: 100, // within limit but no onSelectAll
+      setSelection,
+      setMessage
+      // onSelectAll not provided
+    });
+
+    expect(setSelection).toHaveBeenCalledOnce();
+    expect(setMessage).toHaveBeenCalledWith("Selected 1 visible lines");
+  });
+});
+
+describe("Space selection", () => {
+  it("toggles a line into the selection map", () => {
+    const setSelection = vi.fn();
+    const lineToSelect = line(5);
+
+    handleIncidentScreenInput({
+      ...incidentInputDefaults(),
+      inputValue: " ",
+      pageLines: [lineToSelect],
+      lineIndex: 0,
+      pageStart: 0,
+      setSelection
+    });
+
+    const updater = (setSelection.mock.calls[0] as [Function])[0] as (
+      v: Map<string, IncidentLogLine>
+    ) => Map<string, IncidentLogLine>;
+    const result = updater(new Map());
+    expect(result.size).toBe(1);
+    expect(result.has(lineKey(lineToSelect))).toBe(true);
+  });
+
+  it("removes a line already in the selection map", () => {
+    const setSelection = vi.fn();
+    const lineToDeselect = line(5);
+    const existing = new Map([[lineKey(lineToDeselect), lineToDeselect]]);
+
+    handleIncidentScreenInput({
+      ...incidentInputDefaults(),
+      inputValue: " ",
+      pageLines: [lineToDeselect],
+      lineIndex: 0,
+      pageStart: 0,
+      setSelection
+    });
+
+    const updater = (setSelection.mock.calls[0] as [Function])[0] as (
+      v: Map<string, IncidentLogLine>
+    ) => Map<string, IncidentLogLine>;
+    const result = updater(existing);
+    expect(result.size).toBe(0);
+  });
+});
+
+describe("r reset", () => {
+  it("resets filter and selection", () => {
+    const setSelection = vi.fn();
+    const setFilter = vi.fn();
+    const setLineIndex = vi.fn();
+    const setMessage = vi.fn();
+
+    handleIncidentScreenInput({
+      ...incidentInputDefaults(),
+      inputValue: "r",
+      setSelection,
+      setFilter,
+      setLineIndex,
+      setMessage
+    });
+
+    expect(setFilter).toHaveBeenCalledWith("");
+    expect(setSelection).toHaveBeenCalledOnce();
+    const updater = (setSelection.mock.calls[0] as [Function])[0] as (
+      v: Map<string, IncidentLogLine>
+    ) => Map<string, IncidentLogLine>;
+    expect(updater(new Map([["k", line(1)]])).size).toBe(0);
+    expect(setMessage).toHaveBeenCalledWith("Filter and selection reset");
   });
 });
 
@@ -87,18 +248,19 @@ function incidentInputDefaults(): Parameters<typeof handleIncidentScreenInput>[0
     inputValue: "",
     key: {},
     incident: incident(),
-    lines: [line(0)],
+    total: 1,
+    pageLines: [line(0)],
+    pageStart: 0,
+    pageLoading: false,
     selectedLines: [],
     lineIndex: 0,
     pageSize: 10,
     filter: "",
     sortKey: "timestamp",
     sortDirection: "desc",
-    runId: "run-1",
-    exportReady: true,
     setLineIndex: vi.fn(),
     setFilter: vi.fn(),
-    setSelectedLineKeys: vi.fn(),
+    setSelection: vi.fn(),
     setDetailLine: vi.fn(),
     setDetailScroll: vi.fn(),
     setSortMenu: vi.fn(),
@@ -108,11 +270,4 @@ function incidentInputDefaults(): Parameters<typeof handleIncidentScreenInput>[0
     setExportMenu: vi.fn(),
     setMessage: vi.fn()
   };
-}
-
-async function flushDeferredExport(): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
-  await Promise.resolve();
 }

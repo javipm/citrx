@@ -11,7 +11,6 @@ export function SummaryScreen({
   incidents,
   incidentIndex,
   focus,
-  lines,
   pageLines,
   pageStart,
   lineIndex,
@@ -27,7 +26,6 @@ export function SummaryScreen({
   incidents: Incident[];
   incidentIndex: number;
   focus: SummaryFocus;
-  lines: IncidentLogLine[];
   pageLines: IncidentLogLine[];
   pageStart: number;
   lineIndex: number;
@@ -54,7 +52,6 @@ export function SummaryScreen({
       })
     ),
     React.createElement(LineTable, {
-      lines,
       pageLines,
       pageStart,
       lineIndex,

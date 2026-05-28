@@ -1,13 +1,17 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { setImmediate } from "node:timers/promises";
 import type { AnalyzeReport, Incident, IncidentLogLine, TopItem } from "../../analysis/types.js";
 import { requestParamLabels, userAgentLabel } from "../../analysis/query-params.js";
 import type { AccessLogIndexQueryCache } from "../../run/access-index.js";
-import { readAccessLogIndexRows } from "../../run/access-index.js";
+import {
+  readAccessLogIndexRows,
+  arrayOrderedRowNumbers,
+  iterateAccessLogIndexChunks
+} from "../../run/access-index.js";
 import type { CitrxRun } from "../../run/types.js";
 import { createAccessLogLineFilter } from "../filter.js";
-import type { TopScope, TopPanelKey, IncidentInsights } from "../types.js";
+import type { TopScope, TopPanelKey, IncidentInsights, ActiveAbortEntry } from "../types.js";
 import { TOP_PANEL_KEYS } from "../types.js";
 import { severityColor } from "../utils/colors.js";
 import { fitText } from "../utils/format.js";
@@ -162,7 +166,11 @@ export async function incidentInsightsFromAccessIndex(
 export async function incidentInsightsFromRows(
   run: CitrxRun,
   rowNumbers: number[],
-  filter: string
+  filter: string,
+  options?: {
+    signal?: AbortSignal;
+    onProgress?: (done: number, total: number) => void;
+  }
 ): Promise<{
   insights: IncidentInsights;
   count: number;
@@ -178,19 +186,28 @@ export async function incidentInsightsFromRows(
     ? createAccessLogLineFilter(filter)
     : () => true;
   let count = 0;
+  const total = rowNumbers.length;
+  let done = 0;
+  let lastProgress = Date.now();
 
-  for (let start = 0; start < rowNumbers.length; start += TOP_INSIGHT_READ_BATCH) {
-    for (const line of readAccessLogIndexRows(
-      run.accessIndex,
-      rowNumbers.slice(start, start + TOP_INSIGHT_READ_BATCH)
-    )) {
+  for await (const chunk of iterateAccessLogIndexChunks(
+    run.accessIndex,
+    arrayOrderedRowNumbers(rowNumbers),
+    { signal: options?.signal }
+  )) {
+    for (const line of chunk) {
       if (matches(line)) {
         count += 1;
         addInsightLine(maps, line);
       }
     }
-
-    await setImmediate();
+    done += chunk.length;
+    const now = Date.now();
+    if (options?.onProgress && now - lastProgress >= 100) {
+      options.onProgress(done, total);
+      lastProgress = now;
+    }
+    if (options?.signal?.aborted) break;
   }
 
   return {
@@ -376,6 +393,7 @@ export function TopValuesScreen({
   focus,
   selectedIndexes,
   onApplyFilter,
+  setActiveAbort,
   columns
 }: {
   run: CitrxRun;
@@ -387,6 +405,7 @@ export function TopValuesScreen({
   focus: TopPanelKey;
   selectedIndexes: Record<TopPanelKey, number>;
   onApplyFilter: (filter: string) => void;
+  setActiveAbort?: (v: ActiveAbortEntry | undefined) => void;
   columns: number;
 }): React.ReactElement {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
@@ -405,6 +424,8 @@ export function TopValuesScreen({
   const [loading, setLoading] = useState(false);
   const panelWidth = Math.max(30, Math.floor((columns - 7) / 2));
   const headerWidth = Math.max(40, columns - 10);
+  // Track abort controller for tops computation so global Esc can cancel it
+  const topsAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (scope !== "summary") {
@@ -449,38 +470,57 @@ export function TopValuesScreen({
       return;
     }
 
-    let cancelled = false;
-
     if (!matchSet) {
       setIncidentTopValues(undefined);
       setLoading(false);
-      return () => {
-        cancelled = true;
-      };
+      return;
     }
 
     setIncidentTopValues(undefined);
     setLoading(true);
 
+    const controller = new AbortController();
+    topsAbortRef.current = controller;
+    const total = matchSet.rowNumbers.length;
+    let lastProgressMs = Date.now();
+
+    setActiveAbort?.({
+      kind: "tops",
+      controller,
+      label: "Computing top values… Esc to cancel"
+    });
+
     void (async () => {
       await setImmediate();
-      return incidentInsightsFromRows(run, matchSet.rowNumbers, filter);
+      return incidentInsightsFromRows(run, matchSet.rowNumbers, filter, {
+        signal: controller.signal,
+        onProgress: (done) => {
+          const now = Date.now();
+          if (now - lastProgressMs >= 100) {
+            lastProgressMs = now;
+            // progress is reflected via loading state; no separate message setter here
+            void done, total;
+          }
+        }
+      });
     })()
       .then((value) => {
-        if (!cancelled) {
-          setIncidentTopValues(value);
-          setLoading(false);
-        }
+        topsAbortRef.current = null;
+        setActiveAbort?.(undefined);
+        setIncidentTopValues(value);
+        setLoading(false);
       })
       .catch(() => {
-        if (!cancelled) {
-          setIncidentTopValues(undefined);
-          setLoading(false);
-        }
+        topsAbortRef.current = null;
+        setActiveAbort?.(undefined);
+        setIncidentTopValues(undefined);
+        setLoading(false);
       });
 
     return () => {
-      cancelled = true;
+      controller.abort();
+      topsAbortRef.current = null;
+      setActiveAbort?.(undefined);
     };
   }, [filter, matchSet, run, scope]);
 

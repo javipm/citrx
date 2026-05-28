@@ -233,16 +233,24 @@ q                pide confirmación para salir
 h                ayuda contextual
 ```
 
-El export de incidencia sólo aparece cuando todos los requests relacionados han
-terminado de cargarse, para evitar exportar una muestra parcial hidratada en
-background.
+Las filas de incidencia se cargan bajo demanda: la pantalla responde de inmediato
+incluso en incidencias muy grandes. Filtrar u ordenar una incidencia grande muestra
+progreso en la barra de estado; pulsa Esc para cancelar y volver al resultado
+anterior.
+
+El export de incidencia lanza el volcado directamente desde el índice sin esperar
+a que carguen todos los rows. Con filas seleccionadas exporta la selección en
+memoria; sin selección hace streaming de todos los rows filtrados a un fichero
+temporal y lo renombra de forma atómica al terminar. Esc cancela un export en
+curso.
 
 ### Menú De Export
 
 Pulsa `e` desde resumen o incidencia para elegir formato antes de escribir el
 contexto actual. En resumen se exportan las filas seleccionadas, o todo el
 resultado filtrado si no hay selección. En incidencia se exportan las filas
-seleccionadas, o todas las filas filtradas de esa incidencia.
+seleccionadas si hay selección, o todas las filas filtradas de esa incidencia
+mediante streaming si no hay selección.
 
 ```text
 ↑/↓              elige CSV, JSON o TSV

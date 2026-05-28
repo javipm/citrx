@@ -1,25 +1,34 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useWindowSize } from "ink";
 
-import { writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { writeFile, unlink, rename } from "node:fs/promises";
+import { finished } from "node:stream/promises";
 import path from "node:path";
 
 import type { Incident, IncidentLogLine } from "../analysis/types.js";
 import {
   AccessLogIndexQueryCache,
   passThroughFilter,
-  readAccessLogIndexCachedPage
+  readAccessLogIndexCachedPage,
+  iterateAccessLogIndexChunks,
+  arrayOrderedRowNumbers
 } from "../run/access-index.js";
 import type { CitrxRun } from "../run/types.js";
 
 // Types
 export type { TuiRuntime } from "./types.js";
-import type { TuiRuntime } from "./types.js";
+import type { TuiRuntime, ActiveAbortEntry } from "./types.js";
 
 // Utils
 import { fitText, sanitizeFilePart } from "./utils/format.js";
-import { sortLabel } from "./utils/table.js";
-import { serializeExport } from "./export.js";
+import { sortLabel, lineKey } from "./utils/table.js";
+import { serializeExport, streamSerializeExport } from "./export.js";
+import {
+  addLinesToSelectionWithCap,
+  INCIDENT_MANUAL_SELECT_LIMIT,
+  INCIDENT_SELECT_ALL_LIMIT
+} from "./utils/selection.js";
 
 // Hooks
 import { useNavigationState } from "./hooks/useNavigationState.js";
@@ -28,6 +37,7 @@ import { useFilterSortState } from "./hooks/useFilterSortState.js";
 import { usePageLayout } from "./hooks/usePageLayout.js";
 import { useVisibleLines } from "./hooks/useVisibleLines.js";
 import { useAccessLogQuery } from "./hooks/useAccessLogQuery.js";
+import { useIncidentQuery, IncidentQueryCache } from "./hooks/useIncidentQuery.js";
 import { handleSortMenuInput } from "./hooks/useSortMenuInput.js";
 import { handleExportMenuInput } from "./hooks/useExportMenuInput.js";
 import { handlePromptInput } from "./hooks/usePromptInput.js";
@@ -60,12 +70,6 @@ import type { ExportFormat, HelpOverlayState, HelpContext } from "./types.js";
 
 /**
  * Launch the interactive TUI for a completed citrx run.
- *
- * Renders the {@link CitrxExplorer} React/Ink application into the provided
- * runtime streams and blocks until the user confirms quit (q / Escape, then y / Enter).
- *
- * @param run     The completed `CitrxRun` whose report and logs to explore.
- * @param runtime I/O streams and optional OpenAI client for AI features.
  */
 export async function openRunTui(run: CitrxRun, runtime: TuiRuntime): Promise<void> {
   const instance = render(
@@ -85,15 +89,7 @@ export async function openRunTui(run: CitrxRun, runtime: TuiRuntime): Promise<vo
 }
 
 /**
- * Serialize an incident and its associated log lines to a JSON file in cwd.
- *
- * Output filename: `citrx-<runId>-<incidentId>.json`
- * (or `citrx-<runId>-summary.json` when `incident` is undefined).
- *
- * @param runId    Identifier of the active run; used in the filename.
- * @param incident The incident to export, or `undefined` for a summary export.
- * @param lines    Log lines to include alongside the incident data.
- * @returns        Absolute path of the written file.
+ * Serialize an incident and its associated log lines to a file in cwd.
  */
 async function exportContext(
   runId: string,
@@ -158,20 +154,13 @@ function Header({ run, columns }: { run: CitrxRun; columns: number }) {
 
 /**
  * Main TUI orchestrator component.
- *
- * Composes all navigation, content, filter/sort, and layout hooks, then routes
- * keyboard input to the active screen handler (summary, incident, tops, detail,
- * or AI answer). Renders the appropriate screen together with overlay bars
- * (sort menu, prompt, export notice, footer).
- *
- * @param run     The completed `CitrxRun` whose report and logs are displayed.
- * @param runtime I/O streams and optional OpenAI client forwarded to AI hooks.
  */
 function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime }) {
   const { exit } = useApp();
   const { rows, columns } = useWindowSize();
   const [quitConfirm, setQuitConfirm] = useState(false);
   const [helpOverlay, setHelpOverlay] = useState<HelpOverlayState | null>(null);
+  const [activeAbort, setActiveAbort] = useState<ActiveAbortEntry | undefined>(undefined);
 
   const {
     screen,
@@ -210,8 +199,9 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     setSortKey,
     sortDirection,
     setSortDirection,
+    selection,
+    setSelection,
     selectedLineKeys,
-    setSelectedLineKeys,
     prompt,
     setPrompt,
     sortMenu,
@@ -231,8 +221,29 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
   } = useFilterSortState();
 
   const accessQueryCache = useMemo(() => new AccessLogIndexQueryCache(), [run.accessIndex]);
+  const incidentQueryCache = useMemo(() => new IncidentQueryCache(), [run.accessIndex]);
   const incidents = run.report.incidents;
   const incident = incidents[incidentIndex];
+
+  const incidentMatchSet = useMemo(
+    () => run.report.incidentMatches.find((m) => m.incidentId === incident?.id),
+    [run.report.incidentMatches, incident?.id]
+  );
+
+  const {
+    orderedRowNumbers,
+    total: incidentTotal,
+    building: incidentBuilding
+  } = useIncidentQuery({
+    matchSet: incidentMatchSet,
+    accessIndex: run.accessIndex,
+    incidentQueryCache,
+    filter,
+    sortKey,
+    sortDirection,
+    setIndexLoading,
+    setMessage
+  });
 
   const { pageSize, summaryPageSize, detailRows, detailWidth, answerRows, answerWidth } =
     usePageLayout({ screen, rows, columns, prompt, exportNotice });
@@ -255,22 +266,20 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
   });
 
   const {
-    lines,
-    selectedLines,
-    selectedGlobalLines,
-    pageStart,
     pageLines,
-    incidentLinesLoading,
+    pageLoading,
+    pageStart,
+    selectedLines,
+    selectedLineKeys: derivedSelectedLineKeys,
+    selectedGlobalLines,
     detailLines,
     visibleDetailLines,
     openAiAnswerLines,
     visibleOpenAiAnswerLines
   } = useVisibleLines({
-    run,
-    incidentId: incident?.id,
-    filter,
-    sortKey,
-    sortDirection,
+    accessIndex: run.accessIndex,
+    orderedRowNumbers,
+    incidentTotal,
     lineIndex,
     summaryPageLines,
     summaryPageStart: computedSummaryPageStart,
@@ -283,13 +292,85 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     answerWidth,
     openAiAnswerScroll,
     answerRows,
-    selectedLineKeys
+    selection,
+    incidentRowNumbers: incidentMatchSet?.rowNumbers
   });
+
+  // Use the derived set from useVisibleLines (same reference as selectedLineKeys from state)
+  void derivedSelectedLineKeys;
 
   const requestExit = () => {
     setQuitConfirm(true);
     setMessage("Exit citrx? Press y/Enter to quit, Esc/n to stay");
   };
+
+  const handleSelectAll = useCallback(() => {
+    if (!orderedRowNumbers || incidentTotal > INCIDENT_SELECT_ALL_LIMIT) {
+      // Page-only select
+      const { selection: next, capHit } = addLinesToSelectionWithCap(
+        selection,
+        pageLines,
+        INCIDENT_MANUAL_SELECT_LIMIT
+      );
+      setSelection(() => next);
+      setMessage(
+        capHit
+          ? `Selection cap reached (${INCIDENT_MANUAL_SELECT_LIMIT})`
+          : `Selected ${pageLines.length} visible lines`
+      );
+      return;
+    }
+
+    const controller = new AbortController();
+    setActiveAbort({ kind: "select-all", controller, label: "Selecting all… Esc to cancel" });
+    const total = incidentTotal;
+
+    void (async () => {
+      const next = new Map(selection);
+      let done = 0;
+      let lastMsg = Date.now();
+      let capHit = false;
+      try {
+        for await (const chunk of iterateAccessLogIndexChunks(
+          run.accessIndex,
+          orderedRowNumbers,
+          { signal: controller.signal }
+        )) {
+          for (const line of chunk) {
+            if (next.size >= INCIDENT_MANUAL_SELECT_LIMIT) {
+              capHit = true;
+              break;
+            }
+            next.set(lineKey(line), line);
+          }
+          done += chunk.length;
+          const now = Date.now();
+          if (now - lastMsg >= 100) {
+            setMessage(`Selecting… ${done.toLocaleString()} / ${total.toLocaleString()}`);
+            lastMsg = now;
+          }
+          if (capHit) break;
+          if (controller.signal.aborted) break;
+        }
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          setMessage(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        setSelection(() => next);
+        setActiveAbort(undefined);
+        if (!controller.signal.aborted) {
+          setMessage(
+            capHit
+              ? `Selection cap reached (${INCIDENT_MANUAL_SELECT_LIMIT}). Filter to narrow.`
+              : `Selected ${next.size.toLocaleString()} rows`
+          );
+        } else {
+          setMessage("Selection cancelled");
+        }
+      }
+    })();
+  }, [orderedRowNumbers, incidentTotal, selection, pageLines, run.accessIndex]);
 
   const applyExport = (format: ExportFormat) => {
     setExportMenu(undefined);
@@ -341,19 +422,79 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       return;
     }
 
-    const exportable = selectedLines.length > 0 ? selectedLines : lines;
+    // Incident screen export
+    if (selectedLines.length > 0) {
+      // Selected rows: in-memory path (fast, bounded)
+      const exportable = selectedLines;
+      setTimeout(() => {
+        void exportContext(run.id, incident, exportable, format)
+          .then((file) => {
+            setExportNotice({ file, lines: exportable.length, format });
+            setMessage(`Export OK: ${exportable.length} rows saved`);
+          })
+          .catch((error) => {
+            setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+          })
+          .finally(() => {
+            setExportLoading(false);
+          });
+      }, 0);
+      return;
+    }
+
+    // Full incident: streaming path
+    if (!orderedRowNumbers) {
+      setMessage("Incident not loaded yet");
+      setExportLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setActiveAbort({ kind: "export", controller, label: "Exporting… Esc to cancel" });
+    const safeRunId = sanitizeFilePart(run.id);
+    const safeId = sanitizeFilePart(incident?.id ?? "incident");
+    const finalPath = path.join(process.cwd(), `citrx-${safeRunId}-${safeId}.${format}`);
+    const tmpPath = path.join(
+      path.dirname(finalPath),
+      `.${path.basename(finalPath)}.tmp-${process.pid}`
+    );
+    const stream = createWriteStream(tmpPath);
+    const sig = controller.signal;
+
     setTimeout(() => {
-      void exportContext(run.id, incident, exportable, format)
-        .then((file) => {
-          setExportNotice({ file, lines: exportable.length, format });
-          setMessage(`Export OK: ${exportable.length} rows saved`);
-        })
-        .catch((error) => {
-          setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
-        })
-        .finally(() => {
-          setExportLoading(false);
+    void (async () => {
+      try {
+        await streamSerializeExport(incident, { run, orderedRowNumbers }, format, stream, {
+          signal: sig,
+          onProgress: (done, total) => {
+            setMessage(
+              `Exporting ${format.toUpperCase()}… ${done.toLocaleString()} / ${total.toLocaleString()}`
+            );
+          }
         });
+        stream.end();
+        await finished(stream);
+        await unlink(finalPath).catch((e: NodeJS.ErrnoException) => {
+          if (e.code !== "ENOENT") throw e;
+        });
+        await rename(tmpPath, finalPath);
+        setExportNotice({ file: finalPath, lines: orderedRowNumbers.length, format });
+        setMessage(`Export OK: ${orderedRowNumbers.length.toLocaleString()} rows saved`);
+      } catch (err) {
+        stream.destroy();
+        await finished(stream).catch(() => {});
+        await unlink(tmpPath).catch(() => {});
+        const isAbort = err instanceof DOMException && err.name === "AbortError";
+        if (!isAbort) {
+          setMessage(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+        } else {
+          setMessage("Export cancelled");
+        }
+      } finally {
+        setExportLoading(false);
+        setActiveAbort(undefined);
+      }
+    })();
     }, 0);
   };
 
@@ -443,7 +584,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
           } else {
             setLineIndex(0);
           }
-          setSelectedLineKeys(new Set());
+          setSelection(() => new Map());
           setMessage(`Sort: ${sortLabel(nextSortKey)} ${nextSortDirection}`);
         },
         setMessage
@@ -471,7 +612,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
         setPrompt,
         setFilter,
         setLineIndex: screen === "summary" ? setSummaryLineIndex : setLineIndex,
-        setSelectedLineKeys,
+        setSelection: (v) => setSelection(() => v),
         setMessage,
         submitAi: (question, state) => {
           void submitOpenAi({
@@ -490,6 +631,14 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
           });
         }
       });
+      return;
+    }
+
+    // Global Esc: cancel active abort
+    if (key.escape && activeAbort) {
+      activeAbort.controller.abort();
+      setActiveAbort(undefined);
+      setMessage("Cancelled");
       return;
     }
 
@@ -534,6 +683,10 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     }
 
     if ((inputValue === "b" || key.backspace || key.escape) && screen === "incident") {
+      if (key.escape && incidentBuilding) {
+        // Cancel incident build via its own abort (not activeAbort)
+        // useIncidentQuery manages its own AbortController internally
+      }
       setScreen("summary");
       setMessage("Back to summary");
       return;
@@ -562,7 +715,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
         setScreen,
         setLineIndex,
         setFilter,
-        setSelectedLineKeys,
+        setSelection,
         setDetailLine,
         setDetailScroll,
         setSortMenu,
@@ -598,18 +751,19 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       inputValue,
       key,
       incident,
-      lines,
+      total: incidentTotal,
+      pageLines,
+      pageStart,
+      pageLoading,
       selectedLines,
       lineIndex,
       pageSize,
       filter,
       sortKey,
       sortDirection,
-      runId: run.id,
-      exportReady: !incidentLinesLoading,
       setLineIndex,
       setFilter,
-      setSelectedLineKeys,
+      setSelection,
       setDetailLine,
       setDetailScroll,
       setSortMenu,
@@ -617,11 +771,12 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       setScreen,
       setPrompt,
       setExportMenu,
-      setMessage
+      setMessage,
+      onSelectAll: handleSelectAll
     });
   });
 
-  const loading = indexLoading || incidentLinesLoading || exportLoading;
+  const loading = indexLoading || exportLoading;
 
   return React.createElement(
     Box,
@@ -650,7 +805,6 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
                 incidents,
                 incidentIndex,
                 focus: summaryFocus,
-                lines: [],
                 totalLines: globalTotal,
                 pageLines: summaryPageLines,
                 pageStart: computedSummaryPageStart,
@@ -675,19 +829,20 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
                   onApplyFilter: (nextFilter: string) => {
                     setIndexLoading(true);
                     setFilter(nextFilter);
-                    setSelectedLineKeys(new Set());
+                    setSelection(() => new Map());
                     setLineIndex(0);
                     setSummaryLineIndex(0);
                     setSummaryFocus("accesses");
                     setScreen(topScope === "summary" ? "summary" : "incident");
                     setMessage(`Filter applied: ${nextFilter}`);
                   },
+                  setActiveAbort,
                   columns
                 })
               : React.createElement(IncidentScreen, {
                   report: run.report,
                   incident,
-                  lines,
+                  incidentTotal,
                   pageLines,
                   pageStart,
                   lineIndex,
@@ -696,7 +851,8 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
                   sortDirection,
                   selectedLineKeys,
                   columns,
-                  loading: indexLoading || incidentLinesLoading
+                  loading: indexLoading || pageLoading || exportLoading,
+                  loadingMessage: exportLoading ? message : "Loading page…"
                 })
     ),
     sortMenu ? React.createElement(SortMenuOverlay, { sortMenu, columns, rows }) : null,
@@ -712,7 +868,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       answerOpen: Boolean(openAiAnswer),
       busy,
       loading,
-      incidentExportReady: !incidentLinesLoading,
+      incidentExportReady: selectedLines.length > 0 || Boolean(orderedRowNumbers),
       message,
       selected: selectedLineKeys.size,
       columns
