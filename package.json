@@ -14,6 +14,8 @@
     "LICENSE"
   ],
   "scripts": {
+    "sync-version": "tsx scripts/sync-version.ts",
+    "prebuild": "pnpm run sync-version",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
@@ -21,7 +23,9 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "test": "vitest run",
+    "predev": "pnpm run sync-version",
     "dev": "tsx src/cli.ts",
+    "version": "pnpm run sync-version && git add src/version.ts package.json",
     "update-bot-ranges": "tsx scripts/update-bot-ranges.ts",
     "prepack": "pnpm run build"
   },
