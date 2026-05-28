@@ -131,13 +131,9 @@ describe("streamSerializeExport", () => {
 
       const stream = new PassThrough();
       await expect(
-        streamSerializeExport(
-          undefined,
-          { run, orderedRowNumbers: rowNumbers },
-          "json",
-          stream,
-          { signal: controller.signal }
-        )
+        streamSerializeExport(undefined, { run, orderedRowNumbers: rowNumbers }, "json", stream, {
+          signal: controller.signal
+        })
       ).rejects.toMatchObject({ name: "AbortError" });
     } finally {
       await rm(directory, { recursive: true, force: true });

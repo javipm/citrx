@@ -4,6 +4,8 @@ import type { Incident, IncidentLogLine } from "../../analysis/types.js";
 import { handleIncidentScreenInput } from "./useIncidentScreenInput.js";
 import { lineKey } from "../utils/table.js";
 
+type StateUpdater<T> = (value: T) => T;
+
 describe("incident export", () => {
   it("opens export menu when no rows selected but incident loaded", () => {
     const setExportMenu = vi.fn();
@@ -54,7 +56,7 @@ describe("incident navigation", () => {
     });
 
     // total-1 = 4, so setLineIndex updater should clamp to 4
-    const updater = (setLineIndex.mock.calls[0] as [Function])[0] as (v: number) => number;
+    const updater = (setLineIndex.mock.calls[0] as [StateUpdater<number>])[0];
     expect(updater(4)).toBe(4);
     expect(updater(3)).toBe(4);
   });
@@ -93,9 +95,7 @@ describe("A select-all", () => {
 
     expect(setSelection).toHaveBeenCalledOnce();
     // The updater should add the 3 lines to an empty map
-    const updater = (setSelection.mock.calls[0] as [Function])[0] as (
-      v: Map<string, IncidentLogLine>
-    ) => Map<string, IncidentLogLine>;
+    const updater = (setSelection.mock.calls[0] as [StateUpdater<Map<string, IncidentLogLine>>])[0];
     const result = updater(new Map());
     expect(result.size).toBe(3);
     expect(result.has(lineKey(pages[0]!))).toBe(true);
@@ -156,9 +156,7 @@ describe("Space selection", () => {
       setSelection
     });
 
-    const updater = (setSelection.mock.calls[0] as [Function])[0] as (
-      v: Map<string, IncidentLogLine>
-    ) => Map<string, IncidentLogLine>;
+    const updater = (setSelection.mock.calls[0] as [StateUpdater<Map<string, IncidentLogLine>>])[0];
     const result = updater(new Map());
     expect(result.size).toBe(1);
     expect(result.has(lineKey(lineToSelect))).toBe(true);
@@ -178,9 +176,7 @@ describe("Space selection", () => {
       setSelection
     });
 
-    const updater = (setSelection.mock.calls[0] as [Function])[0] as (
-      v: Map<string, IncidentLogLine>
-    ) => Map<string, IncidentLogLine>;
+    const updater = (setSelection.mock.calls[0] as [StateUpdater<Map<string, IncidentLogLine>>])[0];
     const result = updater(existing);
     expect(result.size).toBe(0);
   });
@@ -204,9 +200,7 @@ describe("r reset", () => {
 
     expect(setFilter).toHaveBeenCalledWith("");
     expect(setSelection).toHaveBeenCalledOnce();
-    const updater = (setSelection.mock.calls[0] as [Function])[0] as (
-      v: Map<string, IncidentLogLine>
-    ) => Map<string, IncidentLogLine>;
+    const updater = (setSelection.mock.calls[0] as [StateUpdater<Map<string, IncidentLogLine>>])[0];
     expect(updater(new Map([["k", line(1)]])).size).toBe(0);
     expect(setMessage).toHaveBeenCalledWith("Filter and selection reset");
   });

@@ -36,8 +36,16 @@
     "tui"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/javipm/citrx.git"
+  },
+  "bugs": {
+    "url": "https://github.com/javipm/citrx/issues"
+  },
+  "homepage": "https://github.com/javipm/citrx#readme",
   "engines": {
-    "node": ">=24.15"
+    "node": ">=22"
   },
   "dependencies": {
     "commander": "^14.0.2",

@@ -1,10 +1,7 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import { Writable } from "node:stream";
 import type { Incident, IncidentLogLine } from "../analysis/types.js";
-import {
-  iterateAccessLogIndexChunks,
-  type OrderedRowNumbers
-} from "../run/access-index.js";
+import { iterateAccessLogIndexChunks, type OrderedRowNumbers } from "../run/access-index.js";
 import type { CitrxRun } from "../run/types.js";
 import type { ExportFormat } from "./types.js";
 

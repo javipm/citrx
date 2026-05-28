@@ -205,7 +205,9 @@ export function handleSummaryScreenInput({
   setScreen: (screen: "incident" | "tops" | "summary") => void;
   setLineIndex: (value: number) => void;
   setFilter: (value: string) => void;
-  setSelection: (updater: (prev: Map<string, IncidentLogLine>) => Map<string, IncidentLogLine>) => void;
+  setSelection: (
+    updater: (prev: Map<string, IncidentLogLine>) => Map<string, IncidentLogLine>
+  ) => void;
   setDetailLine: (line: IncidentLogLine | undefined) => void;
   setDetailScroll: (value: number) => void;
   setSortMenu: (

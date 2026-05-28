@@ -11,8 +11,7 @@ import {
   AccessLogIndexQueryCache,
   passThroughFilter,
   readAccessLogIndexCachedPage,
-  iterateAccessLogIndexChunks,
-  arrayOrderedRowNumbers
+  iterateAccessLogIndexChunks
 } from "../run/access-index.js";
 import type { CitrxRun } from "../run/types.js";
 
@@ -281,7 +280,6 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     orderedRowNumbers,
     incidentTotal,
     lineIndex,
-    summaryPageLines,
     summaryPageStart: computedSummaryPageStart,
     pageSize,
     detailLine,
@@ -331,11 +329,9 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       let lastMsg = Date.now();
       let capHit = false;
       try {
-        for await (const chunk of iterateAccessLogIndexChunks(
-          run.accessIndex,
-          orderedRowNumbers,
-          { signal: controller.signal }
-        )) {
+        for await (const chunk of iterateAccessLogIndexChunks(run.accessIndex, orderedRowNumbers, {
+          signal: controller.signal
+        })) {
           for (const line of chunk) {
             if (next.size >= INCIDENT_MANUAL_SELECT_LIMIT) {
               capHit = true;
@@ -462,39 +458,39 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     const sig = controller.signal;
 
     setTimeout(() => {
-    void (async () => {
-      try {
-        await streamSerializeExport(incident, { run, orderedRowNumbers }, format, stream, {
-          signal: sig,
-          onProgress: (done, total) => {
-            setMessage(
-              `Exporting ${format.toUpperCase()}… ${done.toLocaleString()} / ${total.toLocaleString()}`
-            );
+      void (async () => {
+        try {
+          await streamSerializeExport(incident, { run, orderedRowNumbers }, format, stream, {
+            signal: sig,
+            onProgress: (done, total) => {
+              setMessage(
+                `Exporting ${format.toUpperCase()}… ${done.toLocaleString()} / ${total.toLocaleString()}`
+              );
+            }
+          });
+          stream.end();
+          await finished(stream);
+          await unlink(finalPath).catch((e: NodeJS.ErrnoException) => {
+            if (e.code !== "ENOENT") throw e;
+          });
+          await rename(tmpPath, finalPath);
+          setExportNotice({ file: finalPath, lines: orderedRowNumbers.length, format });
+          setMessage(`Export OK: ${orderedRowNumbers.length.toLocaleString()} rows saved`);
+        } catch (err) {
+          stream.destroy();
+          await finished(stream).catch(() => {});
+          await unlink(tmpPath).catch(() => {});
+          const isAbort = err instanceof DOMException && err.name === "AbortError";
+          if (!isAbort) {
+            setMessage(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+          } else {
+            setMessage("Export cancelled");
           }
-        });
-        stream.end();
-        await finished(stream);
-        await unlink(finalPath).catch((e: NodeJS.ErrnoException) => {
-          if (e.code !== "ENOENT") throw e;
-        });
-        await rename(tmpPath, finalPath);
-        setExportNotice({ file: finalPath, lines: orderedRowNumbers.length, format });
-        setMessage(`Export OK: ${orderedRowNumbers.length.toLocaleString()} rows saved`);
-      } catch (err) {
-        stream.destroy();
-        await finished(stream).catch(() => {});
-        await unlink(tmpPath).catch(() => {});
-        const isAbort = err instanceof DOMException && err.name === "AbortError";
-        if (!isAbort) {
-          setMessage(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
-        } else {
-          setMessage("Export cancelled");
+        } finally {
+          setExportLoading(false);
+          setActiveAbort(undefined);
         }
-      } finally {
-        setExportLoading(false);
-        setActiveAbort(undefined);
-      }
-    })();
+      })();
     }, 0);
   };
 

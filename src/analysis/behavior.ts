@@ -195,7 +195,10 @@ export class BehaviorTracker {
     this.maxTrackedSubnets = options.maxTrackedSubnets ?? MAX_TRACKED_SUBNETS;
   }
 
-  observe(entry: AccessLogEntry, epochSecond = accessLogTimestampToEpochSeconds(entry.timestamp)): void {
+  observe(
+    entry: AccessLogEntry,
+    epochSecond = accessLogTimestampToEpochSeconds(entry.timestamp)
+  ): void {
     if (epochSecond === null) {
       this.invalidTimestampLines += 1;
       return;
@@ -354,9 +357,7 @@ export class BehaviorTracker {
       return false;
     }
 
-    candidates.sort(
-      (a, b) => a.totalRequests - b.totalRequests || a.lastSeen - b.lastSeen
-    );
+    candidates.sort((a, b) => a.totalRequests - b.totalRequests || a.lastSeen - b.lastSeen);
 
     const count = Math.min(STALE_IP_EVICTION_BATCH, candidates.length);
     for (let index = 0; index < count; index += 1) {
@@ -412,9 +413,7 @@ export class BehaviorTracker {
       return false;
     }
 
-    candidates.sort(
-      (a, b) => a.peakSubnetRps - b.peakSubnetRps || a.lastSeen - b.lastSeen
-    );
+    candidates.sort((a, b) => a.peakSubnetRps - b.peakSubnetRps || a.lastSeen - b.lastSeen);
 
     const count = Math.min(STALE_SUBNET_EVICTION_BATCH, candidates.length);
     for (let index = 0; index < count; index += 1) {

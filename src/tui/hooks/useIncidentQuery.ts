@@ -1,7 +1,6 @@
 // On-demand incident query: default fast path via virtual accessor, build path
 // via background scan+sort. Mirrors useAccessLogQuery but scoped to one incident.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { setImmediate } from "node:timers/promises";
 import type { IncidentMatchSet } from "../../analysis/types.js";
 import {
   type OrderedRowNumbers,
@@ -111,7 +110,14 @@ function virtualOrderedRowNumbers(
 }
 
 function sortableValueForKey(
-  line: { timestamp: string; ip: string; status: number; method: string; path: string; bytes: number | null },
+  line: {
+    timestamp: string;
+    ip: string;
+    status: number;
+    method: string;
+    path: string;
+    bytes: number | null;
+  },
   sortKey: SortKey
 ): string | number {
   if (sortKey === "bytes") return line.bytes ?? 0;
@@ -225,7 +231,6 @@ export function useIncidentQuery({
       orderedRowNumbers: virtualOrderedRowNumbers(matchSet.rowNumbers, sortDirection),
       total: matchSet.rowNumbers.length
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchSet, sortDirection]);
 
   // Seed the cache with the default fast-path entry on matchSet/sortDirection change
@@ -323,8 +328,7 @@ export function useIncidentQuery({
         incidentQueryCache.delete(key);
         setBuilding(false);
         setIndexLoading(false);
-        const isAbort =
-          err instanceof DOMException && err.name === "AbortError";
+        const isAbort = err instanceof DOMException && err.name === "AbortError";
         if (!isAbort) {
           setMessage(err instanceof Error ? err.message : String(err));
         } else {
@@ -350,7 +354,7 @@ export function useIncidentQuery({
 
   return {
     orderedRowNumbers: finalResult?.orderedRowNumbers ?? null,
-    total: finalResult?.total ?? (matchSet?.rowNumbers.length ?? 0),
+    total: finalResult?.total ?? matchSet?.rowNumbers.length ?? 0,
     building,
     abort
   };

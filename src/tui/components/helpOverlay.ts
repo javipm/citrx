@@ -293,7 +293,9 @@ export function HelpOverlay({
     );
 
   const scrollHint =
-    maxScroll > 0 ? `  [${scroll + 1}-${Math.min(scroll + bodyRows, allLines.length)}/${allLines.length}]` : "";
+    maxScroll > 0
+      ? `  [${scroll + 1}-${Math.min(scroll + bodyRows, allLines.length)}/${allLines.length}]`
+      : "";
 
   return React.createElement(
     Box,
@@ -340,10 +342,9 @@ export function HelpOverlay({
     React.createElement(
       Text,
       { color: "gray", backgroundColor: "black", wrap: "truncate" },
-      fitText(
-        "Tab / ←→ switch tab | ↑/↓ PgUp/PgDn scroll | h or Esc close",
+      fitText("Tab / ←→ switch tab | ↑/↓ PgUp/PgDn scroll | h or Esc close", innerWidth).padEnd(
         innerWidth
-      ).padEnd(innerWidth)
+      )
     )
   );
 }

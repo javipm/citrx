@@ -499,7 +499,8 @@ export function TopValuesScreen({
           if (now - lastProgressMs >= 100) {
             lastProgressMs = now;
             // progress is reflected via loading state; no separate message setter here
-            void done, total;
+            void done;
+            void total;
           }
         }
       });

@@ -9,7 +9,6 @@ import {
 } from "../../run/access-index.js";
 import type { OpenAiAnswerState } from "../types.js";
 import { renderMarkdownAnswer, requestDetailLines } from "../utils/text.js";
-import { lineKey } from "../utils/table.js";
 
 const INCIDENT_BUCKET_SIZE = 200;
 const INCIDENT_PAGE_CACHE_MAX = 50;
@@ -37,8 +36,6 @@ interface VisibleLinesOptions {
   incidentTotal: number;
   /** Zero-based cursor index within the filtered+sorted rows. */
   lineIndex: number;
-  /** Pre-computed page of log lines shown on the summary screen. */
-  summaryPageLines: IncidentLogLine[];
   /** Index of the first visible row on the summary page. */
   summaryPageStart: number;
   /** Number of rows visible in the main log-line viewport. */
@@ -70,7 +67,6 @@ export function useVisibleLines({
   orderedRowNumbers,
   incidentTotal,
   lineIndex,
-  summaryPageLines,
   summaryPageStart,
   pageSize,
   detailLine,
@@ -110,10 +106,7 @@ export function useVisibleLines({
     () =>
       Math.max(
         0,
-        Math.min(
-          lineIndex - Math.floor(pageSize / 2),
-          Math.max(0, incidentTotal - pageSize)
-        )
+        Math.min(lineIndex - Math.floor(pageSize / 2), Math.max(0, incidentTotal - pageSize))
       ),
     [lineIndex, pageSize, incidentTotal]
   );
@@ -218,7 +211,6 @@ export function useVisibleLines({
       return { pageLines: lastGoodViewportRef.current.pageLines, pageLoading: true };
     }
     return { pageLines: [] as IncidentLogLine[], pageLoading: true };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageVersion, orderedRowNumbers, incidentTotal, requiredBucketsKey, pageStart, pageSize]);
 
   // ── Selection ──────────────────────────────────────────────────────────────

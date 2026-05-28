@@ -2,7 +2,11 @@
 import type { Incident, IncidentLogLine } from "../../analysis/types.js";
 import type { SortKey, SortDirection, PromptState } from "../types.js";
 import { lineKey } from "../utils/table.js";
-import { addLinesToSelectionWithCap, INCIDENT_MANUAL_SELECT_LIMIT, INCIDENT_SELECT_ALL_LIMIT } from "../utils/selection.js";
+import {
+  addLinesToSelectionWithCap,
+  INCIDENT_MANUAL_SELECT_LIMIT,
+  INCIDENT_SELECT_ALL_LIMIT
+} from "../utils/selection.js";
 
 const AI_CONTEXT_MAX_ROWS = 200;
 
@@ -94,7 +98,9 @@ export function handleIncidentScreenInput({
   sortDirection: SortDirection;
   setLineIndex: (updater: (value: number) => number) => void;
   setFilter: (value: string) => void;
-  setSelection: (updater: (prev: Map<string, IncidentLogLine>) => Map<string, IncidentLogLine>) => void;
+  setSelection: (
+    updater: (prev: Map<string, IncidentLogLine>) => Map<string, IncidentLogLine>
+  ) => void;
   setDetailLine: (line: IncidentLogLine | undefined) => void;
   setDetailScroll: (value: number) => void;
   setSortMenu: (

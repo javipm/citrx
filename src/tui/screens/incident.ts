@@ -6,7 +6,13 @@ import { severityColor } from "../utils/colors.js";
 import { fitText } from "../utils/format.js";
 import { LineTable } from "../components/table.js";
 
-const TIME_KEYS = new Set(["firstSeen", "lastSeen", "windowEnd", "windowApproxSeconds", "windowSeconds"]);
+const TIME_KEYS = new Set([
+  "firstSeen",
+  "lastSeen",
+  "windowEnd",
+  "windowApproxSeconds",
+  "windowSeconds"
+]);
 
 function extractTimeWindow(evidence: Incident["evidence"]): string | null {
   const get = (k: string) => evidence.find((e) => e.key === k)?.value;
@@ -18,8 +24,7 @@ function extractTimeWindow(evidence: Incident["evidence"]): string | null {
     return `Window: ${start}  →  ${end}`;
   }
   const windowEnd = get("windowEnd");
-  const durationSecs =
-    get("windowApproxSeconds") ?? get("windowSeconds");
+  const durationSecs = get("windowApproxSeconds") ?? get("windowSeconds");
   if (windowEnd) {
     if (durationSecs) {
       const endMs = Date.parse(String(windowEnd));
@@ -34,9 +39,7 @@ function extractTimeWindow(evidence: Incident["evidence"]): string | null {
 }
 
 function chunkEvidence(evidence: Incident["evidence"], lineWidth: number): string[] {
-  const pairs = evidence
-    .filter((e) => !TIME_KEYS.has(e.key))
-    .map((e) => `${e.key}=${e.value}`);
+  const pairs = evidence.filter((e) => !TIME_KEYS.has(e.key)).map((e) => `${e.key}=${e.value}`);
 
   const lines: string[] = [];
   let current = "";
@@ -120,11 +123,7 @@ export function IncidentScreen({
           )
         : null,
       ...evidenceLines.map((line, i) =>
-        React.createElement(
-          Text,
-          { key: `ev-${i}`, color: "gray", wrap: "truncate" },
-          line
-        )
+        React.createElement(Text, { key: `ev-${i}`, color: "gray", wrap: "truncate" }, line)
       ),
       React.createElement(
         Text,
