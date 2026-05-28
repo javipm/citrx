@@ -1,5 +1,5 @@
 {
-  "name": "citrx",
+  "name": "@javipm/citrx",
   "version": "0.1.0",
   "description": "CLI for local-first Apache/Nginx access log analysis.",
   "type": "module",
