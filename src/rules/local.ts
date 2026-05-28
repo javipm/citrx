@@ -74,8 +74,18 @@ const RULES: RuleDefinition[] = [
       /\bwaitfor\s+delay\b/i,
       /\bprepare\s+stmt\b/i,
       /\bexecute\s+stmt\b/i,
-      /0x[0-9a-f]{20,}/i,
-      /(?:'|%27)\s*(?:or|and)\s+1\s*=\s*1/i
+      // Require SQL-context prefix (= ( ,) before long hex to avoid matching
+      // SHA/MD5 content hashes in versioned static asset filenames.
+      /[=(,]\s*0x[0-9a-f]{20,}/i,
+      /(?:'|%27)\s*(?:or|and)\s+1\s*=\s*1/i,
+      // Blind SQLi / fingerprinting functions
+      /\bpg_sleep\s*\(/i,
+      /\bversion\s*\(\s*\)/i,
+      /\bdatabase\s*\(\s*\)/i,
+      /\buser\s*\(\s*\)/i,
+      /\bconnection_id\s*\(\s*\)/i,
+      // SQL comment injection: /**/ and version-conditional /*!…*/
+      /\/\*(?:\d+|\s*)\*\//
     ]
   },
   {
@@ -94,7 +104,9 @@ const RULES: RuleDefinition[] = [
       /javascript:/i,
       /%3csvg/i,
       /\balert\s*\(/i,
-      /document\.cookie/i
+      /document\.cookie/i,
+      // HTML5 event handlers that fire without <script> or onload/onerror
+      /\bon(?:mouseover|focus|focusin|click|pointerdown|animationstart|toggle)\s*=/i
     ]
   },
   {
@@ -139,7 +151,12 @@ const RULES: RuleDefinition[] = [
     title: "Command injection payload",
     description: "Request target contains shell metacharacters with command execution indicators.",
     patterns: [
-      /(?:;|%3b|\||%7c|`|%60|\$\(|%24%28).*(?:\bid\b|\bwhoami\b|\bcat\b|\bwget\b|\bcurl\b|\bbash\b|\bnc\b)/i
+      // Classic metachar + known Unix binaries
+      /(?:;|%3b|\||%7c|`|%60|\$\(|%24%28).*(?:\bid\b|\bwhoami\b|\bcat\b|\bwget\b|\bcurl\b|\bbash\b|\bnc\b|\bsh\b|\bpython\b|\bperl\b|\bphp\b|\bping\b|\bnslookup\b)/i,
+      // Windows/PowerShell variants
+      /(?:;|%3b|\||%7c|`|%60|\$\(|%24%28).*(?:powershell|cmd\.exe|wscript|cscript)/i,
+      // $IFS and newline-based separator bypass
+      /\$IFS|\$\{IFS\}|%0a[a-z]|%0d%0a[a-z]/i
     ]
   },
   {
@@ -203,8 +220,15 @@ const QUERY_EXPLOSION_MIN_VARIANTS = 150;
 const QUERY_EXPLOSION_MIN_VARIANT_RATIO = 0.5;
 const TOP_PATHS_LIMIT = 10;
 
-/** Cheap substring check — if none match, skip all regex. */
+/**
+ * Cheap substring fast-path — if none match, skip all regex evaluation.
+ *
+ * IMPORTANT: every regex pattern in RULES must have at least one literal
+ * substring listed here. Adding a pattern to RULES without a corresponding
+ * entry here means the pattern is NEVER evaluated (the early-return fires first).
+ */
 const PAYLOAD_PREFIXES = [
+  // SQLi — union/select family
   "select",
   "union",
   "information_schema",
@@ -214,6 +238,16 @@ const PAYLOAD_PREFIXES = [
   "prepare",
   "execute",
   "0x",
+  // SQLi — fingerprinting functions
+  "pg_sleep(",
+  "version()",
+  "database()",
+  "user()",
+  "connection_id()",
+  // SQLi — comment injection
+  "/**/",
+  "/*!",
+  // XSS — script tags and execution
   "<script",
   "%3cscript",
   "onerror",
@@ -222,6 +256,15 @@ const PAYLOAD_PREFIXES = [
   "%3csvg",
   "alert(",
   "document.cookie",
+  // XSS — HTML5 event handlers (no <script> needed)
+  "onmouseover",
+  "onfocus",
+  "onfocusin",
+  "onclick",
+  "onpointerdown",
+  "onanimationstart",
+  "ontoggle",
+  // LFI/RFI
   "../",
   "..%2f",
   "%252e",
@@ -231,6 +274,7 @@ const PAYLOAD_PREFIXES = [
   "file=http",
   "path=http",
   "template=http",
+  // SSRF
   "169.254",
   "metadata.google",
   "localhost",
@@ -240,6 +284,7 @@ const PAYLOAD_PREFIXES = [
   "callback=http",
   "webhook=http",
   "redirect=http",
+  // Command injection — metacharacters
   ";",
   "%3b",
   "|",
@@ -248,6 +293,13 @@ const PAYLOAD_PREFIXES = [
   "%60",
   "$(",
   "%24%28",
+  "$IFS",
+  "${IFS}",
+  "%0a",
+  "%0d%0a",
+  "powershell",
+  "cmd.exe",
+  // Sensitive file probes
   ".env",
   ".git",
   "composer.json",
@@ -969,12 +1021,23 @@ function redactSensitiveTarget(target: string): string {
   }
 }
 
+/**
+ * Iterative URL-decode up to 3 passes to catch double/triple encoding
+ * (e.g. %2527 → %27 → ') without risking infinite loops on crafted input.
+ * Stops as soon as a pass produces no change.
+ */
 function normalizeForMatching(target: string): string {
-  try {
-    return decodeURIComponent(target).toLowerCase();
-  } catch {
-    return target.toLowerCase();
+  let current = target;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const next = decodeURIComponent(current);
+      if (next === current) break;
+      current = next;
+    } catch {
+      break;
+    }
   }
+  return current.toLowerCase();
 }
 
 function truncateSample(value: string): string {
