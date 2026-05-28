@@ -5,7 +5,7 @@
   "type": "module",
   "packageManager": "pnpm@11.1.0",
   "bin": {
-    "citrx": "./dist/cli.js"
+    "citrx": "dist/cli.js"
   },
   "files": [
     "dist",
