@@ -205,8 +205,9 @@ t                open global top values
 Space            select current row
 A                select visible rows
 a                ask OpenAI about current view/selection
-e                export current context to JSON
+e                open export menu (CSV, JSON, TSV)
 q                ask before quit
+h                contextual help overlay (keys + filter syntax)
 ```
 
 ### Incident Screen
@@ -225,13 +226,28 @@ A                select visible rows
 f or /           filter rows
 s or S           open sort menu
 a                ask OpenAI about this incident/selection
-e                export current context to JSON
+e                open export menu (CSV, JSON, TSV)
 b                back to summary
 q                ask before quit
+h                contextual help overlay
 ```
 
 Incident export is shown only after all related rows have finished loading, so
 exports do not accidentally contain a partial background-hydrated sample.
+
+### Export Menu
+
+Press `e` from the summary or incident screen to choose an export format before
+writing the current context. Summary exports write the selected rows, or the
+full filtered access-log result when nothing is selected. Incident exports write
+the selected incident rows, or all currently filtered incident rows.
+
+```text
+↑/↓              choose CSV, JSON, or TSV
+c / j / t        export directly as CSV, JSON, or TSV
+Enter            export using selected format
+Esc / Backspace  cancel
+```
 
 ### Sort Menu
 
@@ -248,7 +264,7 @@ Esc / Backspace  cancel
 ```
 
 Selected values are highlighted in the menu. When a large filtered/sorted view
-or top-value set is being computed, or JSON export is running, the TUI shows a
+or top-value set is being computed, or an export is running, the TUI shows a
 loading status instead of appearing frozen.
 
 ### Top Values Screen
@@ -272,6 +288,7 @@ Enter            apply a filter using selected value
 a                ask OpenAI about the visible top values
 t / b / Esc      back
 q                ask before quit
+h                contextual help overlay
 ```
 
 If a filter is active, top values are computed from the filtered subset.
@@ -285,6 +302,7 @@ method, status, bytes, path, target, user-agent, and raw line with wrapping.
 ↑/↓ PgUp/PgDn    scroll
 d / b / Esc      close
 q                ask before quit
+h                contextual help overlay
 ```
 
 ## Filtering

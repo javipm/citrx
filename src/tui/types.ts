@@ -37,6 +37,33 @@ export type SortDirection = "asc" | "desc";
 /** Which element of the sort menu is focused (key selector, direction toggle, or apply button). */
 export type SortMenuFocus = "key" | "direction" | "apply";
 
+/** Export formats available from the interactive TUI. */
+export type ExportFormat = "csv" | "json" | "tsv";
+
+/** Logical context the help overlay is describing, derived from screen + active overlays. */
+export type HelpContext =
+  | "summary"
+  | "incident"
+  | "tops"
+  | "detail"
+  | "answer"
+  | "exportMenu"
+  | "sortMenu"
+  | "prompt";
+
+/** Tabs available within the help overlay. */
+export type HelpTab = "keys" | "filters";
+
+/** State for the help overlay shown when the user presses `h`. */
+export interface HelpOverlayState {
+  /** Context captured when the overlay was opened; does not change while open. */
+  context: HelpContext;
+  /** Active tab in the overlay. */
+  tab: HelpTab;
+  /** Scroll offset (lines) for the active tab content. */
+  scroll: number;
+}
+
 /** Text input state shared by any prompt that accepts keyboard input. */
 export interface PromptInputState {
   /** Current text entered by the user. */

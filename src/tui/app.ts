@@ -19,6 +19,7 @@ import type { TuiRuntime } from "./types.js";
 // Utils
 import { fitText, sanitizeFilePart } from "./utils/format.js";
 import { sortLabel } from "./utils/table.js";
+import { serializeExport } from "./export.js";
 
 // Hooks
 import { useNavigationState } from "./hooks/useNavigationState.js";
@@ -28,6 +29,7 @@ import { usePageLayout } from "./hooks/usePageLayout.js";
 import { useVisibleLines } from "./hooks/useVisibleLines.js";
 import { useAccessLogQuery } from "./hooks/useAccessLogQuery.js";
 import { handleSortMenuInput } from "./hooks/useSortMenuInput.js";
+import { handleExportMenuInput } from "./hooks/useExportMenuInput.js";
 import { handlePromptInput } from "./hooks/usePromptInput.js";
 import { submitOpenAi } from "./hooks/useSubmitOpenAi.js";
 import { handleDetailViewInput } from "./hooks/useDetailViewInput.js";
@@ -42,16 +44,19 @@ import { createAccessLogLineFilter } from "./filter.js";
 import {
   PromptBar,
   SortMenuOverlay,
+  ExportMenuOverlay,
   ExportNoticeBar,
   QuitConfirmBar,
   Footer
 } from "./components/overlays.js";
+import { HelpOverlay } from "./components/helpOverlay.js";
 
 // Screens
 import { SummaryScreen } from "./screens/summary.js";
 import { IncidentScreen } from "./screens/incident.js";
 import { RequestDetailScreen, OpenAiAnswerScreen } from "./screens/detail.js";
 import { TopValuesScreen } from "./screens/tops.js";
+import type { ExportFormat, HelpOverlayState, HelpContext } from "./types.js";
 
 /**
  * Launch the interactive TUI for a completed citrx run.
@@ -93,12 +98,13 @@ export async function openRunTui(run: CitrxRun, runtime: TuiRuntime): Promise<vo
 async function exportContext(
   runId: string,
   incident: Incident | undefined,
-  lines: IncidentLogLine[]
+  lines: IncidentLogLine[],
+  format: ExportFormat
 ): Promise<string> {
   const safeRunId = sanitizeFilePart(runId);
   const safeIncidentId = sanitizeFilePart(incident?.id ?? "summary");
-  const file = path.join(process.cwd(), `citrx-${safeRunId}-${safeIncidentId}.json`);
-  await writeFile(file, `${JSON.stringify({ incident, lines }, null, 2)}\n`, "utf8");
+  const file = path.join(process.cwd(), `citrx-${safeRunId}-${safeIncidentId}.${format}`);
+  await writeFile(file, serializeExport(incident, lines, format), "utf8");
   return file;
 }
 
@@ -108,7 +114,8 @@ async function exportAccessLogContext({
   filter,
   sortKey,
   sortDirection,
-  total
+  total,
+  format
 }: {
   run: CitrxRun;
   accessQueryCache: AccessLogIndexQueryCache;
@@ -116,6 +123,7 @@ async function exportAccessLogContext({
   sortKey: "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
   sortDirection: "asc" | "desc";
   total: number;
+  format: ExportFormat;
 }): Promise<{ file: string; lines: number }> {
   const page = await readAccessLogIndexCachedPage(
     run.accessIndex,
@@ -129,7 +137,7 @@ async function exportAccessLogContext({
       limit: total
     }
   );
-  const file = await exportContext(run.id, undefined, page.lines);
+  const file = await exportContext(run.id, undefined, page.lines, format);
   return { file, lines: page.lines.length };
 }
 
@@ -163,6 +171,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
   const { exit } = useApp();
   const { rows, columns } = useWindowSize();
   const [quitConfirm, setQuitConfirm] = useState(false);
+  const [helpOverlay, setHelpOverlay] = useState<HelpOverlayState | null>(null);
 
   const {
     screen,
@@ -207,6 +216,8 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     setPrompt,
     sortMenu,
     setSortMenu,
+    exportMenu,
+    setExportMenu,
     exportNotice,
     setExportNotice,
     message,
@@ -280,6 +291,72 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     setMessage("Exit citrx? Press y/Enter to quit, Esc/n to stay");
   };
 
+  const applyExport = (format: ExportFormat) => {
+    setExportMenu(undefined);
+    setExportLoading(true);
+    setMessage(`Exporting ${format.toUpperCase()}...`);
+
+    if (screen === "summary") {
+      if (selectedGlobalLines.length > 0) {
+        const exportable = selectedGlobalLines;
+        setTimeout(() => {
+          void exportContext(run.id, undefined, exportable, format)
+            .then((file) => {
+              setExportNotice({ file, lines: exportable.length, format });
+              setMessage(`Export OK: ${exportable.length} rows saved`);
+            })
+            .catch((error) => {
+              setMessage(
+                `Export failed: ${error instanceof Error ? error.message : String(error)}`
+              );
+            })
+            .finally(() => {
+              setExportLoading(false);
+            });
+        }, 0);
+        return;
+      }
+
+      setTimeout(() => {
+        void exportAccessLogContext({
+          run,
+          accessQueryCache,
+          filter,
+          sortKey,
+          sortDirection,
+          total: globalTotal,
+          format
+        })
+          .then(({ file, lines }) => {
+            setExportNotice({ file, lines, format });
+            setMessage(`Export OK: ${lines} rows saved`);
+          })
+          .catch((error) => {
+            setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+          })
+          .finally(() => {
+            setExportLoading(false);
+          });
+      }, 0);
+      return;
+    }
+
+    const exportable = selectedLines.length > 0 ? selectedLines : lines;
+    setTimeout(() => {
+      void exportContext(run.id, incident, exportable, format)
+        .then((file) => {
+          setExportNotice({ file, lines: exportable.length, format });
+          setMessage(`Export OK: ${exportable.length} rows saved`);
+        })
+        .catch((error) => {
+          setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+        })
+        .finally(() => {
+          setExportLoading(false);
+        });
+    }, 0);
+  };
+
   useInput((inputValue, key) => {
     if (quitConfirm) {
       if (inputValue === "y" || inputValue === "Y" || key.return) {
@@ -294,6 +371,60 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       }
 
       setMessage("Exit citrx? Press y/Enter to quit, Esc/n to stay");
+      return;
+    }
+
+    if (helpOverlay) {
+      if (inputValue === "h" || inputValue === "H" || key.escape) {
+        setHelpOverlay(null);
+        setMessage("Help closed");
+        return;
+      }
+
+      if (key.tab || key.rightArrow || key.leftArrow) {
+        setHelpOverlay({
+          ...helpOverlay,
+          tab: helpOverlay.tab === "keys" ? "filters" : "keys",
+          scroll: 0
+        });
+        return;
+      }
+
+      if (key.downArrow) {
+        setHelpOverlay({ ...helpOverlay, scroll: helpOverlay.scroll + 1 });
+        return;
+      }
+
+      if (key.upArrow) {
+        setHelpOverlay({ ...helpOverlay, scroll: Math.max(0, helpOverlay.scroll - 1) });
+        return;
+      }
+
+      if (key.pageDown) {
+        setHelpOverlay({ ...helpOverlay, scroll: helpOverlay.scroll + 8 });
+        return;
+      }
+
+      if (key.pageUp) {
+        setHelpOverlay({ ...helpOverlay, scroll: Math.max(0, helpOverlay.scroll - 8) });
+        return;
+      }
+
+      return;
+    }
+
+    if (!prompt && (inputValue === "h" || inputValue === "H")) {
+      const context: HelpContext = detailLine
+        ? "detail"
+        : openAiAnswer
+          ? "answer"
+          : exportMenu
+            ? "exportMenu"
+            : sortMenu
+              ? "sortMenu"
+              : (screen as HelpContext);
+      setHelpOverlay({ context, tab: "keys", scroll: 0 });
+      setMessage("Help: Tab switch tab | Esc/h close");
       return;
     }
 
@@ -315,6 +446,18 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
           setSelectedLineKeys(new Set());
           setMessage(`Sort: ${sortLabel(nextSortKey)} ${nextSortDirection}`);
         },
+        setMessage
+      });
+      return;
+    }
+
+    if (exportMenu) {
+      handleExportMenuInput({
+        inputValue,
+        key,
+        exportMenu,
+        setExportMenu,
+        applyExport,
         setMessage
       });
       return;
@@ -425,19 +568,8 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
         setSortMenu,
         setTopScope,
         setPrompt,
-        setExportNotice,
-        setExportLoading,
-        setMessage,
-        exportContext,
-        exportAllFilteredContext: () =>
-          exportAccessLogContext({
-            run,
-            accessQueryCache,
-            filter,
-            sortKey,
-            sortDirection,
-            total: globalTotal
-          })
+        setExportMenu,
+        setMessage
       });
       return;
     }
@@ -484,10 +616,8 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       setTopScope,
       setScreen,
       setPrompt,
-      setExportNotice,
-      setExportLoading,
-      setMessage,
-      exportContext
+      setExportMenu,
+      setMessage
     });
   });
 
@@ -570,9 +700,11 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
                 })
     ),
     sortMenu ? React.createElement(SortMenuOverlay, { sortMenu, columns, rows }) : null,
+    exportMenu ? React.createElement(ExportMenuOverlay, { exportMenu, columns, rows }) : null,
     prompt ? React.createElement(PromptBar, { prompt, columns }) : null,
     exportNotice ? React.createElement(ExportNoticeBar, { notice: exportNotice, columns }) : null,
     quitConfirm ? React.createElement(QuitConfirmBar, { columns }) : null,
+    helpOverlay ? React.createElement(HelpOverlay, { state: helpOverlay, columns, rows }) : null,
     React.createElement(Footer, {
       screen,
       summaryFocus,

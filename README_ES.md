@@ -206,8 +206,9 @@ t                abre tops globales
 Space            selecciona fila actual
 A                selecciona filas visibles
 a                pregunta a OpenAI sobre vista/selección
-e                exporta contexto actual a JSON
+e                abre menú de export (CSV, JSON, TSV)
 q                pide confirmación para salir
+h                ayuda contextual (atajos + sintaxis de filtros)
 ```
 
 ### Pantalla De Incidencia
@@ -226,14 +227,29 @@ A                selecciona filas visibles
 f o /            filtra filas
 s o S            abre menú de ordenación
 a                pregunta a OpenAI sobre esta incidencia/selección
-e                exporta contexto actual a JSON
+e                abre menú de export (CSV, JSON, TSV)
 b                vuelve al resumen
 q                pide confirmación para salir
+h                ayuda contextual
 ```
 
 El export de incidencia sólo aparece cuando todos los requests relacionados han
 terminado de cargarse, para evitar exportar una muestra parcial hidratada en
 background.
+
+### Menú De Export
+
+Pulsa `e` desde resumen o incidencia para elegir formato antes de escribir el
+contexto actual. En resumen se exportan las filas seleccionadas, o todo el
+resultado filtrado si no hay selección. En incidencia se exportan las filas
+seleccionadas, o todas las filas filtradas de esa incidencia.
+
+```text
+↑/↓              elige CSV, JSON o TSV
+c / j / t        exporta directamente como CSV, JSON o TSV
+Enter            exporta con el formato seleccionado
+Esc / Backspace  cancela
+```
 
 ### Menú De Ordenación
 
@@ -250,7 +266,7 @@ Esc / Backspace  cancela
 ```
 
 Los valores seleccionados aparecen resaltados en el menú. Cuando una vista
-filtrada/ordenada grande, unos tops o un export JSON se están recalculando, la
+filtrada/ordenada grande, unos tops o un export se están recalculando, la
 TUI muestra un estado de carga para que no parezca bloqueada.
 
 ### Pantalla De Tops
@@ -274,6 +290,7 @@ Enter            aplica filtro usando el valor seleccionado
 a                pregunta a OpenAI sobre los tops visibles
 t / b / Esc      volver
 q                pide confirmación para salir
+h                ayuda contextual
 ```
 
 Si hay un filtro activo, los tops se calculan sobre el subconjunto filtrado.
@@ -287,6 +304,7 @@ método, status, bytes, path, target, user-agent y línea raw con wrapping.
 ↑/↓ PgUp/PgDn    scroll
 d / b / Esc      cerrar
 q                pide confirmación para salir
+h                ayuda contextual
 ```
 
 ## Filtros

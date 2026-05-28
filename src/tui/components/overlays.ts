@@ -6,7 +6,8 @@ import type {
   SortDirection,
   SortMenuFocus,
   Screen,
-  SummaryFocus
+  SummaryFocus,
+  ExportFormat
 } from "../types.js";
 import { SORT_KEYS } from "../types.js";
 import { fitText } from "../utils/format.js";
@@ -222,6 +223,65 @@ function sortLabel(sortKey: SortKey): string {
   }
 }
 
+export function ExportMenuOverlay({
+  exportMenu,
+  columns,
+  rows
+}: {
+  exportMenu: {
+    format: ExportFormat;
+  };
+  columns: number;
+  rows: number;
+}): React.ReactElement {
+  const width = Math.min(44, Math.max(30, columns - 6));
+  const innerWidth = width - 6;
+  const top = Math.max(1, Math.floor((rows - 10) / 2));
+  const left = Math.max(0, Math.floor((columns - width) / 2));
+  const blankLine = " ".repeat(innerWidth);
+
+  return React.createElement(
+    Box,
+    {
+      position: "absolute",
+      top,
+      left,
+      width,
+      flexDirection: "column",
+      borderStyle: "double",
+      borderColor: "cyan",
+      backgroundColor: "black",
+      paddingX: 2,
+      paddingY: 1
+    },
+    React.createElement(
+      Text,
+      { bold: true, color: "cyan", backgroundColor: "black", wrap: "truncate" },
+      fitText("Export logs", innerWidth).padEnd(innerWidth)
+    ),
+    React.createElement(Text, { backgroundColor: "black" }, blankLine),
+    ...(["csv", "json", "tsv"] as const).map((format) => {
+      const active = exportMenu.format === format;
+      return React.createElement(
+        Text,
+        {
+          key: format,
+          bold: active,
+          color: active ? "black" : undefined,
+          backgroundColor: active ? "yellow" : "black"
+        },
+        fitText(`${active ? ">" : " "} ${format.toUpperCase()}`, innerWidth).padEnd(innerWidth)
+      );
+    }),
+    React.createElement(Text, { backgroundColor: "black" }, blankLine),
+    React.createElement(
+      Text,
+      { color: "gray", backgroundColor: "black", wrap: "truncate" },
+      fitText("Up/down choose | Enter apply | Esc cancel", innerWidth).padEnd(innerWidth)
+    )
+  );
+}
+
 export function ExportNoticeBar({
   notice,
   columns
@@ -229,6 +289,7 @@ export function ExportNoticeBar({
   notice: {
     file: string;
     lines: number;
+    format: ExportFormat;
   };
   columns: number;
 }): React.ReactElement {
@@ -238,7 +299,10 @@ export function ExportNoticeBar({
     React.createElement(
       Text,
       { bold: true, color: "green", wrap: "truncate" },
-      fitText(`Export OK: ${notice.lines} rows saved as JSON`, columns - 4)
+      fitText(
+        `Export OK: ${notice.lines} rows saved as ${notice.format.toUpperCase()}`,
+        columns - 4
+      )
     ),
     React.createElement(
       Text,
@@ -295,16 +359,17 @@ export function Footer({
     "a ask",
     ...(incidentExportReady ? ["e export"] : []),
     "b back",
-    "q quit"
+    "q quit",
+    "h help"
   ].join(" | ");
   const shortcuts = answerOpen
-    ? "↑/↓ PgUp/PgDn scroll | b/Esc close answer | q quit"
+    ? "↑/↓ PgUp/PgDn scroll | b/Esc close answer | q quit | h help"
     : detailOpen
-      ? "↑/↓ PgUp/PgDn scroll | d/b/Esc close | q quit"
+      ? "↑/↓ PgUp/PgDn scroll | d/b/Esc close | q quit | h help"
       : screen === "summary"
-        ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate panel | Enter/d open | f filter | s sort menu | t tops | a ask | e export | q quit`
+        ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate panel | Enter/d open | f filter | s sort menu | t tops | a ask | e export | q quit | h help`
         : screen === "tops"
-          ? "Tab panel | ↑/↓ row | Enter filter by value | a ask about tops | t/b/Esc back | q quit"
+          ? "Tab panel | ↑/↓ row | Enter filter by value | a ask about tops | t/b/Esc back | q quit | h help"
           : incidentShortcuts;
   const prefix = loading || busy ? `${spinner} ` : "";
   const status = `${prefix}${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
