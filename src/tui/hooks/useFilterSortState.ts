@@ -1,6 +1,6 @@
 // Manages filter, sort, selection, prompt overlay, export notice, and status message state.
 import { useState } from "react";
-import type { SortKey, SortDirection, SortMenuFocus, PromptState } from "../types.js";
+import type { ExportFormat, SortKey, SortDirection, SortMenuFocus, PromptState } from "../types.js";
 
 /**
  * Manages filter, sort, selection, and UI overlay state for the incidents list.
@@ -12,10 +12,11 @@ import type { SortKey, SortDirection, SortMenuFocus, PromptState } from "../type
  *   - `selectedLineKeys` / `setSelectedLineKeys` — Set of line-key strings for checked/selected rows.
  *   - `prompt` / `setPrompt` — Active prompt overlay state (`PromptState`), or `undefined` when hidden.
  *   - `sortMenu` / `setSortMenu` — Transient sort-menu overlay state (key, direction, focus), or `undefined` when closed.
- *   - `exportNotice` / `setExportNotice` — Post-export confirmation payload (`{ file, lines }`), or `undefined`.
+ *   - `exportMenu` / `setExportMenu` — Transient export-format menu state, or `undefined` when closed.
+ *   - `exportNotice` / `setExportNotice` — Post-export confirmation payload, or `undefined`.
  *   - `message` / `setMessage` — Status-bar message string; defaults to `"Ready"`.
  *   - `busy` / `setBusy` — `true` while an async operation (e.g. AI query) is in-flight.
- *   - `exportLoading` / `setExportLoading` — `true` while JSON export is in-flight.
+ *   - `exportLoading` / `setExportLoading` — `true` while an export is in-flight.
  *   - `indexLoading` / `setIndexLoading` — `true` while the access-log index is being built/cached.
  */
 export function useFilterSortState() {
@@ -29,9 +30,13 @@ export function useFilterSortState() {
     sortDirection: SortDirection;
     focus: SortMenuFocus;
   }>();
+  const [exportMenu, setExportMenu] = useState<{
+    format: ExportFormat;
+  }>();
   const [exportNotice, setExportNotice] = useState<{
     file: string;
     lines: number;
+    format: ExportFormat;
   }>();
   const [message, setMessage] = useState("Ready");
   const [busy, setBusy] = useState(false);
@@ -51,6 +56,8 @@ export function useFilterSortState() {
     setPrompt,
     sortMenu,
     setSortMenu,
+    exportMenu,
+    setExportMenu,
     exportNotice,
     setExportNotice,
     message,

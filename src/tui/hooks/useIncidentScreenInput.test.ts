@@ -7,28 +7,30 @@ describe("incident export", () => {
   it("does not export while incident rows are still loading", async () => {
     const exportContext = vi.fn(async () => "incident.json");
     const setExportLoading = vi.fn();
+    const setExportMenu = vi.fn();
     const setMessage = vi.fn();
 
     handleIncidentScreenInput({
       ...incidentInputDefaults(),
       inputValue: "e",
       exportReady: false,
-      exportContext,
       setExportLoading,
+      setExportMenu,
       setMessage
     });
 
     await flushDeferredExport();
 
     expect(exportContext).not.toHaveBeenCalled();
+    expect(setExportMenu).not.toHaveBeenCalled();
     expect(setExportLoading).not.toHaveBeenCalled();
     expect(setMessage).toHaveBeenCalledWith("Still loading incident rows before export...");
   });
 
-  it("shows export progress before writing selected rows", async () => {
+  it("opens the export menu for selected rows", () => {
     const selectedLine = line(7);
     const exportContext = vi.fn(async () => "incident.json");
-    const setExportNotice = vi.fn();
+    const setExportMenu = vi.fn();
     const setExportLoading = vi.fn();
     const setMessage = vi.fn();
 
@@ -37,22 +39,15 @@ describe("incident export", () => {
       inputValue: "e",
       lines: [line(1)],
       selectedLines: [selectedLine],
-      exportContext,
-      setExportNotice,
+      setExportMenu,
       setExportLoading,
       setMessage
     });
 
-    expect(setExportLoading).toHaveBeenCalledWith(true);
-    expect(setMessage).toHaveBeenCalledWith("Exporting JSON...");
+    expect(setExportMenu).toHaveBeenCalledWith({ format: "json" });
+    expect(setMessage).toHaveBeenCalledWith("Choose export format for selected rows");
+    expect(setExportLoading).not.toHaveBeenCalled();
     expect(exportContext).not.toHaveBeenCalled();
-
-    await flushDeferredExport();
-
-    expect(exportContext).toHaveBeenCalledWith("run-1", incident(), [selectedLine]);
-    expect(setExportNotice).toHaveBeenCalledWith({ file: "incident.json", lines: 1 });
-    expect(setExportLoading).toHaveBeenLastCalledWith(false);
-    expect(setMessage).toHaveBeenLastCalledWith("Export OK: 1 rows saved");
   });
 });
 
@@ -110,10 +105,8 @@ function incidentInputDefaults(): Parameters<typeof handleIncidentScreenInput>[0
     setTopScope: vi.fn(),
     setScreen: vi.fn(),
     setPrompt: vi.fn(),
-    setExportNotice: vi.fn(),
-    setExportLoading: vi.fn(),
-    setMessage: vi.fn(),
-    exportContext: vi.fn(async () => "incident.json")
+    setExportMenu: vi.fn(),
+    setMessage: vi.fn()
   };
 }
 

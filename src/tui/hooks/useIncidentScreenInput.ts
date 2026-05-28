@@ -40,9 +40,7 @@ function isPageDown(inputValue: string, key: Key): boolean {
  * - `A`                — select all visible lines.
  * - `r`                — reset filter and selection.
  * - `/` / `f` / `F`    — open filter prompt.
- * - `e`                — async export selected (or all) lines to JSON;
- *                        calls `exportContext` and updates the export notice
- *                        and message bar on completion or failure.
+ * - `e`                — open the export format menu.
  * - `a`                — open AI prompt scoped to incident.
  *
  * @param inputValue  Raw character string from ink's `useInput`.
@@ -55,7 +53,7 @@ function isPageDown(inputValue: string, key: Key): boolean {
  * @param filter      Current filter string, forwarded to the filter prompt.
  * @param sortKey     Active sort column, forwarded to the sort menu.
  * @param sortDirection Active sort direction, forwarded to the sort menu.
- * @param runId       Run identifier passed to `exportContext`.
+ * @param runId       Run identifier carried by the caller for export context.
  * @param exportReady Whether all incident rows are loaded and export can run.
  * @param setLineIndex        Functional updater for the cursor position.
  * @param setFilter           Setter to clear or update the filter string.
@@ -66,11 +64,8 @@ function isPageDown(inputValue: string, key: Key): boolean {
  * @param setTopScope         Scopes the tops screen to `"incident"`.
  * @param setScreen           Navigates to the `"tops"` screen.
  * @param setPrompt           Opens the filter or AI prompt overlay.
- * @param setExportNotice     Shows the post-export confirmation notice.
- * @param setExportLoading    Toggles the export progress indicator.
  * @param setMessage          Updates the TUI status-bar message.
- * @param exportContext       Async function that serialises lines to a JSON
- *                            file and resolves with the output file path.
+ * @param setExportMenu       Opens the export format menu.
  */
 export function handleIncidentScreenInput({
   inputValue,
@@ -94,10 +89,8 @@ export function handleIncidentScreenInput({
   setTopScope,
   setScreen,
   setPrompt,
-  setExportNotice,
-  setExportLoading,
-  setMessage,
-  exportContext
+  setExportMenu,
+  setMessage
 }: {
   inputValue: string;
   key: Key;
@@ -122,15 +115,10 @@ export function handleIncidentScreenInput({
   setTopScope: (scope: "incident") => void;
   setScreen: (screen: "tops") => void;
   setPrompt: (value: PromptState) => void;
-  setExportNotice: (value: { file: string; lines: number }) => void;
-  setExportLoading: (value: boolean) => void;
+  setExportMenu: (value: { format: "csv" | "json" | "tsv" }) => void;
   setMessage: (value: string) => void;
-  exportContext: (
-    runId: string,
-    incident: Incident | undefined,
-    lines: IncidentLogLine[]
-  ) => Promise<string>;
 }): void {
+  void runId;
   if (key.upArrow) {
     setLineIndex((value) => Math.max(0, value - 1));
     return;
@@ -210,22 +198,10 @@ export function handleIncidentScreenInput({
       return;
     }
 
-    const exportable = selectedLines.length > 0 ? selectedLines : lines;
-    setExportLoading(true);
-    setMessage("Exporting JSON...");
-    setTimeout(() => {
-      void exportContext(runId, incident, exportable)
-        .then((file) => {
-          setExportNotice({ file, lines: exportable.length });
-          setMessage(`Export OK: ${exportable.length} rows saved`);
-        })
-        .catch((error) => {
-          setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
-        })
-        .finally(() => {
-          setExportLoading(false);
-        });
-    }, 0);
+    setExportMenu({ format: "json" });
+    setMessage(
+      selectedLines.length > 0 ? "Choose export format for selected rows" : "Choose export format"
+    );
     return;
   }
 

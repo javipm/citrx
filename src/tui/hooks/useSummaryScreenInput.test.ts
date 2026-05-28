@@ -26,10 +26,10 @@ describe("summary incident focus", () => {
 });
 
 describe("summary export", () => {
-  it("exports the full filtered access-log result when no rows are selected", async () => {
+  it("opens the export menu when no rows are selected", () => {
     const exportContext = vi.fn(async () => "selected.json");
     const exportAllFilteredContext = vi.fn(async () => ({ file: "all.json", lines: 42 }));
-    const setExportNotice = vi.fn();
+    const setExportMenu = vi.fn();
     const setExportLoading = vi.fn();
     const setMessage = vi.fn();
 
@@ -37,31 +37,23 @@ describe("summary export", () => {
       ...summaryInputDefaults(),
       inputValue: "e",
       selectedGlobalLines: [],
-      exportContext,
-      exportAllFilteredContext,
-      setExportNotice,
+      setExportMenu,
       setExportLoading,
       setMessage
     });
 
-    expect(setExportLoading).toHaveBeenCalledWith(true);
-    expect(setMessage).toHaveBeenCalledWith("Exporting JSON...");
-    expect(exportAllFilteredContext).not.toHaveBeenCalled();
-
-    await flushDeferredExport();
-
+    expect(setExportMenu).toHaveBeenCalledWith({ format: "json" });
+    expect(setMessage).toHaveBeenCalledWith("Choose export format");
+    expect(setExportLoading).not.toHaveBeenCalled();
     expect(exportContext).not.toHaveBeenCalled();
-    expect(exportAllFilteredContext).toHaveBeenCalledTimes(1);
-    expect(setExportNotice).toHaveBeenCalledWith({ file: "all.json", lines: 42 });
-    expect(setExportLoading).toHaveBeenLastCalledWith(false);
-    expect(setMessage).toHaveBeenLastCalledWith("Export OK: 42 rows saved");
+    expect(exportAllFilteredContext).not.toHaveBeenCalled();
   });
 
-  it("exports selected rows instead of the full filtered result", async () => {
+  it("opens the export menu for selected rows", () => {
     const selectedLine = line(7);
     const exportContext = vi.fn(async () => "selected.json");
     const exportAllFilteredContext = vi.fn(async () => ({ file: "all.json", lines: 42 }));
-    const setExportNotice = vi.fn();
+    const setExportMenu = vi.fn();
     const setExportLoading = vi.fn();
     const setMessage = vi.fn();
 
@@ -69,24 +61,16 @@ describe("summary export", () => {
       ...summaryInputDefaults(),
       inputValue: "e",
       selectedGlobalLines: [selectedLine],
-      exportContext,
-      exportAllFilteredContext,
-      setExportNotice,
+      setExportMenu,
       setExportLoading,
       setMessage
     });
 
-    expect(setExportLoading).toHaveBeenCalledWith(true);
-    expect(setMessage).toHaveBeenCalledWith("Exporting JSON...");
+    expect(setExportMenu).toHaveBeenCalledWith({ format: "json" });
+    expect(setMessage).toHaveBeenCalledWith("Choose export format for selected rows");
+    expect(setExportLoading).not.toHaveBeenCalled();
     expect(exportContext).not.toHaveBeenCalled();
-
-    await flushDeferredExport();
-
     expect(exportAllFilteredContext).not.toHaveBeenCalled();
-    expect(exportContext).toHaveBeenCalledWith("run-1", undefined, [selectedLine]);
-    expect(setExportNotice).toHaveBeenCalledWith({ file: "selected.json", lines: 1 });
-    expect(setExportLoading).toHaveBeenLastCalledWith(false);
-    expect(setMessage).toHaveBeenLastCalledWith("Export OK: 1 rows saved");
   });
 });
 
@@ -150,17 +134,7 @@ function summaryInputDefaults(): Parameters<typeof handleSummaryScreenInput>[0] 
     setSortMenu: vi.fn(),
     setTopScope: vi.fn(),
     setPrompt: vi.fn(),
-    setExportNotice: vi.fn(),
-    setExportLoading: vi.fn(),
-    setMessage: vi.fn(),
-    exportContext: vi.fn(async () => "summary.json"),
-    exportAllFilteredContext: vi.fn(async () => ({ file: "summary.json", lines: 1 }))
+    setExportMenu: vi.fn(),
+    setMessage: vi.fn()
   };
-}
-
-async function flushDeferredExport(): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
-  await Promise.resolve();
 }

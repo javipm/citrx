@@ -118,7 +118,7 @@ export function firstIncidentIndexForFocus(incidents: Incident[], focus: Summary
  * - `/` / `f` / `F`   — Open the filter prompt, pre-filled with the current filter string.
  * - `t`               — Navigate to the tops screen scoped to the summary.
  * - `a`               — Open the AI prompt scoped to the summary, using selected lines or visible page lines.
- * - `e`               — Export selected lines, or the full filtered access-log result, to JSON.
+ * - `e`               — Open the export format menu.
  *
  * @param params.inputValue             - Raw character string from the key event.
  * @param params.key                    - Parsed key flags (arrows, return, tab, page keys).
@@ -135,7 +135,7 @@ export function firstIncidentIndexForFocus(incidents: Incident[], focus: Summary
  * @param params.filter                 - Current filter string (pre-filled when opening filter prompt).
  * @param params.sortKey                - Active sort column key.
  * @param params.sortDirection          - Active sort direction.
- * @param params.runId                  - Identifier for the current analysis run (passed to `exportContext`).
+ * @param params.runId                  - Identifier for the current analysis run.
  * @param params.exit                   - Callback to exit the application (reserved; not invoked by this handler).
  * @param params.setSummaryFocus        - Sets the active focus tab.
  * @param params.setIncidentIndex       - Functional updater for the selected incident index.
@@ -149,11 +149,8 @@ export function firstIncidentIndexForFocus(incidents: Incident[], focus: Summary
  * @param params.setSortMenu            - Opens the sort menu with a pre-populated state, or closes it (undefined).
  * @param params.setTopScope            - Sets the scope context before navigating to the tops screen.
  * @param params.setPrompt              - Opens a prompt overlay (filter or AI kind).
- * @param params.setExportNotice        - Displays the post-export confirmation banner.
- * @param params.setExportLoading       - Toggles the export progress indicator.
+ * @param params.setExportMenu          - Opens the export format menu.
  * @param params.setMessage             - Sets the status-bar message string.
- * @param params.exportContext          - Async function that serialises selected lines to a JSON file.
- * @param params.exportAllFilteredContext - Async function that exports the full filtered access-log result.
  */
 export function handleSummaryScreenInput({
   inputValue,
@@ -183,11 +180,8 @@ export function handleSummaryScreenInput({
   setSortMenu,
   setTopScope,
   setPrompt,
-  setExportNotice,
-  setExportLoading,
-  setMessage,
-  exportContext,
-  exportAllFilteredContext
+  setExportMenu,
+  setMessage
 }: {
   inputValue: string;
   key: Key;
@@ -218,16 +212,10 @@ export function handleSummaryScreenInput({
   ) => void;
   setTopScope: (scope: "summary") => void;
   setPrompt: (value: PromptState) => void;
-  setExportNotice: (value: { file: string; lines: number }) => void;
-  setExportLoading: (value: boolean) => void;
+  setExportMenu: (value: { format: "csv" | "json" | "tsv" }) => void;
   setMessage: (value: string) => void;
-  exportContext: (
-    runId: string,
-    incident: Incident | undefined,
-    lines: IncidentLogLine[]
-  ) => Promise<string>;
-  exportAllFilteredContext: () => Promise<{ file: string; lines: number }>;
 }): void {
+  void runId;
   const incidentBounds = isIncidentFocus(summaryFocus)
     ? kindRange(incidents, summaryFocus)
     : { start: -1, end: -1 };
@@ -355,38 +343,11 @@ export function handleSummaryScreenInput({
   }
 
   if (inputValue === "e") {
-    setExportLoading(true);
-    setMessage("Exporting JSON...");
-    if (selectedGlobalLines.length > 0) {
-      const exportable = selectedGlobalLines;
-      setTimeout(() => {
-        void exportContext(runId, undefined, exportable)
-          .then((file) => {
-            setExportNotice({ file, lines: exportable.length });
-            setMessage(`Export OK: ${exportable.length} rows saved`);
-          })
-          .catch((error) => {
-            setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
-          })
-          .finally(() => {
-            setExportLoading(false);
-          });
-      }, 0);
-      return;
-    }
-
-    setTimeout(() => {
-      void exportAllFilteredContext()
-        .then(({ file, lines }) => {
-          setExportNotice({ file, lines });
-          setMessage(`Export OK: ${lines} rows saved`);
-        })
-        .catch((error) => {
-          setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
-        })
-        .finally(() => {
-          setExportLoading(false);
-        });
-    }, 0);
+    setExportMenu({ format: "json" });
+    setMessage(
+      selectedGlobalLines.length > 0
+        ? "Choose export format for selected rows"
+        : "Choose export format"
+    );
   }
 }
