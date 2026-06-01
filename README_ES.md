@@ -21,10 +21,14 @@ cuando **tú** lo decides.
 ---
 
 ```bash
+# Un fichero, una carpeta, comprimido o plano — citrx lo detecta solo
 npx @javipm/citrx /var/log/nginx/access.log
+npx @javipm/citrx /var/log/nginx/          # una carpeta entera de logs
+npx @javipm/citrx access.log.gz logs.zip   # .gz .br .zip .tar.gz .tgz
+cat access.log | npx @javipm/citrx -        # stdin
 ```
 
-Ese único comando procesa el log en streaming, lo valida, ejecuta ~30 reglas de
+Ese comando procesa la entrada en streaming, la valida, ejecuta ~30 reglas de
 detección y abre una TUI a pantalla completa. Sin cuenta, sin subir nada, sin
 telemetría.
 

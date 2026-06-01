@@ -21,10 +21,14 @@ decide to.
 ---
 
 ```bash
+# A single file, a folder, compressed or plain — citrx figures it out
 npx @javipm/citrx /var/log/nginx/access.log
+npx @javipm/citrx /var/log/nginx/          # a whole folder of logs
+npx @javipm/citrx access.log.gz logs.zip   # .gz .br .zip .tar.gz .tgz
+cat access.log | npx @javipm/citrx -        # stdin
 ```
 
-That single command streams the log, validates it, runs ~30 detection rules, and
+That command streams the input, validates it, runs ~30 detection rules, and
 opens a full-screen TUI. No account, no upload, no telemetry.
 
 <div align="center">
