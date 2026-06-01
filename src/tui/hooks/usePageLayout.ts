@@ -34,7 +34,7 @@ interface PageLayoutOptions {
  */
 export function usePageLayout({ screen, rows, columns, prompt, exportNotice }: PageLayoutOptions) {
   return useMemo(() => {
-    const controlRows = (prompt ? 3 : 0) + (exportNotice ? 4 : 0);
+    const controlRows = (prompt ? 3 : 0) + (prompt?.kind === "filter" ? 1 : 0) + (exportNotice ? 4 : 0);
     const pageSize =
       screen === "incident"
         ? Math.max(4, rows - 13 - controlRows)

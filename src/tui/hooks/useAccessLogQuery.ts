@@ -1,6 +1,7 @@
 // Reads paginated access log index pages reactively, managing loading state and message feedback.
 import { useEffect, useState } from "react";
 import { setImmediate } from "node:timers/promises";
+
 import type { IncidentLogLine } from "../../analysis/types.js";
 import type { AccessLogIndexQueryCache } from "../../run/access-index.js";
 import { passThroughFilter, readAccessLogIndexCachedPage } from "../../run/access-index.js";
@@ -42,8 +43,6 @@ interface AccessLogQueryOptions {
   summaryPageSize: number;
   /** Current cursor position (absolute line index) within the full result set. */
   summaryLineIndex: number;
-  /** Called with `true` while an index build is in progress, `false` when done. */
-  setIndexLoading: (value: boolean) => void;
   /** Called to surface status/error text in the TUI status bar. */
   setMessage: (value: string) => void;
   /** Functional updater that clamps the cursor to the new total after each fetch. */
@@ -79,12 +78,12 @@ export function useAccessLogQuery({
   sortDirection,
   summaryPageSize,
   summaryLineIndex,
-  setIndexLoading,
   setMessage,
   setSummaryLineIndex
 }: AccessLogQueryOptions) {
   const [globalTotal, setGlobalTotal] = useState(run.report.accessLog.indexedLines);
   const [summaryPageLines, setSummaryPageLines] = useState<IncidentLogLine[]>([]);
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   // Compute the page offset from current index and known total.
   const summaryPageStart = Math.max(
@@ -102,10 +101,8 @@ export function useAccessLogQuery({
     const needsIndexBuild = !accessQueryCache.has(cacheKey) && (filter || sortKey !== "timestamp");
 
     if (needsIndexBuild) {
-      setIndexLoading(true);
+      setSummaryLoading(true);
       setMessage(filter ? "Building filter cache..." : "Building sort cache...");
-    } else {
-      setIndexLoading(false);
     }
 
     void (async () => {
@@ -128,18 +125,14 @@ export function useAccessLogQuery({
 
         setGlobalTotal(page.total);
         setSummaryPageLines(page.lines);
-        if (needsIndexBuild) {
-          setIndexLoading(false);
-        }
+        setSummaryLoading(false);
         setMessage(filter || sortKey !== "timestamp" ? "Filter cache ready" : "Ready");
 
         setSummaryLineIndex((value) => Math.min(Math.max(0, page.total - 1), value));
       })
       .catch((error) => {
         if (!cancelled) {
-          if (needsIndexBuild) {
-            setIndexLoading(false);
-          }
+          setSummaryLoading(false);
           setMessage(error instanceof Error ? error.message : String(error));
         }
       });
@@ -157,5 +150,5 @@ export function useAccessLogQuery({
     summaryPageStart
   ]);
 
-  return { globalTotal, summaryPageLines, summaryPageStart };
+  return { globalTotal, summaryPageLines, summaryPageStart, summaryLoading };
 }

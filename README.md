@@ -1,149 +1,287 @@
-# citrx
+<div align="center">
 
-`citrx` is a local-first CLI/TUI for Apache and Nginx access log analysis.
+# 🛰️ citrx
 
-It streams large access logs, validates that inputs look like access logs,
-detects security and abuse incidents locally, opens an interactive terminal UI
-by default, and can optionally ask OpenAI for deeper analysis of the current
-view or selected rows.
+### Local-first Apache & Nginx access-log analysis, in your terminal
 
-> Spanish documentation: [README_ES.md](./README_ES.md)
+Stream huge access logs, detect attacks and abuse with deterministic local
+rules, explore everything in an interactive TUI — and only ask AI when **you**
+decide to.
 
-## Why citrx
+[![npm](https://img.shields.io/npm/v/@javipm/citrx?color=cb3837&logo=npm)](https://www.npmjs.com/package/@javipm/citrx)
+[![node](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![types](https://img.shields.io/badge/types-TypeScript-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![privacy](https://img.shields.io/badge/privacy-local--first-success)](#-security--privacy)
 
-Access logs often hide expensive crawlers, scanner noise, fake bots, SQLi/XSS
-payloads, POST abuse, and traffic spikes. `citrx` is designed for DevOps,
-security engineers, and backend developers who need to quickly answer:
+**English** · [Español](./README_ES.md)
 
-- What happened?
-- Which paths, IPs, methods, user-agents, and query params are involved?
-- Which requests should I inspect?
-- Which WAF/rate-limit rule could reduce the impact?
+</div>
 
-The default workflow is:
-
-1. Run deterministic local analysis.
-2. Explore incidents and raw matching requests in the TUI.
-3. Filter, sort, inspect, and select rows.
-4. Ask OpenAI only when you explicitly want help interpreting that context.
-
-## Requirements
-
-- Node.js `>=24.15`
-- pnpm `>=11` for development
-
-Published package usage is intended to work with `npx citrx` once released.
-
-## Install And Run
-
-Development checkout:
+---
 
 ```bash
-pnpm install
-pnpm run dev -- /path/to/access.log
+npx @javipm/citrx /var/log/nginx/access.log
 ```
 
-After build:
+That single command streams the log, validates it, runs ~30 detection rules, and
+opens a full-screen TUI. No account, no upload, no telemetry.
 
-```bash
-pnpm run build
-node dist/cli.js /path/to/access.log
+<div align="center">
+
+<!-- Drop a real capture at assets/tui-summary.webp — see assets/README.md -->
+<img src="./assets/tui-summary.webp" alt="citrx TUI — summary screen with incident tabs and the global access-log table" width="860">
+
+</div>
+
+---
+
+## 🖼️ Screenshots
+
+<div align="center">
+
+<table>
+  <tr>
+    <td width="50%"><img src="./assets/tui-summary.webp" alt="Summary screen — incident tabs + global access-log table"><br><sub><b>Summary</b> — incident tabs + indexed access-log table</sub></td>
+    <td width="50%"><img src="./assets/tui-incident.webp" alt="Incident screen — evidence + related rows"><br><sub><b>Incident</b> — evidence + related access-log rows</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="./assets/tui-top-values.webp" alt="Top values screen"><br><sub><b>Top values</b> — top IPs, paths, UAs, params</sub></td>
+    <td width="50%"><img src="./assets/tui-filter.webp" alt="Filter bar with a query expression"><br><sub><b>Filter</b> — query language across the log</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="./assets/report-terminal.webp" alt="Terminal report"><br><sub><b>Terminal report</b> — <code>--no-interactive</code></sub></td>
+    <td width="50%"><img src="./assets/report-html.webp" alt="Self-contained HTML report"><br><sub><b>HTML report</b> — self-contained, offline</sub></td>
+  </tr>
+</table>
+
+</div>
+
+---
+
+## 📑 Table of contents
+
+- [Why citrx](#-why-citrx)
+- [Features](#-features)
+- [Quick start](#-quick-start)
+- [What the output looks like](#-what-the-output-looks-like)
+- [CLI reference](#-cli-reference)
+- [Inputs & formats](#-inputs--formats)
+- [Interactive TUI](#-interactive-tui)
+- [Filtering](#-filtering)
+- [AI mode (opt-in)](#-ai-mode-opt-in)
+- [Reports](#-reports)
+- [Detection rules](#-detection-rules)
+- [Scoring](#-scoring)
+- [Security & privacy](#-security--privacy)
+- [Development](#-development)
+- [License](#-license)
+
+---
+
+## 🤔 Why citrx
+
+Access logs quietly hide expensive crawlers, scanner noise, fake bots,
+SQLi/XSS payloads, POST abuse, and traffic spikes. `citrx` is built for DevOps,
+security engineers, and backend developers who need fast answers to:
+
+- **What happened?**
+- **Which paths, IPs, methods, user-agents, and query params are involved?**
+- **Which requests should I actually inspect?**
+- **Which WAF / rate-limit rule would reduce the impact?**
+
+The workflow is deliberately offline-first:
+
+```
+1. Run deterministic local analysis   →  no network, bounded memory
+2. Explore incidents + raw requests    →  interactive TUI
+3. Filter, sort, inspect, select rows  →  small query language
+4. Ask AI — only when you press `a`     →  compact, redacted context
 ```
 
-Common examples:
+---
+
+## ✨ Features
+
+| | |
+| --- | --- |
+| 🌊 **Streaming** | Bounded-memory, line-by-line parsing. Multi-GB logs never load fully into RAM. |
+| 🧭 **Format auto-detect** | Samples each input, picks `apache_common` / `apache_combined` / `nginx_combined`, fails early on non-access-log input. |
+| 🧩 **Custom formats** | Declarative JSON config with one regex + named fields, validated with `zod`. |
+| 🛡️ **~30 detection rules** | SQLi/XSS/LFI/SSRF/cmd-injection, recon, fake bots, scanners, DDoS bursts, AI crawlers, POST hotspots, error storms. |
+| 🖥️ **Full TUI** | Incident tabs, indexed access-log table, on-demand row loading, top values, request detail, exports. |
+| 🔎 **Query language** | `AND`/`OR`/`NOT`, parentheses, field operators, status families, wildcards, per-param filters. |
+| 📤 **Reports** | Terminal, JSON, Markdown, and self-contained offline HTML. |
+| 🤖 **Opt-in AI** | OpenAI is never called during analysis — only on explicit `a`, with redacted context. |
+| 📦 **Compressed inputs** | `.gz`, `.br`, `.zip`, `.tar.gz`, `.tgz`, folders, and stdin. |
+| 🔒 **Local-first** | No telemetry, secrets redacted, temp index deleted on exit. |
+
+---
+
+## 🚀 Quick start
+
+### Run without installing
 
 ```bash
-# Open the interactive TUI by default
+# npm
+npx @javipm/citrx /var/log/nginx/access.log
+
+# pnpm
+pnpx @javipm/citrx /var/log/nginx/access.log
+
+# yarn
+yarn dlx @javipm/citrx /var/log/nginx/access.log
+
+# bun
+bunx @javipm/citrx /var/log/nginx/access.log
+```
+
+### Install globally
+
+```bash
+npm i -g @javipm/citrx
 citrx /var/log/nginx/access.log
+```
 
-# Analyze many paths, folders, and compressed files
+### Common invocations
+
+```bash
+# Analyze many paths, folders, and compressed files at once
 citrx ./logs access.log.gz archive.zip
 
 # Read from stdin
 cat access.log | citrx -
 
-# Non-interactive terminal report
+# Non-interactive terminal report (CI, pipes, cron)
 citrx access.log --no-interactive
 
-# JSON / Markdown / HTML reports
+# Structured reports
 citrx access.log --json
 citrx access.log --markdown --out report.md
-citrx access.log --html --out report.html
+citrx access.log --html     --out report.html
 
-# Date range
+# Restrict a date range
 citrx access.log --since 2026-05-25T00:00:00Z --until 2026-05-25T23:59:59Z
 
-# Explicit parser
+# Force a parser
 citrx access.log --format apache_combined
 ```
 
-`citrx analyze` was removed. Use:
+> **Requirements:** Node.js `>=22` (developed and tested on `24.15`). `npx`/`pnpx`
+> handle the rest.
 
-```bash
-citrx <paths...>
+**Exit codes** make `citrx` CI-friendly:
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Success, no high/critical incidents |
+| `1`  | Execution / configuration error |
+| `2`  | High or critical incidents found |
+
+---
+
+## 📟 What the output looks like
+
+Running the non-interactive report on a small synthetic log
+(`citrx demo_access.log --no-interactive`):
+
+```text
+citrx access log analysis
+
+Files: 1
+Lines: 72/72
+Invalid: 0
+Bytes served: 86972
+Time range: 2026-05-25T10:00:01.000Z to 2026-05-25T10:05:59.000Z
+Peak global RPS: 3 at 2026-05-25T10:03:00.000Z
+Formats: apache_combined
+
+Top IPs
+      60  8.8.4.4
+       4  198.51.100.23
+       3  45.83.66.12
+       2  192.0.2.55
+...
+
+Known AI bots
+       3  GPTBot ips=1 paths=1 robots=no
+
+Security incidents (attacks)
+  critical 100  SQL injection payload count=1
+       ip: 198.51.100.23
+       /index.php
+       sample: /index.php?id=1+AND+SLEEP(5)
+  critical  95  Known scanner user-agent count=4
+       ip: 198.51.100.23
+  critical  90  Sensitive file probe count=2 2XX_HIT
+       ip: 198.51.100.23
+       /.env
+       /.git/config
+  high      85  Known scanner user-agent count=2
+       ip: 192.0.2.55
 ```
 
-## CLI Options
+> `2XX_HIT` means the payload or probe received at least one `2xx` response —
+> a *possible* successful reply worth inspecting, not proven compromise.
+
+---
+
+## 🧰 CLI reference
 
 ```text
 Usage: citrx [options] <paths...>
 
 Options:
-  --json                    Write machine-readable JSON output
-  --markdown                Write Markdown output
-  --html                    Write a self-contained HTML report
-  --out <path>              Write report output to a file
-  --no-interactive          Print terminal report instead of opening the TUI
-  --format <format>         auto, apache_common, apache_combined,
-                            nginx_combined, or custom:<name>
-  --format-config <path>    JSON file with custom access-log formats
-  --top <n>                 Limit top lists
-  --since <date>            Include entries at or after this date
-  --until <date>            Include entries at or before this date
-  --include <glob>          Include paths matching this glob
-  --exclude <glob>          Exclude paths matching this glob
-  --no-color                Disable colored terminal output
-  --debug                   Print debug details on failure
-  -v, --version             Display version
+  --json                  Write machine-readable JSON output.
+  --markdown              Write Markdown output.
+  --html                  Write a self-contained HTML report.
+  --out <path>            Write report output to a file.
+  --no-interactive        Print the terminal report instead of opening the TUI.
+  --format <format>       auto, apache_common, apache_combined,
+                          nginx_combined, or custom:<name>.   (default: auto)
+  --format-config <path>  JSON file with custom access-log formats.
+  --top <n>               Limit top lists.                    (default: 20)
+  --since <date>          Include entries at or after this date.
+  --until <date>          Include entries at or before this date.
+  --include <glob>        Include paths matching this glob.
+  --exclude <glob>        Exclude paths matching this glob.
+  --no-color              Disable colored terminal output.
+  --debug                 Print debug details on failure.
+  -v, --version           Display the current version.
+  -h, --help              Display help for command.
 ```
 
-`NO_COLOR=1` disables color. `CITRX_QUIET=1` disables startup UI/progress noise
-for terminal output.
+Environment:
 
-## Inputs
+- `NO_COLOR=1` — disable color.
+- `CITRX_QUIET=1` — silence startup/progress noise for terminal output.
 
-Supported inputs:
+If stdout/stdin are TTYs and no report format is requested, `citrx` opens the
+TUI by default. `--no-interactive` prints the terminal report instead.
 
-- individual access log files
-- folders
-- stdin with `-`
-- `.gz`
-- `.br`
-- `.zip`
-- `.tar.gz`
-- `.tgz`
+---
 
-ZIP and TAR archives are scanned for candidate log files such as `access.log`,
-`.log`, `.txt`, extensionless logs, `.gz`, and `.br` files.
+## 📥 Inputs & formats
 
-`citrx` streams inputs and does not read full logs into memory. For the TUI it
-creates a temporary access-log index under the OS temp directory. That workspace
-is removed when the process exits.
+### Supported inputs
 
-## Access Log Formats
+Individual files · folders · stdin (`-`) · `.gz` · `.br` · `.zip` · `.tar.gz` · `.tgz`
 
-Built-in formats:
+ZIP/TAR archives are scanned for candidate log files (`access.log`, `.log`,
+`.txt`, extensionless logs, `.gz`, `.br`). Everything is streamed — full logs
+are never read into memory. The TUI builds a **temporary** access-log index
+under the OS temp dir and removes it on exit.
 
-- `apache_common`
-- `apache_combined`
-- `nginx_combined`
+### Built-in formats
 
-Default mode is `--format auto`. `citrx` samples each input, chooses the best
-parser, and fails early if the sample does not look like an Apache/Nginx-style
-access log.
+`apache_common` · `apache_combined` · `nginx_combined`
 
-Custom formats are supported with `--format custom:<name>` and
-`--format-config <path>`:
+Default is `--format auto`: `citrx` samples each input, chooses the best parser,
+and fails early when the sample doesn't look like an Apache/Nginx access log.
+
+### Custom formats
+
+One declarative JSON config, one regex with named groups, validated by `zod`:
 
 ```json
 {
@@ -152,187 +290,118 @@ Custom formats are supported with `--format custom:<name>` and
       "name": "pipe",
       "pattern": "^(?<ip>\\S+)\\|(?<timestamp>[^|]+)\\|(?<method>\\S+)\\|(?<target>\\S+)\\|(?<protocol>HTTP/[^|]+)\\|(?<status>\\d{3})\\|(?<bytes>\\S+)\\|(?<userAgent>.*)$",
       "fields": {
-        "ip": "ip",
-        "timestamp": "timestamp",
-        "method": "method",
-        "target": "target",
-        "protocol": "protocol",
-        "status": "status",
-        "bytes": "bytes",
-        "userAgent": "userAgent"
+        "ip": "ip", "timestamp": "timestamp", "method": "method",
+        "target": "target", "protocol": "protocol", "status": "status",
+        "bytes": "bytes", "userAgent": "userAgent"
       }
     }
   ]
 }
 ```
 
-## Interactive TUI
+```bash
+citrx access.log --format custom:pipe --format-config ./formats.json
+```
+
+Required fields: `ip`, `timestamp`, `method`, `target`, `protocol`, `status`.
+Optional: `bytes`, `referer`, `userAgent`, `host`, `requestTime`, `upstreamTime`,
+`forwardedFor`.
+
+---
+
+## 🖥️ Interactive TUI
 
 When stdout/stdin are TTYs and no report format is requested, `citrx` opens a
-full-screen terminal UI.
+full-screen terminal UI. It's the core product surface, not a debug view.
 
-### Summary Screen
+```
+┌─ citrx ────────────────────────────────────────────────────────────────────┐
+│  [ access log ] [ SATURATION ] [ SECURITY ] [ OTHER ]          Tab to switch │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  #     IP              TIME      MTH  ST   BYTES  PATH                        │
+│  3     198.51.100.23   10:01:11  GET  500      0  /index.php?id=1+AND+SLEEP.. │
+│  5     198.51.100.23   10:01:12  GET  200   1200  /.env                       │
+│  7     192.0.2.55      10:02:00  GET  404      0  /wp-admin/                  │
+│ ...                                                                           │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  f filter   s sort   t top   Enter detail   a ask AI   e export   h help     │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
 
-Shows:
+<div align="center">
 
-- analysis summary
-- navigable incident panels (three tabs)
-- complete indexed access-log table
+<!-- assets/tui-incident.webp -->
+<img src="./assets/tui-incident.webp" alt="citrx incident screen" width="820">
 
-The incident area has three tabs navigable with `Tab`:
+</div>
 
-| Tab                      | Contents                                                                  |
-| ------------------------ | ------------------------------------------------------------------------- |
-| **SATURATION** (default) | Rate bursts, DDoS, AI crawlers, abusive bots — traffic/resource abuse     |
-| **SECURITY**             | SQLi/XSS/LFI payloads, recon, fake bots, scanner UA — compromise attempts |
-| **OTHER**                | Low-signal or noise incidents filtered from the main panels               |
+### Summary screen
 
-`Tab` cycles: access log → SATURATION → SECURITY → OTHER → access log.
+Incident area has three tabs (cycle with `Tab`: access log → SATURATION →
+SECURITY → OTHER → access log):
 
-Incidents marked `2XX_HIT` had at least one `2xx` response, meaning the
-payload or probe received a successful HTTP reply.
-
-Keys:
+| Tab | Contents |
+| --- | --- |
+| 🌊 **SATURATION** (default) | Rate bursts, DDoS, AI crawlers, abusive bots — traffic/resource abuse |
+| 🛡️ **SECURITY** | SQLi/XSS/LFI payloads, recon, fake bots, scanner UAs — compromise attempts |
+| 🗂️ **OTHER** | Low-signal / noise incidents filtered from the main panels |
 
 ```text
 Tab              switch focus between access log and incident panels
-↑/↓              move row
-PgUp/PgDn        page through rows
+↑/↓              move row            PgUp/PgDn   page through rows
 Enter / d        open incident or request detail
 f or /           filter access-log rows
-s or S           open sort menu
-t                open global top values
-Space            select current row
-A                select visible rows
-a                ask OpenAI about current view/selection
+s or S           open sort menu      t           global top values
+Space            select current row  A           select visible rows
+a                ask AI about current view/selection
 e                open export menu (CSV, JSON, TSV)
-q                ask before quit
 h                contextual help overlay (keys + filter syntax)
-```
-
-### Incident Screen
-
-Shows incident evidence and all related access-log lines.
-
-Keys are intentionally similar to the summary screen:
-
-```text
-↑/↓              move row
-PgUp/PgDn        page through rows
-Enter / d        open request detail
-t                open top values for this incident
-Space            select current row
-A                select visible rows
-f or /           filter rows
-s or S           open sort menu
-a                ask OpenAI about this incident/selection
-e                open export menu (CSV, JSON, TSV)
-b                back to summary
 q                ask before quit
-h                contextual help overlay
 ```
 
-Incident rows load on demand — the screen is responsive immediately even for
-very large incidents. Filtering or sorting a large incident shows background
-progress in the status bar; press Esc to cancel and revert to the previous
-result.
+### Incident screen
 
-Incident export streams rows directly from the access index and is available
-immediately, with or without a selection. Selected-rows export uses the in-memory
-selection; full-incident export streams all filtered rows to a tmp file and
-atomically renames it when finished. Esc aborts a running export.
-
-### Export Menu
-
-Press `e` from the summary or incident screen to choose an export format before
-writing the current context. Summary exports write the selected rows, or the
-full filtered access-log result when nothing is selected. Incident exports write
-the selected rows when a selection exists, or all currently filtered incident
-rows via streaming when nothing is selected.
+Evidence + every related access-log line. Rows load on demand by fixed-size
+buckets, so even huge incidents are responsive immediately. Filtering or sorting
+a large incident shows background progress in the status bar — press `Esc` to
+cancel and revert.
 
 ```text
-↑/↓              choose CSV, JSON, or TSV
-c / j / t        export directly as CSV, JSON, or TSV
-Enter            export using selected format
-Esc / Backspace  cancel
+↑/↓ · PgUp/PgDn  navigate            Enter / d   open request detail
+t                top values for this incident (computed from full row set)
+f · s/S          filter · sort       Space · A   select row · visible page
+a · e            ask AI · export     b           back to summary
 ```
 
-### Sort Menu
+### Top values · request detail · export
 
-Press `s` or `S` from the summary or incident screen to open a centered sort
-menu over the log. The menu lets you choose the sort field and direction before
-any expensive re-indexing happens.
+- **Top values** (`t`): top IPs, paths, user-agents, query params, and param
+  values. Respects the active filter. `Enter` applies a filter from a value.
+- **Request detail** (`Enter`/`d`): full source, timestamp, IP, method, status,
+  bytes, path, target, user-agent, and raw line with wrapping.
+- **Export** (`e`): CSV / JSON / TSV. Summary exports the selected rows or the
+  full filtered result; incident export streams all filtered rows to a temp file
+  and atomically renames it when done. `Esc` aborts a running export.
 
-```text
-←/→              switch between field and direction columns
-↑/↓              choose field or direction
-Space            select current column and move to the next step
-Enter            apply sort and close the menu
-Esc / Backspace  cancel
-```
+> Long-running filter/sort/top/export operations always show a loading state —
+> the app never *looks* frozen — and `Esc` consistently cancels the active
+> operation before navigating.
 
-Selected values are highlighted in the menu. When a large filtered/sorted view
-or top-value set is being computed, or an export is running, the TUI shows a
-loading status instead of appearing frozen.
+---
 
-### Top Values Screen
+## 🔎 Filtering
 
-Available from summary or incident screens with `t`.
+Filters work on the global access log, incident rows, and top-value drill-downs.
+Case-insensitive, with a small query language:
 
-Panels:
-
-- top IPs
-- top paths
-- top user-agents
-- top query params
-- top query param values
-
-Keys:
-
-```text
-Tab              switch panel
-↑/↓              move inside panel
-Enter            apply a filter using selected value
-a                ask OpenAI about the visible top values
-t / b / Esc      back
-q                ask before quit
-h                contextual help overlay
-```
-
-If a filter is active, top values are computed from the filtered subset.
-
-### Request Detail
-
-Open with `Enter` or `d` on a log row. It shows full source, timestamp, IP,
-method, status, bytes, path, target, user-agent, and raw line with wrapping.
-
-```text
-↑/↓ PgUp/PgDn    scroll
-d / b / Esc      close
-q                ask before quit
-h                contextual help overlay
-```
-
-## Filtering
-
-Filters work on the global access log and incident-related rows.
-
-You can use filters from the summary access-log table, incident rows, and top
-values drill-downs. They are case-insensitive and work as a small query language:
-
-- plain text searches across IP, time, method, path, target, status, bytes, UA,
-  and raw line
-- adjacent terms mean `AND`
-- explicit `AND`, `OR`, `|`, parentheses, and negation with `!` or `NOT`
-- `:` means contains for normal fields, while `=` means exact match
-- `!=` negates a field match
-- `>`, `>=`, `<`, `<=` work for `status`, `bytes`, and `line`
-- `status:2xx`, `status:3xx`, `status:4xx`, and `status:5xx` match status families
-- `*` wildcards are anchored, so `ip:66.249.*` matches that prefix
-- quoted values allow spaces or symbols: `ua:"Googlebot/2.1"`
-- URL-encoded filter values are decoded before matching
-
-Common examples:
+- plain text searches across IP, time, method, path, target, status, bytes, UA, raw line
+- adjacent terms mean `AND`; explicit `AND`, `OR`, `|`, parentheses, and `!`/`NOT`
+- `:` = contains, `=` = exact, `!=` = negated match
+- `>`, `>=`, `<`, `<=` for `status`, `bytes`, `line`
+- status families: `status:2xx`, `status:3xx`, `status:4xx`, `status:5xx`
+- anchored wildcards: `ip:66.249.*`
+- quoted values for spaces/symbols: `ua:"Googlebot/2.1"`
+- URL-encoded values are decoded before matching
 
 ```text
 method:POST status:200 url:*admin*
@@ -341,276 +410,220 @@ method:POST status:200 url:*admin*
 ip:66.249.* bytes>50000
 status:5xx path:/checkout
 method!=GET status>=400
-param:q
-param:q=*select*
-param:*=*sleep*
-query:*utm_*
-url:"/admin/login?q=camper"
+param:q                # any request with a q parameter
+param:q=*select*       # q value contains "select"
+param:*=*sleep*        # any param value contains "sleep"
 raw:"union select"
 source:access.log line>=10000 line<20000
 ```
 
-Fields:
+**Fields:** `ip, method, status, path, target, url, ua, bytes, param, query, source, line, time, raw`
 
-```text
-ip, method, status, path, target, url, ua, bytes, param, query, source, line, time, raw
-```
+**Aliases:** `url→target`, `timestamp→time`, `userAgent→ua`, `st→status`,
+`ln→line`, `src→source`, `qs→query`, `mth→method`, `params→param`
 
-Useful aliases:
+Bare text is great for quick hunting — `googlebot checkout` requires both words
+somewhere in the searchable line.
 
-```text
-url -> target
-timestamp -> time
-userAgent -> ua
-st -> status
-ln -> line
-src -> source
-qs -> query
-mth -> method
-params -> param
-```
+---
 
-Parameter filters have two modes:
+## 🤖 AI mode (opt-in)
 
-```text
-param:q              any request with a q parameter
-param:q=*select*     q parameter whose value contains "select"
-param:*=*token*      any parameter value containing "token"
-```
-
-Bare text is convenient for quick hunting:
-
-```text
-googlebot checkout
-198.51.100.10 wp-admin
-```
-
-Those are equivalent to requiring both words somewhere in the searchable line.
-
-## OpenAI Mode
-
-OpenAI is never called during the initial analysis. It is only called when you
-press `a` in the TUI.
-
-Setup:
+OpenAI is **never** called during analysis — only when you press `a` in the TUI
+and `OPENAI_API_KEY` is set.
 
 ```bash
 export OPENAI_API_KEY="sk-proj-..."
-```
 
-Optional:
-
-```bash
+# optional
 export CITRX_OPENAI_MODEL="gpt-5.4-mini"
 export CITRX_AI_MAX_LINES="200"
 export CITRX_AI_MAX_CHARS="60000"
 ```
 
-OpenAI receives compact, redacted context:
+It receives **compact, redacted** context only:
 
-- report summary
-- time stats
-- top IPs/paths/methods/statuses
-- top behavior stats
+- report summary + time stats
+- top IPs / paths / methods / statuses + behavior stats
 - selected incident evidence
 - selected rows, or visible filtered rows when nothing is selected
 - user-agent references instead of repeating long UAs
 
-The answer is shown in a dedicated scrollable TUI screen with lightweight
-Markdown rendering.
+The answer renders in a dedicated scrollable screen with lightweight Markdown.
+Access logs contain no ASN data, so the model is instructed never to invent
+ASN/organization details.
 
-Important: access logs do not contain ASN data. If ASN/organization is not
-present in the local context, the model is instructed not to invent it.
+---
 
-## Reports
+## 📊 Reports
 
-Supported outputs:
+| Format | Flag | Notes |
+| --- | --- | --- |
+| Terminal | `--no-interactive` (or non-TTY) | Colored summary + incidents |
+| JSON | `--json` | Machine-readable, typed report model |
+| Markdown | `--markdown` | Great for tickets / PRs |
+| HTML | `--html` | **Self-contained, offline, no external resources** |
 
-- colored terminal report
-- JSON (`--json`)
-- Markdown (`--markdown`)
-- self-contained offline HTML (`--html`)
+Use `--out <path>` to write to disk. HTML reports embed CSS/JS, escape all data,
+ship sortable/filterable tables, and are print/PDF friendly.
 
-Use `--out <path>` to write Markdown/HTML/JSON to disk.
+---
 
-HTML reports:
+## 🛡️ Detection rules
 
-- self-contained CSS/JS
-- no external network resources
-- escaped output
-- sortable/filterable tables
-- print/PDF friendly
+Every incident carries a `kind` that drives its TUI panel:
 
-## Incident Types
+| Kind | Panel | Examples |
+| --- | --- | --- |
+| `compromise` | 🛡️ SECURITY | SQLi/XSS/LFI payloads, recon, fake bots, scanner tools |
+| `saturation` | 🌊 SATURATION | DDoS bursts, AI crawlers, abusive crawlers, POST hotspots |
+| `noise` | 🗂️ OTHER | Low-signal patterns unlikely to need immediate action |
 
-Every incident has a `kind` field that drives which TUI panel it appears in:
+<details>
+<summary><strong>Payload &amp; recon rules</strong></summary>
 
-| Kind         | Panel      | Examples                                                      |
-| ------------ | ---------- | ------------------------------------------------------------- |
-| `compromise` | SECURITY   | SQLi/XSS/LFI payloads, recon probes, fake bots, scanner tools |
-| `saturation` | SATURATION | DDoS bursts, AI crawlers, abusive crawlers, POST hotspots     |
-| `noise`      | OTHER      | Low-signal patterns unlikely to need immediate action         |
+| ID prefix | Category | Kind | Meaning |
+| --- | --- | --- | --- |
+| `sqli:` | `sql_injection` | compromise | `union select`, sleep/benchmark, encoded SQL |
+| `xss:` | `xss` | compromise | script/browser execution indicators |
+| `lfi_rfi:` | `path_traversal` | compromise | traversal, LFI/RFI, `php://filter`, sensitive paths |
+| `ssrf:` | `ssrf` | compromise | localhost, metadata IPs/hosts, callback-like params |
+| `command_injection:` | `command_injection` | compromise | shell metacharacters + command indicators |
+| `recon_sensitive_file:` | `recon` | compromise | probes for `.env`, `.git`, backups, dumps |
+| `rare_method:` | `http_anomaly` | noise | uncommon methods (`CONNECT`, `TRACE`, `OPTIONS`) |
 
-`citrx` currently emits these incident families.
+Payload incidents are grouped **by attacker IP** (one incident per IP). Scoring
+by response outcome:
 
-### Payload And Recon Rules
+- any `2xx` → SECURITY, `critical/100` + `2XX_HIT` (payload landed)
+- any `5xx` → SECURITY, `critical/90`
+- only blocked/redirected → OTHER noise (context, not proven impact)
 
-| ID prefix               | Category            | Kind       | Meaning                                                                               |
-| ----------------------- | ------------------- | ---------- | ------------------------------------------------------------------------------------- |
-| `sqli:`                 | `sql_injection`     | compromise | SQL injection payload indicators such as `union select`, sleep/benchmark, encoded SQL |
-| `xss:`                  | `xss`               | compromise | script/browser execution indicators                                                   |
-| `lfi_rfi:`              | `path_traversal`    | compromise | traversal, local/remote file inclusion, `php://filter`, sensitive paths               |
-| `ssrf:`                 | `ssrf`              | compromise | localhost, metadata IPs/hosts, callback-like URL params                               |
-| `command_injection:`    | `command_injection` | compromise | shell metacharacters plus command indicators                                          |
-| `recon_sensitive_file:` | `recon`             | compromise | probes for `.env`, `.git`, backups, dumps, internals                                  |
-| `rare_method:`          | `http_anomaly`      | noise      | uncommon HTTP methods (`CONNECT`, `TRACE`, `OPTIONS`)                                 |
+`recon_sensitive_file` needs ≥2 successful responses or a 10% success ratio to
+avoid flagging ordinary 404 scanners.
 
-Payload incidents are grouped **by attacker IP**, not by path, so one incident
-per IP regardless of how many paths they probe. Scoring by response outcome:
+</details>
 
-- Any `2xx` response → `SECURITY`, `critical/100` + `2XX_HIT` flag (payload landed)
-- Any `5xx` response → `SECURITY`, `critical/90`
-- Only blocked/redirected responses → `OTHER` noise; useful context, not proven impact
+<details>
+<summary><strong>Aggregate path, rate / DDoS, error-storm rules</strong></summary>
 
-`recon_sensitive_file` requires at least **2 successful responses** or a **10% success
-ratio** to avoid flagging typical 404 scanners.
+| ID prefix | Category | Kind | Meaning |
+| --- | --- | --- | --- |
+| `abusive_crawl:` | `abusive_crawling` | saturation/noise | served path pressure or distributed crawling on a non-entrypoint path |
+| `query_explosion:` | `abusive_crawling` | noise | one path with many query variants |
+| `post_hotspot:` | `post_hotspot` | noise | endpoint with unusually many POSTs |
+| `ddos_rps_burst_single_ip:` | `ddos` | saturation | one IP exceeds per-second RPS for consecutive seconds |
+| `ddos_global_rps_spike` | `ddos` | saturation | global RPS over baseline for consecutive seconds |
+| `http_head_flood:` | `ddos` | saturation | one IP with high ratio + peak of HEAD requests |
+| `ddos_distributed_subnet:` | `ddos` | saturation | IPv4 `/24` or IPv6 `/48` over RPS + unique-IP thresholds |
+| `http_4xx_storm:` | `http_anomaly` | noise | one IP, many 4xx in adjacent minute buckets |
+| `http_5xx_storm:` | `http_anomaly` | saturation | one IP, many 5xx in adjacent minute buckets |
 
-### Aggregate Path Rules
+</details>
 
-| ID prefix          | Category           | Kind             | Meaning                                                                        |
-| ------------------ | ------------------ | ---------------- | ------------------------------------------------------------------------------ |
-| `abusive_crawl:`   | `abusive_crawling` | saturation/noise | material served path pressure or distributed crawling on a non-entrypoint path |
-| `query_explosion:` | `abusive_crawling` | noise            | one path requested with many query variants                                    |
-| `post_hotspot:`    | `post_hotspot`     | noise            | endpoint receives unusually many POST requests                                 |
+<details>
+<summary><strong>Bot &amp; scanner rules</strong></summary>
 
-### Rate And DDoS Rules
+| ID prefix | Category | Kind | Meaning |
+| --- | --- | --- | --- |
+| `ai_scraper_known:` | `ai_scraper` | saturation/noise | known AI crawler/assistant UA, grouped by bot |
+| `scanner_ua_known:` | `scanner` | compromise | known scanner/offensive tooling UA |
+| `scanner_signature_paths:` | `scanner` | compromise | one IP touches many fingerprint paths |
+| `single_ip_path_explosion:` | `abusive_crawling` | saturation | one IP > 10 unique paths/minute sustained |
+| `ua_rotation_same_ip:` | `http_anomaly` | noise | one IP, many UAs **and** peak RPS ≥ 5 |
+| `fake_bot_googlebot:` | `fake_bot` | compromise | claims Googlebot but IP outside published ranges |
+| `fake_bot_bingbot:` | `fake_bot` | compromise | claims bingbot but IP outside published Bing ranges |
 
-| ID prefix                   | Category | Kind       | Meaning                                                                               |
-| --------------------------- | -------- | ---------- | ------------------------------------------------------------------------------------- |
-| `ddos_rps_burst_single_ip:` | `ddos`   | saturation | one IP exceeds per-second RPS threshold for consecutive seconds                       |
-| `ddos_global_rps_spike`     | `ddos`   | saturation | global RPS exceeds baseline for consecutive seconds                                   |
-| `http_head_flood:`          | `ddos`   | saturation | one IP sends a high ratio and high peak of HEAD requests                              |
-| `ddos_distributed_subnet:`  | `ddos`   | saturation | IPv4 `/24` or IPv6 `/48` exceeds RPS and unique-IP thresholds for consecutive seconds |
+Notes: `single_ip_path_explosion` needs **pathsPerMinute ≥ 10** (asset-heavy page
+loads don't trigger it). `abusive_crawl` enters SATURATION only with real served
+volume + a served-per-minute peak. `fake_bot_*` needs ≥10 requests. Verified
+Googlebot/Bingbot IPs are excluded from all bot/scanner detections.
 
-### HTTP Error Storm Rules
-
-| ID prefix         | Category       | Kind       | Meaning                                                        |
-| ----------------- | -------------- | ---------- | -------------------------------------------------------------- |
-| `http_4xx_storm:` | `http_anomaly` | noise      | one IP generates many 4xx responses in adjacent minute buckets |
-| `http_5xx_storm:` | `http_anomaly` | saturation | one IP generates many 5xx responses in adjacent minute buckets |
-
-### Bot And Scanner Rules
-
-| ID prefix                   | Category           | Kind             | Meaning                                                                |
-| --------------------------- | ------------------ | ---------------- | ---------------------------------------------------------------------- |
-| `ai_scraper_known:`         | `ai_scraper`       | saturation/noise | known AI crawler or AI assistant user-agent, grouped by bot            |
-| `scanner_ua_known:`         | `scanner`          | compromise       | known scanner/offensive tooling user-agent                             |
-| `scanner_signature_paths:`  | `scanner`          | compromise       | one IP touches many known fingerprint paths in adjacent minute buckets |
-| `single_ip_path_explosion:` | `abusive_crawling` | saturation       | one IP exceeds **10 unique paths/minute** sustained                    |
-| `ua_rotation_same_ip:`      | `http_anomaly`     | noise            | one IP uses many different user-agents **and** peak RPS ≥ 5            |
-| `fake_bot_googlebot:`       | `fake_bot`         | compromise       | UA claims core Googlebot but IP is outside published Googlebot ranges  |
-| `fake_bot_bingbot:`         | `fake_bot`         | compromise       | UA claims bingbot but IP is outside published Bing ranges              |
-
-Detection notes:
-
-- `single_ip_path_explosion` requires **pathsPerMinute ≥ 10**, not just raw count.
-  Normal page loads fetching many assets do not trigger it.
-- `abusive_crawl` enters `SATURATION` only when enough requests are actually
-  served (`2xx`/material `5xx`) and the path has a real served-per-minute peak.
-  Redirect-heavy or 403-heavy traffic stays in `OTHER`.
-- `ua_rotation_same_ip` requires **peak RPS ≥ 5**, but is still `OTHER` unless
-  another detector finds payload impact. Shared NAT (e.g. AWS offices) naturally
-  generates many user-agents at low rate without being malicious.
-- `fake_bot_*` incidents require **at least 10 requests** from that IP.
-- IPs confirmed as legitimate Googlebot or Bingbot (verified against published
-  ranges) are excluded from all bot and scanner detections.
-- `ai_scraper_known` is `SATURATION` only for bursty path fan-out; high total
-  crawler volume spread over days stays in `OTHER`.
-
-Googlebot and Bingbot range snapshots are stored in source. Refresh them with:
+Refresh the bundled Googlebot/Bingbot IP-range snapshots with:
 
 ```bash
 pnpm run update-bot-ranges
 ```
 
-## Scoring
+</details>
 
-Each incident has:
+---
 
-- `kind`: `compromise`, `saturation`, or `noise` (drives TUI panel placement)
-- `severity`: `info`, `low`, `medium`, `high`, `critical`
-- `score`: `0` to `100`
-- `evidence`: typed key/value data for audit
-- `samples`: redacted examples when relevant
-- `successful?`: `true` when at least one matching response was `2xx`
+## 🎯 Scoring
 
-Severity thresholds:
+Each incident has `kind`, `severity`, `score` (0–100), typed `evidence`,
+redacted `samples`, and `successful?`.
 
-| Score range | Severity   |
-| ----------- | ---------- |
-| 0–24        | `info`     |
-| 25–49       | `low`      |
-| 50–74       | `medium`   |
-| 75–89       | `high`     |
-| 90–100      | `critical` |
+| Score | Severity |
+| --- | --- |
+| 0–24 | `info` |
+| 25–49 | `low` |
+| 50–74 | `medium` |
+| 75–89 | `high` |
+| 90–100 | `critical` |
 
-Post-processing multipliers applied after base scoring:
+Post-processing multipliers:
 
-- `+10` when the same `evidence.ip` appears in two or more incidents (correlated attacker)
-- `+15` when a pattern persists for at least 30 minutes (persistence bonus)
-- `-10` for moderate known AI crawlers that requested `robots.txt`
+- `+10` when the same `evidence.ip` appears in ≥2 incidents (correlated attacker)
+- `+15` when a pattern persists ≥30 min (persistence bonus)
+- `−10` for moderate AI crawlers that requested `robots.txt`
 
-Notes:
+Persistence bonus does **not** apply to `ai_scraper_known:*` — AI crawlers run
+for weeks, so duration alone isn't a signal. Panels sort by `kind` weight
+(compromise → saturation → noise), then by score descending.
 
-- Persistence bonus does **not** apply to `ai_scraper_known:*` — AI crawlers naturally
-  run for weeks, so duration alone is not a signal.
-- Scores are sorted within each panel by `kind` weight first
-  (compromise → saturation → noise), then by score descending.
-- Scores are capped to `[0, 100]`, then severity is recalculated from the final score.
+---
 
-## Security And Privacy
+## 🔒 Security & privacy
 
-- Local analysis first.
-- No telemetry.
-- OpenAI only on explicit `a` action.
-- Secrets in URL/query values are redacted.
-- HTML output is escaped.
-- Log content is never executed.
-- Runtime TUI index files are temporary and deleted on exit.
+- **Local analysis first** — no network call during analysis.
+- **No telemetry**, ever. (If ever added, strict opt-in only.)
+- **AI only on explicit `a`**, with redacted context.
+- **Secrets redacted** in URL/query values:
+  `token, _token, sid, session, password, passwd, key, secret, jwt, auth, authorization`
+- **HTML output escaped**; log content is never executed.
+- **Temp TUI index** files are deleted on exit.
 
-Redacted query keys include:
+Treat logs, exported JSON, paths, IPs, and route names as **sensitive customer
+data** — keep them out of public commits.
 
-```text
-token, _token, sid, session, password, passwd, key, secret, jwt, auth, authorization
-```
+---
 
-## Development
+## 🛠️ Development
 
 ```bash
 pnpm install
 pnpm run typecheck
 pnpm test
 pnpm run build
+
+# run from source against a fixture
+pnpm run dev -- examples/your.log
+pnpm run dev -- examples/your.log --json
 ```
 
-Run from source:
+Project layout:
 
-```bash
-pnpm run dev -- examples/access_ssl_log
-pnpm run dev -- examples/access_ssl_log --json
+```
+input/    path discovery, stdin, compressed/archive readers
+parser/   format detection, parser registry, built-in + custom parsers
+analysis/ streaming aggregation, behavior tracking, incident match sets
+rules/    deterministic request/path rules and scoring
+run/      temporary run workspace and access-log index
+tui/      Ink screens, hooks, filters, tables, overlays
+ai/       compact redacted context builder + OpenAI client
+report/   terminal, JSON, Markdown, HTML renderers
 ```
 
-Update bot IP range snapshots:
+**Stack:** TypeScript (ESM) · `commander` · `ink` + React · `zod` ·
+`picocolors` · official `openai` SDK · Vitest.
 
-```bash
-pnpm run update-bot-ranges
-```
+---
 
-## Project Status
+## 📄 License
 
-`citrx` is pre-1.0 and not published yet. CLI and report shapes may still
-change while the core workflow is refined.
+[MIT](./LICENSE) © [javipm](https://github.com/javipm)
 
-## License
-
-MIT
+<div align="center">
+<sub>Built for people who read their access logs. 🛰️</sub>
+</div>

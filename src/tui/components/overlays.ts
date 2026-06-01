@@ -9,7 +9,7 @@ import type {
   SummaryFocus,
   ExportFormat
 } from "../types.js";
-import { SORT_KEYS } from "../types.js";
+import { SORT_KEYS, FILTER_PRESETS } from "../types.js";
 import { fitText } from "../utils/format.js";
 import { useSpinner } from "../hooks/useSpinner.js";
 
@@ -193,7 +193,7 @@ export function SortMenuOverlay({
           color: sortMenu.focus === "apply" ? "black" : "yellow",
           backgroundColor: sortMenu.focus === "apply" ? "yellow" : "black"
         },
-        "  Filter  "
+        "  Apply  "
       )
     ),
     React.createElement(
@@ -312,6 +312,28 @@ export function ExportNoticeBar({
   );
 }
 
+export function FilterHintBar({
+  columns,
+  value
+}: {
+  columns: number;
+  value: string;
+}): React.ReactElement {
+  const presets = FILTER_PRESETS as readonly string[];
+  const activeIdx = presets.indexOf(value);
+  const parts = presets.map((p, i) => (i === activeIdx ? `[${p}]` : p)).join("  ");
+  const hint = `Tab: ${parts}  (h: filter syntax)`;
+  return React.createElement(
+    Box,
+    { paddingX: 1 },
+    React.createElement(
+      Text,
+      { color: "gray", wrap: "truncate" },
+      fitText(hint, columns - 4)
+    )
+  );
+}
+
 export function QuitConfirmBar({ columns }: { columns: number }): React.ReactElement {
   return React.createElement(
     Box,
@@ -348,29 +370,25 @@ export function Footer({
   columns: number;
 }): React.ReactElement {
   const spinner = useSpinner(loading || busy);
-  const incidentShortcuts = [
-    "↑/↓ PgUp/PgDn rows",
-    "Enter/d detail",
-    "t tops",
-    "Space select",
-    "A select visible",
-    "f filter",
-    "s sort menu",
-    "a ask",
-    ...(incidentExportReady ? ["e export"] : []),
-    "b back",
-    "q quit",
-    "h help"
-  ].join(" | ");
-  const shortcuts = answerOpen
-    ? "↑/↓ PgUp/PgDn scroll | b/Esc close answer | q quit | h help"
-    : detailOpen
-      ? "↑/↓ PgUp/PgDn scroll | d/b/Esc close | q quit | h help"
-      : screen === "summary"
-        ? `Tab focus(${summaryFocus}) | ↑/↓ PgUp/PgDn navigate panel | Enter/d open | f filter | s sort menu | t tops | a ask | e export | q quit | h help`
-        : screen === "tops"
-          ? "Tab panel | ↑/↓ row | Enter filter by value | a ask about tops | t/b/Esc back | q quit | h help"
-          : incidentShortcuts;
+
+  let shortcuts: string;
+  if (answerOpen) {
+    shortcuts = "↑/↓ PgUp/PgDn scroll | Esc/b close | h help";
+  } else if (detailOpen) {
+    shortcuts = "↑/↓ PgUp/PgDn scroll | Esc/d/b close | h help";
+  } else if (screen === "summary") {
+    shortcuts =
+      summaryFocus === "accesses"
+        ? "↑/↓ rows | d detail | Tab focus | / filter | t tops | h help (all keys)"
+        : "Tab switch type | ↑/↓ rows | Enter drill | / filter | t tops | h help (all keys)";
+  } else if (screen === "tops") {
+    shortcuts = "Tab panel | ↑/↓ row | Enter apply filter | b/Esc back | h help";
+  } else {
+    // incident screen
+    const exportHint = incidentExportReady ? " | e export" : "";
+    shortcuts = `↑/↓ rows | Enter/d detail | / filter${exportHint} | b back | h help (all keys)`;
+  }
+
   const prefix = loading || busy ? `${spinner} ` : "";
   const status = `${prefix}${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
 
@@ -382,6 +400,6 @@ export function Footer({
       { color: busy || loading ? "yellow" : "cyan", wrap: "truncate" },
       fitText(status, columns - 2)
     ),
-    React.createElement(Text, { color: "cyan", wrap: "truncate" }, fitText(shortcuts, columns - 2))
+    React.createElement(Text, { color: "gray", wrap: "truncate" }, fitText(shortcuts, columns - 2))
   );
 }

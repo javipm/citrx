@@ -10,23 +10,43 @@ interface HelpSection {
 
 const SUMMARY_SECTIONS: HelpSection[] = [
   {
+    title: "Screen layout",
+    rows: [
+      ["Analysis (top-left)", "file count, formats, parsed lines, bytes, peak RPS"],
+      ["Incidents (top-right)", "Saturation | Security | Other tabs — incident list"],
+      ["Access log (bottom)", "all indexed lines — filterable, sortable, selectable"]
+    ]
+  },
+  {
     title: "Navigation",
     rows: [
-      ["Tab", "Switch focus between panels (Accesses / Compromise / Saturation / Noise)"],
-      ["↑/↓ PgUp/PgDn", "Move cursor in the active list"],
-      ["Enter / d", "Open detail for selected row"]
+      ["Tab", "Cycle focus: Accesses → Saturation → Security → Other → …"],
+      ["↑/↓  PgUp/PgDn", "Move cursor in the active panel"],
+      ["Enter", "Incidents panel: drill into incident detail screen"],
+      ["Enter / d", "Accesses panel: open request detail"]
     ]
   },
   {
     title: "Actions",
     rows: [
-      ["f", "Filter global access log"],
+      ["/ or f", "Filter access log (Tab cycles presets in prompt)"],
+      ["r", "Reset filter, sort, and row selection"],
       ["s", "Open sort menu"],
       ["t", "Top values (IPs, paths, UAs, params)"],
       ["a", "Ask OpenAI (requires OPENAI_API_KEY)"],
       ["e", "Export selection or current filtered result"],
       ["Space", "Toggle row selection"],
-      ["A", "Select all visible rows"]
+      ["A", "Select all visible rows (capped at 10 000)"]
+    ]
+  },
+  {
+    title: "Incident severity icons",
+    rows: [
+      ["!", "critical"],
+      ["^", "high"],
+      ["~", "medium"],
+      ["-", "low"],
+      [".", "info"]
     ]
   },
   {
@@ -40,22 +60,30 @@ const SUMMARY_SECTIONS: HelpSection[] = [
 
 const INCIDENT_SECTIONS: HelpSection[] = [
   {
+    title: "Screen layout",
+    rows: [
+      ["Evidence (top)", "incident summary: category, score, top IPs/paths, samples"],
+      ["Access log (bottom)", "log lines that matched this incident — filter/select/export"]
+    ]
+  },
+  {
     title: "Navigation",
     rows: [
-      ["↑/↓ PgUp/PgDn", "Scroll incident rows"],
-      ["Enter / d", "Open request detail"]
+      ["↑/↓  PgUp/PgDn", "Scroll incident log rows"],
+      ["Enter / d", "Open request detail for focused row"]
     ]
   },
   {
     title: "Actions",
     rows: [
-      ["t", "Top values for this incident"],
-      ["Space", "Toggle row selection"],
-      ["A", "Select all visible rows"],
-      ["f", "Filter within incident"],
+      ["/ or f", "Filter within incident (Tab cycles presets in prompt)"],
+      ["r", "Reset filter and row selection"],
       ["s", "Open sort menu"],
+      ["t", "Top values for this incident"],
       ["a", "Ask OpenAI about this incident"],
-      ["e", "Export incident (waits for full hydration)"]
+      ["e", "Export incident rows (selection or all)"],
+      ["Space", "Toggle row selection"],
+      ["A", "Select all rows (async on large incidents, Esc cancels)"]
     ]
   },
   {
@@ -70,10 +98,17 @@ const INCIDENT_SECTIONS: HelpSection[] = [
 
 const TOPS_SECTIONS: HelpSection[] = [
   {
+    title: "Screen layout",
+    rows: [
+      ["5 columns", "IPs | Paths | User-Agents | Params | Param values"],
+      ["Scope", "global (from summary) or scoped to the current incident"]
+    ]
+  },
+  {
     title: "Navigation",
     rows: [
-      ["Tab", "Switch panels (ips / paths / userAgents / params / paramValues)"],
-      ["↑/↓", "Move cursor in active panel"]
+      ["Tab", "Switch focus between the 5 panels"],
+      ["↑/↓", "Move cursor in the active panel"]
     ]
   },
   {
@@ -139,9 +174,10 @@ const SORT_MENU_SECTIONS: HelpSection[] = [
   {
     title: "Sort menu",
     rows: [
-      ["←/→ Tab", "Switch between field / direction / apply"],
-      ["↑/↓", "Choose value"],
+      ["←/→  Tab", "Switch focus: field → direction → Apply button"],
+      ["↑/↓", "Choose field or toggle asc/desc"],
       ["Enter", "Apply sort"],
+      ["Space", "Advance focus or apply when on Apply button"],
       ["Esc", "Cancel"],
       ["h", "This help"]
     ]
@@ -150,14 +186,28 @@ const SORT_MENU_SECTIONS: HelpSection[] = [
 
 const PROMPT_SECTIONS: HelpSection[] = [
   {
-    title: "Active prompt (filter / question)",
+    title: "Filter prompt",
     rows: [
-      ["Type", "Edit prompt text"],
-      ["←/→ Home/End", "Move cursor"],
+      ["Type", "Enter a filter expression"],
+      ["Tab", "Cycle through preset examples (fills the input)"],
+      ["←/→", "Move cursor left / right"],
       ["Backspace / Del", "Delete character"],
-      ["Enter", "Submit"],
-      ["Esc", "Cancel"],
-      ["h", "(types literal h — close prompt first to open help)"]
+      ["Enter", "Apply filter (or clear if empty)"],
+      ["Esc", "Cancel — filter stays unchanged"]
+    ]
+  },
+  {
+    title: "AI question prompt",
+    rows: [
+      ["Type", "Enter your question"],
+      ["Enter", "Submit to OpenAI"],
+      ["Esc", "Cancel"]
+    ]
+  },
+  {
+    title: "Tip",
+    rows: [
+      ["h", "Close this prompt first, then press h for filter syntax help"]
     ]
   }
 ];
@@ -223,12 +273,18 @@ const FILTER_SECTIONS: HelpSection[] = [
     ]
   },
   {
-    title: "Examples",
+    title: "Examples (Tab cycles these in the filter prompt)",
     rows: [
-      ["status:5xx AND path:/admin", "errors hitting admin"],
+      ["status:5xx", "all server errors"],
+      ["method:POST", "POST requests only"],
+      ["ua:*bot*", "requests from bots"],
+      ["status:2xx AND path:/admin", "successful admin hits"],
+      ["status:4xx", "blocked / not-found responses"],
+      ["path:/api", "API endpoints"],
       ["ua:*bot* AND !ua:*Googlebot*", "bots that are not Googlebot"],
-      ["param:q=*UNION* OR param:*=*../*", "SQLi or path traversal"],
-      ["status>=400 AND method=POST", "failed POST requests"]
+      ["param:q=*UNION* OR param:*=*../*", "SQLi or path traversal probes"],
+      ["status>=400 AND method=POST", "failed POST requests"],
+      ["ip:1.2.3.4", "single IP"]
     ]
   }
 ];
@@ -273,23 +329,24 @@ export function HelpOverlay({
   const title = state.tab === "keys" ? CONTEXT_TITLE[state.context] : "Filter syntax";
   const allLines = sectionsToLines(sections, innerWidth);
 
-  const headerRows = 4; // title + blank + tabs + blank
+  const headerRows = 4; // title + blank + tabs + separator
   const footerRows = 2; // blank + footer
-  const bodyRows = Math.max(4, height - 2 - headerRows - footerRows);
+  // height - 4 = inner height (subtract 2 for double-border + 2 for paddingY:1 top/bottom)
+  const bodyRows = Math.max(4, height - 4 - headerRows - footerRows);
   const maxScroll = Math.max(0, allLines.length - bodyRows);
   const scroll = Math.min(Math.max(0, state.scroll), maxScroll);
   const visible = allLines.slice(scroll, scroll + bodyRows);
   while (visible.length < bodyRows) visible.push({ text: "" });
 
-  const tabsLabel = (label: string, active: boolean): React.ReactElement =>
+  const tabLabel = (label: string, active: boolean): React.ReactElement =>
     React.createElement(
       Text,
       {
         bold: active,
-        color: active ? "black" : "gray",
-        backgroundColor: active ? "yellow" : "black"
+        color: active ? "cyan" : "gray",
+        backgroundColor: "black"
       },
-      ` ${label} `
+      active ? `[ ${label} ]` : `  ${label}  `
     );
 
   const scrollHint =
@@ -320,11 +377,21 @@ export function HelpOverlay({
     React.createElement(Text, { backgroundColor: "black" }, blankLine),
     React.createElement(
       Box,
-      { flexDirection: "row", gap: 2, backgroundColor: "black" },
-      tabsLabel("Keys", state.tab === "keys"),
-      tabsLabel("Filters", state.tab === "filters")
+      { flexDirection: "row", gap: 0, backgroundColor: "black" },
+      tabLabel("Keys", state.tab === "keys"),
+      React.createElement(Text, { color: "gray", backgroundColor: "black" }, "  │  "),
+      tabLabel("Filters", state.tab === "filters"),
+      React.createElement(
+        Text,
+        { color: "gray", backgroundColor: "black" },
+        fitText("   Tab / ←→ to switch", Math.max(0, innerWidth - 28))
+      )
     ),
-    React.createElement(Text, { backgroundColor: "black" }, blankLine),
+    React.createElement(
+      Text,
+      { color: "gray", backgroundColor: "black" },
+      "─".repeat(innerWidth)
+    ),
     ...visible.map((line, index) =>
       React.createElement(
         Text,
@@ -342,9 +409,7 @@ export function HelpOverlay({
     React.createElement(
       Text,
       { color: "gray", backgroundColor: "black", wrap: "truncate" },
-      fitText("Tab / ←→ switch tab | ↑/↓ PgUp/PgDn scroll | h or Esc close", innerWidth).padEnd(
-        innerWidth
-      )
+      fitText("↑/↓ PgUp/PgDn scroll | h or Esc close", innerWidth).padEnd(innerWidth)
     )
   );
 }

@@ -14,3 +14,18 @@ export function severityColor(severity: Incident["severity"]): string {
       return "gray";
   }
 }
+
+export function severityIcon(severity: Incident["severity"]): string {
+  switch (severity) {
+    case "critical":
+      return "!";
+    case "high":
+      return "^";
+    case "medium":
+      return "~";
+    case "low":
+      return "-";
+    case "info":
+      return ".";
+  }
+}

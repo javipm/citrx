@@ -168,3 +168,12 @@ export const TOP_PANEL_KEYS: TopPanelKey[] = [
 ];
 export const SORT_KEYS: SortKey[] = ["timestamp", "ip", "status", "method", "path", "bytes"];
 export const SPINNER_FRAMES = ["-", "\\", "|", "/"];
+
+export const FILTER_PRESETS = [
+  "status:5xx",
+  "method:POST",
+  "ua:*bot*",
+  "status:2xx AND path:/admin",
+  "status:4xx",
+  "path:/api",
+] as const;

@@ -52,6 +52,7 @@ import { createAccessLogLineFilter } from "./filter.js";
 // Components
 import {
   PromptBar,
+  FilterHintBar,
   SortMenuOverlay,
   ExportMenuOverlay,
   ExportNoticeBar,
@@ -250,7 +251,8 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
   const {
     globalTotal,
     summaryPageLines,
-    summaryPageStart: computedSummaryPageStart
+    summaryPageStart: computedSummaryPageStart,
+    summaryLoading
   } = useAccessLogQuery({
     run,
     accessQueryCache,
@@ -259,7 +261,6 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     sortDirection,
     summaryPageSize,
     summaryLineIndex,
-    setIndexLoading,
     setMessage,
     setSummaryLineIndex
   });
@@ -772,7 +773,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     });
   });
 
-  const loading = indexLoading || exportLoading;
+  const loading = indexLoading || exportLoading || summaryLoading;
 
   return React.createElement(
     Box,
@@ -810,7 +811,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
                 sortDirection,
                 selectedLineKeys,
                 columns,
-                loading: indexLoading
+                loading: summaryLoading
               })
             : screen === "tops"
               ? React.createElement(TopValuesScreen, {
@@ -854,6 +855,9 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     sortMenu ? React.createElement(SortMenuOverlay, { sortMenu, columns, rows }) : null,
     exportMenu ? React.createElement(ExportMenuOverlay, { exportMenu, columns, rows }) : null,
     prompt ? React.createElement(PromptBar, { prompt, columns }) : null,
+    prompt?.kind === "filter"
+      ? React.createElement(FilterHintBar, { columns, value: prompt.value })
+      : null,
     exportNotice ? React.createElement(ExportNoticeBar, { notice: exportNotice, columns }) : null,
     quitConfirm ? React.createElement(QuitConfirmBar, { columns }) : null,
     helpOverlay ? React.createElement(HelpOverlay, { state: helpOverlay, columns, rows }) : null,

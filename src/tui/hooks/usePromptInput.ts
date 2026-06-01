@@ -1,6 +1,7 @@
 // Handles keyboard input in the prompt bar overlay (filter input and AI query input).
 import type { IncidentLogLine } from "../../analysis/types.js";
 import type { PromptState } from "../types.js";
+import { FILTER_PRESETS } from "../types.js";
 import { validateAccessLogFilter } from "../filter.js";
 
 function isPrintableInput(inputValue: string): boolean {
@@ -53,6 +54,7 @@ export function handlePromptInput({
     ctrl?: boolean;
     leftArrow?: boolean;
     rightArrow?: boolean;
+    tab?: boolean;
   };
   prompt: PromptState;
   setPrompt: (value: PromptState | undefined) => void;
@@ -62,6 +64,15 @@ export function handlePromptInput({
   setMessage: (value: string) => void;
   submitAi: (question: string, state: Extract<PromptState, { kind: "ai" }>) => void;
 }): void {
+  if (key.tab && prompt.kind === "filter") {
+    const presets = FILTER_PRESETS as readonly string[];
+    const currentIdx = presets.indexOf(prompt.value);
+    const nextIdx = currentIdx === -1 ? 0 : (currentIdx + 1) % presets.length;
+    const nextPreset = presets[nextIdx];
+    setPrompt({ ...prompt, value: nextPreset, cursor: nextPreset.length });
+    return;
+  }
+
   if (key.escape) {
     setPrompt(undefined);
     setMessage("Prompt cancelled");
