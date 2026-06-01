@@ -355,6 +355,7 @@ s or S           open sort menu      t           global top values
 Space            select current row  A           select visible rows
 a                ask AI about current view/selection
 e                open export menu (CSV, JSON, TSV)
+r                reset filter, sort, and row selection
 h                contextual help overlay (keys + filter syntax)
 q                ask before quit
 ```
@@ -370,7 +371,8 @@ cancel and revert.
 ↑/↓ · PgUp/PgDn  navigate            Enter / d   open request detail
 t                top values for this incident (computed from full row set)
 f · s/S          filter · sort       Space · A   select row · visible page
-a · e            ask AI · export     b           back to summary
+a · e            ask AI · export     r           reset filter + selection
+b                back to summary
 ```
 
 ### Top values · request detail · export

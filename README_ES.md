@@ -359,6 +359,7 @@ s o S            menú de orden      t           top values global
 Space            seleccionar fila   A           seleccionar filas visibles
 a                preguntar a la IA sobre la vista/selección
 e                menú de exportación (CSV, JSON, TSV)
+r                reiniciar filtro, orden y selección de filas
 h                overlay de ayuda contextual (teclas + sintaxis de filtros)
 q                preguntar antes de salir
 ```
@@ -374,7 +375,8 @@ plano en la barra de estado — pulsa `Esc` para cancelar y revertir.
 ↑/↓ · PgUp/PgDn  navegar            Enter / d   abrir detalle de petición
 t                top values del incidente (sobre el conjunto completo de filas)
 f · s/S          filtrar · ordenar  Space · A   seleccionar fila · página visible
-a · e            preguntar IA · exportar        b   volver al resumen
+a · e            preguntar IA · exportar        r   reiniciar filtro + selección
+b                volver al resumen
 ```
 
 ### Top values · detalle de petición · exportación
