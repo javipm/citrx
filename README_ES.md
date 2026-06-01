@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛰️ citrx
+# 🍋 citrx
 
 ### Análisis local de logs de acceso Apache y Nginx, en tu terminal
 
@@ -636,5 +636,5 @@ report/   renderers de terminal, JSON, Markdown, HTML
 [MIT](./LICENSE) © [javipm](https://github.com/javipm)
 
 <div align="center">
-<sub>Hecho para quien lee sus logs de acceso. 🛰️</sub>
+<sub>Hecho para quien lee sus logs de acceso. 🍋</sub>
 </div>
