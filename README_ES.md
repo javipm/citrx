@@ -549,9 +549,10 @@ Puntuación por resultado de respuesta:
 
 Notas: `single_ip_path_explosion` exige **pathsPerMinute ≥ 10** (cargas de
 página con muchos assets no lo disparan). `abusive_crawl` entra en SATURATION
-solo con volumen real servido + un pico servido por minuto. `fake_bot_*` exige
-≥10 peticiones. Las IPs verificadas de Googlebot/Bingbot quedan excluidas de
-toda detección de bots/escáneres.
+con volumen real servido + un pico servido por minuto, o con query churn de pico
+alto que aún sirve algunas respuestas caras aunque la mayoría de intentos estén
+bloqueados. `fake_bot_*` exige ≥10 peticiones. Las IPs verificadas de
+Googlebot/Bingbot quedan excluidas de toda detección de bots/escáneres.
 
 Actualiza los snapshots de rangos IP de Googlebot/Bingbot con:
 

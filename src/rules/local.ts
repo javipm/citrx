@@ -213,6 +213,9 @@ const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REPEATED_IPS = 10;
 const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_SHARE = 0.75;
 const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_PEAK = 20;
 const CRAWL_SATURATION_MAX_BLOCKED_RATIO = 5;
+const CRAWL_SATURATION_BLOCKED_QUERY_MIN_REQUESTS = 2_500;
+const CRAWL_SATURATION_BLOCKED_QUERY_MIN_SERVED = 100;
+const CRAWL_SATURATION_BLOCKED_QUERY_MIN_PEAK_REQUESTS_PER_MINUTE = 120;
 const CRAWL_SATURATION_MIN_5XX_DISTRESS = 100;
 const POST_HOTSPOT_MIN_REQUESTS = 200;
 const QUERY_EXPLOSION_MIN_REQUESTS = 500;
@@ -568,14 +571,15 @@ function materialPathSaturationSignal(
     queryVariantRatio: number;
   }
 ): "query_churn" | "repeat_pressure" | null {
-  // Saturation threshold uses only requests that hit real backend processing:
+  // Saturation normally uses requests that hit real backend processing:
   //   2xx — content actually delivered.
   //   5xx — backend crashed under load (most extreme saturation signal).
   // 3xx (redirects) are resolved at the webserver/CDN level without app processing.
-  // 4xx (WAF/auth blocks) never reach the application.
-  // Neither contributes meaningfully to backend load saturation.
+  // 4xx (WAF/auth blocks) usually do not count, except high-peak query churn with
+  // some served responses: that still represents active pressure on a costly URL.
   const servedCount = stats.status2xx + stats.status5xx;
   const maxServedPerMinute = stats.maxServedPerMinute ?? 0;
+  const maxRequestsPerMinute = stats.maxRequestsPerMinute ?? 0;
 
   // High signal quality (very high query-variant churn or many repeat IPs) allows
   // saturation at lower served volume — exhaustive scraping at 1 000+ hits is
@@ -586,6 +590,10 @@ function materialPathSaturationSignal(
     highQuerySignal || highRepeatSignal
       ? CRAWL_SATURATION_HIGH_SIGNAL_MIN_REQUESTS
       : CRAWL_SATURATION_MIN_REQUESTS;
+
+  if (hasBlockedQueryPressureSaturation(stats, crawlSignal, servedCount, maxRequestsPerMinute)) {
+    return "query_churn";
+  }
 
   if (servedCount < minServed) {
     return null;
@@ -632,6 +640,27 @@ function materialPathSaturationSignal(
   if (hasMaterialQueryChurn) return "query_churn";
   if (hasMaterialRepeatPressure) return "repeat_pressure";
   return null;
+}
+
+function hasBlockedQueryPressureSaturation(
+  stats: PathStats,
+  crawlSignal: {
+    repeatedIps: number;
+    repeatedRequestShare: number;
+    queryVariantRatio: number;
+  },
+  servedCount: number,
+  maxRequestsPerMinute: number
+): boolean {
+  return (
+    stats.count >= CRAWL_SATURATION_BLOCKED_QUERY_MIN_REQUESTS &&
+    servedCount >= CRAWL_SATURATION_BLOCKED_QUERY_MIN_SERVED &&
+    stats.queryVariants.size >= CRAWL_SATURATION_MIN_QUERY_VARIANTS &&
+    crawlSignal.queryVariantRatio >= CRAWL_SATURATION_HIGH_SIGNAL_QUERY_RATIO &&
+    maxRequestsPerMinute >= CRAWL_SATURATION_BLOCKED_QUERY_MIN_PEAK_REQUESTS_PER_MINUTE &&
+    stats.status4xx > servedCount * CRAWL_SATURATION_MAX_BLOCKED_RATIO &&
+    stats.status3xx <= servedCount
+  );
 }
 
 function isLowSignalEntryPath(path: string): boolean {

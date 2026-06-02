@@ -541,9 +541,11 @@ avoid flagging ordinary 404 scanners.
 | `fake_bot_bingbot:` | `fake_bot` | compromise | claims bingbot but IP outside published Bing ranges |
 
 Notes: `single_ip_path_explosion` needs **pathsPerMinute ≥ 10** (asset-heavy page
-loads don't trigger it). `abusive_crawl` enters SATURATION only with real served
-volume + a served-per-minute peak. `fake_bot_*` needs ≥10 requests. Verified
-Googlebot/Bingbot IPs are excluded from all bot/scanner detections.
+loads don't trigger it). `abusive_crawl` enters SATURATION with real served
+volume + a served-per-minute peak, or with high-peak query churn that still serves
+some expensive responses even when most attempts are blocked. `fake_bot_*` needs
+≥10 requests. Verified Googlebot/Bingbot IPs are excluded from all bot/scanner
+detections.
 
 Refresh the bundled Googlebot/Bingbot IP-range snapshots with:
 

@@ -321,6 +321,38 @@ describe("local rules", () => {
     );
   });
 
+  it("flags high-peak blocked query churn when it still serves some expensive responses", () => {
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/cabello",
+        count: 2_957,
+        bytes: 80_000_000,
+        ipCounts: ipCounts(35, 2_957),
+        queryVariants: new Set(Array.from({ length: 2_934 }, (_, index) => `?q=facet${index}`)),
+        postCount: 0,
+        firstSeen: 1_780_406_400,
+        lastSeen: 1_780_417_200,
+        status2xx: 356,
+        status3xx: 0,
+        status4xx: 2_601,
+        status5xx: 0,
+        maxRequestsPerMinute: 140,
+        maxServedPerMinute: 42,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual([
+      expect.objectContaining({
+        id: "abusive_crawl:/cabello",
+        kind: "saturation",
+        severity: "high",
+        score: 75,
+        title: "Distributed URL saturation"
+      })
+    ]);
+  });
+
   it("does NOT flag saturation when URL returns 301 redirects to almost all requests", () => {
     // /running → 301 → /running/ canonical redirect. Handled by nginx, no app load.
     const incidents = buildAggregateIncidents([

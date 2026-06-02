@@ -5,6 +5,7 @@ const CORRELATION_BONUS = 10;
 const PERSISTENCE_BONUS = 15;
 const AI_LEGIT_PENALTY = -10;
 const AI_LEGIT_MAX_REQUESTS = 5000;
+const SATURATION_MAX_IMPACT_BONUS = 15;
 const PERSISTENCE_EXCLUDED_CATEGORIES = new Set(["abusive_crawling", "ai_scraper", "post_hotspot"]);
 const PERSISTENCE_EXCLUDED_ID_PREFIXES = [
   "ai_scraper_known:",
@@ -29,6 +30,10 @@ export function applyScoringMultipliers(incidents: Incident[]): Incident[] {
     // persistence alone inflate their severity.
     if (!excludesPersistenceBonus(incident) && isPersistent(incident)) {
       score += PERSISTENCE_BONUS;
+    }
+
+    if (incident.kind === "saturation") {
+      score += saturationImpactBonus(incident);
     }
 
     if (isLegitAiBot(incident)) {
@@ -106,6 +111,91 @@ function isLegitAiBot(incident: Incident): boolean {
     booleanEvidence(incident, "requestedRobotsTxt") === true;
 
   return requests < AI_LEGIT_MAX_REQUESTS && respectsRobots;
+}
+
+function saturationImpactBonus(incident: Incident): number {
+  let bonus = 0;
+
+  bonus += thresholdBonus(maxNumberEvidence(incident, ["requests", "totalRequests"]), [
+    [100_000, 8],
+    [50_000, 6],
+    [10_000, 4],
+    [5_000, 2]
+  ]);
+  bonus += thresholdBonus(maxNumberEvidence(incident, ["maxServedPerMinute"]), [
+    [600, 7],
+    [300, 5],
+    [120, 3],
+    [60, 1]
+  ]);
+  bonus += thresholdBonus(
+    maxNumberEvidence(incident, [
+      "peakRps",
+      "peakGlobalRps",
+      "peakSubnetRps",
+      "peakHeadRps"
+    ]),
+    [
+      [500, 8],
+      [250, 6],
+      [100, 4],
+      [50, 2],
+      [10, 1]
+    ]
+  );
+  bonus += thresholdBonus(numberEvidence(incident, "status5xx"), [
+    [1_000, 8],
+    [500, 6],
+    [100, 4],
+    [25, 2]
+  ]);
+  bonus += thresholdBonus(maxNumberEvidence(incident, ["uniqueIps", "ipCount", "peakIpCount"]), [
+    [1_000, 5],
+    [200, 4],
+    [50, 2],
+    [10, 1]
+  ]);
+  bonus += thresholdBonus(durationSeconds(incident), [
+    [3600, 4],
+    [1800, 3],
+    [600, 2],
+    [120, 1]
+  ]);
+
+  return Math.min(SATURATION_MAX_IMPACT_BONUS, bonus);
+}
+
+function thresholdBonus(value: number, thresholds: Array<[number, number]>): number {
+  for (const [threshold, bonus] of thresholds) {
+    if (value >= threshold) {
+      return bonus;
+    }
+  }
+
+  return 0;
+}
+
+function maxNumberEvidence(incident: Incident, keys: string[]): number {
+  return Math.max(...keys.map((key) => numberEvidence(incident, key)), 0);
+}
+
+function durationSeconds(incident: Incident): number {
+  const start = parseIso(
+    stringEvidence(incident, "burstStart") ??
+      stringEvidence(incident, "spikeStart") ??
+      stringEvidence(incident, "firstSeen")
+  );
+  const end = parseIso(
+    stringEvidence(incident, "burstEnd") ??
+      stringEvidence(incident, "spikeEnd") ??
+      stringEvidence(incident, "lastSeen")
+  );
+
+  if (start === null || end === null) {
+    return 0;
+  }
+
+  return Math.max(0, end - start);
 }
 
 function stringEvidence(incident: Incident, key: string): string | undefined {

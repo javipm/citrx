@@ -8,11 +8,13 @@ function incident(
   score: number,
   evidence: IncidentEvidence[] = [],
   severity: Incident["severity"] = severityFromScore(score),
-  category = "test"
+  category = "test",
+  kind: Incident["kind"] = "compromise"
 ): Incident {
   return {
     id,
     category,
+    kind,
     severity,
     score,
     title: id,
@@ -125,6 +127,57 @@ describe("scoring multipliers", () => {
     ]);
 
     expect(scored).toMatchObject({ score: 75, severity: "high" });
+  });
+
+  it("scales saturation incidents by observed traffic impact", () => {
+    const scored = applyScoringMultipliers([
+      incident(
+        "abusive_crawl:/small",
+        70,
+        [
+          { key: "requests", value: 5_000 },
+          { key: "maxServedPerMinute", value: 60 }
+        ],
+        "medium",
+        "abusive_crawling",
+        "saturation"
+      ),
+      incident(
+        "abusive_crawl:/large",
+        70,
+        [
+          { key: "requests", value: 100_000 },
+          { key: "maxServedPerMinute", value: 600 },
+          { key: "uniqueIps", value: 1_000 },
+          { key: "status5xx", value: 1_000 }
+        ],
+        "medium",
+        "abusive_crawling",
+        "saturation"
+      )
+    ]);
+
+    expect(scored.map((item) => item.score)).toEqual([73, 85]);
+    expect(scored.map((item) => item.severity)).toEqual(["medium", "high"]);
+  });
+
+  it("uses RPS as one saturation impact signal, not the only one", () => {
+    const [scored] = applyScoringMultipliers([
+      incident(
+        "ddos_global_rps_spike",
+        75,
+        [
+          { key: "peakGlobalRps", value: 250 },
+          { key: "spikeStart", value: "2026-05-25T00:00:00.000Z" },
+          { key: "spikeEnd", value: "2026-05-25T00:05:00.000Z" }
+        ],
+        "high",
+        "ddos",
+        "saturation"
+      )
+    ]);
+
+    expect(scored).toMatchObject({ score: 82, severity: "high" });
   });
 
   it("does not add persistence bonus to future abusive crawling aggregate ids", () => {
