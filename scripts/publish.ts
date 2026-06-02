@@ -10,66 +10,70 @@ type PackageJson = {
 
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
-const packageJson = JSON.parse(await readFile("package.json", "utf8")) as PackageJson;
-if (typeof packageJson.version !== "string" || !SEMVER_RE.test(packageJson.version)) {
-  throw new Error("package.json must define a valid semver version.");
-}
+await main();
 
-const currentVersion = packageJson.version;
-await assertCleanWorktree();
-
-const rl = createInterface({ input, output });
-try {
-  const nextVersion = (
-    await rl.question(`Next version (current ${currentVersion}): `)
-  ).trim();
-
-  if (!SEMVER_RE.test(nextVersion)) {
-    throw new Error(`Invalid semver version: ${nextVersion}`);
-  }
-  if (nextVersion === currentVersion) {
-    throw new Error("Next version must differ from current version.");
+async function main(): Promise<void> {
+  const packageJson = JSON.parse(await readFile("package.json", "utf8")) as PackageJson;
+  if (typeof packageJson.version !== "string" || !SEMVER_RE.test(packageJson.version)) {
+    throw new Error("package.json must define a valid semver version.");
   }
 
-  const tag = `v${nextVersion}`;
-  await assertTagAvailable(tag);
-  await assertCommandAvailable("gh", ["--version"]);
-  await assertCommandAvailable("npm", ["--version"]);
+  const currentVersion = packageJson.version;
+  await assertCleanWorktree();
 
-  const confirmed = (
-    await rl.question(`Release ${tag}, push to origin, create GitHub release, and npm publish? [y/N] `)
-  ).trim();
-  if (!["y", "yes"].includes(confirmed.toLowerCase())) {
-    console.log("Release cancelled.");
-    return;
+  const rl = createInterface({ input, output });
+  try {
+    const nextVersion = (await rl.question(`Next version (current ${currentVersion}): `)).trim();
+
+    if (!SEMVER_RE.test(nextVersion)) {
+      throw new Error(`Invalid semver version: ${nextVersion}`);
+    }
+    if (nextVersion === currentVersion) {
+      throw new Error("Next version must differ from current version.");
+    }
+
+    const tag = `v${nextVersion}`;
+    await assertTagAvailable(tag);
+    await assertCommandAvailable("gh", ["--version"]);
+    await assertCommandAvailable("npm", ["--version"]);
+
+    const confirmed = (
+      await rl.question(
+        `Release ${tag}, push to origin, create GitHub release, and npm publish? [y/N] `
+      )
+    ).trim();
+    if (!["y", "yes"].includes(confirmed.toLowerCase())) {
+      console.log("Release cancelled.");
+      return;
+    }
+
+    packageJson.version = nextVersion;
+    await writeFile("package.json", `${JSON.stringify(packageJson, null, 2)}\n`);
+
+    await run("pnpm", ["run", "sync-version"]);
+    await run("pnpm", ["run", "typecheck"]);
+    await run("pnpm", ["run", "lint"]);
+    await run("pnpm", ["test"]);
+    await run("pnpm", ["run", "build"]);
+
+    await run("git", ["add", "package.json", "src/version.ts"]);
+    await run("git", ["commit", "-m", `chore: release ${tag}`]);
+
+    const branch = (await capture("git", ["branch", "--show-current"])).trim();
+    if (!branch) {
+      throw new Error("Cannot publish from a detached HEAD.");
+    }
+
+    await run("git", ["push", "origin", branch]);
+    await run("git", ["tag", "-a", tag, "-m", tag]);
+    await run("git", ["push", "origin", tag]);
+    await run("gh", ["release", "create", tag, "--title", tag, "--generate-notes"]);
+    await run("npm", ["publish", "--access", "public"]);
+
+    console.log(`Published ${tag}.`);
+  } finally {
+    rl.close();
   }
-
-  packageJson.version = nextVersion;
-  await writeFile("package.json", `${JSON.stringify(packageJson, null, 2)}\n`);
-
-  await run("pnpm", ["run", "sync-version"]);
-  await run("pnpm", ["run", "typecheck"]);
-  await run("pnpm", ["run", "lint"]);
-  await run("pnpm", ["test"]);
-  await run("pnpm", ["run", "build"]);
-
-  await run("git", ["add", "package.json", "src/version.ts"]);
-  await run("git", ["commit", "-m", `chore: release ${tag}`]);
-
-  const branch = (await capture("git", ["branch", "--show-current"])).trim();
-  if (!branch) {
-    throw new Error("Cannot publish from a detached HEAD.");
-  }
-
-  await run("git", ["push", "origin", branch]);
-  await run("git", ["tag", "-a", tag, "-m", tag]);
-  await run("git", ["push", "origin", tag]);
-  await run("gh", ["release", "create", tag, "--title", tag, "--generate-notes"]);
-  await run("npm", ["publish", "--access", "public"]);
-
-  console.log(`Published ${tag}.`);
-} finally {
-  rl.close();
 }
 
 async function assertCleanWorktree(): Promise<void> {
