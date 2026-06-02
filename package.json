@@ -26,6 +26,7 @@
     "predev": "pnpm run sync-version",
     "dev": "tsx src/cli.ts",
     "version": "pnpm run sync-version && git add src/version.ts package.json",
+    "publish:release": "tsx scripts/publish.ts",
     "update-bot-ranges": "tsx scripts/update-bot-ranges.ts",
     "prepack": "pnpm run build"
   },
