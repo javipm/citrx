@@ -33,10 +33,6 @@ async function main(): Promise<void> {
     }
 
     const tag = `v${nextVersion}`;
-    await assertTagAvailable(tag);
-    await assertCommandAvailable("gh", ["--version"]);
-    await assertCommandAvailable("npm", ["--version"]);
-
     const confirmed = (
       await rl.question(
         `Release ${tag}, push to origin, create GitHub release, and npm publish? [y/N] `
@@ -46,6 +42,10 @@ async function main(): Promise<void> {
       console.log("Release cancelled.");
       return;
     }
+
+    await assertTagAvailable(tag);
+    await assertCommandAvailable("gh", ["--version"]);
+    await assertCommandAvailable("npm", ["--version"]);
 
     packageJson.version = nextVersion;
     await writeFile("package.json", `${JSON.stringify(packageJson, null, 2)}\n`);
