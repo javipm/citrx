@@ -10,7 +10,10 @@ type PackageJson = {
 
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
-await main();
+void main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exitCode = 1;
+});
 
 async function main(): Promise<void> {
   const packageJson = JSON.parse(await readFile("package.json", "utf8")) as PackageJson;
@@ -30,6 +33,9 @@ async function main(): Promise<void> {
     }
     if (nextVersion === currentVersion) {
       throw new Error("Next version must differ from current version.");
+    }
+    if (!isVersionGreater(nextVersion, currentVersion)) {
+      throw new Error(`Next version must be greater than current version (${currentVersion}).`);
     }
 
     const tag = `v${nextVersion}`;
@@ -81,6 +87,28 @@ async function assertCleanWorktree(): Promise<void> {
   if (status.trim()) {
     throw new Error("Working tree must be clean before publishing.");
   }
+}
+
+function isVersionGreater(nextVersion: string, currentVersion: string): boolean {
+  const next = versionParts(nextVersion);
+  const current = versionParts(currentVersion);
+
+  return (
+    next.major > current.major ||
+    (next.major === current.major && next.minor > current.minor) ||
+    (next.major === current.major && next.minor === current.minor && next.patch > current.patch)
+  );
+}
+
+function versionParts(version: string): { major: number; minor: number; patch: number } {
+  const [major = "0", minor = "0", patchAndSuffix = "0"] = version.split(".");
+  const [patch = "0"] = patchAndSuffix.split("-");
+
+  return {
+    major: Number(major),
+    minor: Number(minor),
+    patch: Number(patch)
+  };
 }
 
 async function assertTagAvailable(tag: string): Promise<void> {
