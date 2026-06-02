@@ -65,6 +65,7 @@ function addInsightLine(
     ips: Map<string, number>;
     paths: Map<string, number>;
     userAgents: Map<string, number>;
+    statuses: Map<string, number>;
     params: Map<string, number>;
     paramValues: Map<string, number>;
   },
@@ -73,6 +74,7 @@ function addInsightLine(
   incrementMap(maps.ips, line.ip);
   incrementMap(maps.paths, line.path);
   incrementMap(maps.userAgents, userAgentLabel(line.userAgent));
+  incrementMap(maps.statuses, String(line.status));
 
   const params = requestParamLabels(line.target);
   for (const param of params.names) {
@@ -88,6 +90,7 @@ function topInsightMaps(maps: {
   ips: Map<string, number>;
   paths: Map<string, number>;
   userAgents: Map<string, number>;
+  statuses: Map<string, number>;
   params: Map<string, number>;
   paramValues: Map<string, number>;
 }): IncidentInsights {
@@ -95,6 +98,7 @@ function topInsightMaps(maps: {
     ips: topMapItems(maps.ips, 10),
     paths: topMapItems(maps.paths, 10),
     userAgents: topMapItems(maps.userAgents, 10),
+    statuses: topMapItems(maps.statuses, 10),
     params: topMapItems(maps.params, 10),
     paramValues: topMapItems(maps.paramValues, 10)
   };
@@ -104,14 +108,15 @@ export function incidentInsights(lines: IncidentLogLine[]): IncidentInsights {
   const ips = new Map<string, number>();
   const paths = new Map<string, number>();
   const userAgents = new Map<string, number>();
+  const statuses = new Map<string, number>();
   const params = new Map<string, number>();
   const paramValues = new Map<string, number>();
 
   for (const line of lines) {
-    addInsightLine({ ips, paths, userAgents, params, paramValues }, line);
+    addInsightLine({ ips, paths, userAgents, statuses, params, paramValues }, line);
   }
 
-  return topInsightMaps({ ips, paths, userAgents, params, paramValues });
+  return topInsightMaps({ ips, paths, userAgents, statuses, params, paramValues });
 }
 
 export async function incidentInsightsFromAccessIndex(
@@ -133,6 +138,7 @@ export async function incidentInsightsFromAccessIndex(
     ips: new Map<string, number>(),
     paths: new Map<string, number>(),
     userAgents: new Map<string, number>(),
+    statuses: new Map<string, number>(),
     params: new Map<string, number>(),
     paramValues: new Map<string, number>()
   };
@@ -179,6 +185,7 @@ export async function incidentInsightsFromRows(
     ips: new Map<string, number>(),
     paths: new Map<string, number>(),
     userAgents: new Map<string, number>(),
+    statuses: new Map<string, number>(),
     params: new Map<string, number>(),
     paramValues: new Map<string, number>()
   };
@@ -230,6 +237,7 @@ export function emptyIncidentInsights(): IncidentInsights {
     ips: [],
     paths: [],
     userAgents: [],
+    statuses: [],
     params: [],
     paramValues: []
   };
@@ -240,6 +248,7 @@ export function reportInsights(report: AnalyzeReport): IncidentInsights {
     ips: report.topIps.slice(0, 10),
     paths: report.topPaths.slice(0, 10),
     userAgents: report.topUserAgents.slice(0, 10),
+    statuses: report.topStatuses.slice(0, 10),
     params: report.topParams.slice(0, 10),
     paramValues: report.topParamValues.slice(0, 10)
   };
@@ -262,6 +271,8 @@ export function topItemFilter(panel: TopPanelKey, value: string): string {
       return `path=${filterValue(value)}`;
     case "userAgents":
       return `ua:${filterValue(value)}`;
+    case "statuses":
+      return `status=${filterValue(value)}`;
     case "params":
       return `param=${filterValue(value)}`;
     case "paramValues":
@@ -288,6 +299,7 @@ export function currentTopContext(
           ips: report.topIps,
           paths: report.topPaths,
           userAgents: report.topUserAgents,
+          statuses: report.topStatuses,
           params: report.topParams,
           paramValues: report.topParamValues
         }
@@ -303,6 +315,7 @@ export function currentTopContext(
     `topIps=${topItemsForContext(insights.ips)}`,
     `topPaths=${topItemsForContext(insights.paths)}`,
     `topUserAgents=${topItemsForContext(insights.userAgents)}`,
+    `topStatuses=${topItemsForContext(insights.statuses)}`,
     `topParams=${topItemsForContext(insights.params)}`,
     `topParamValues=${topItemsForContext(insights.paramValues)}`
   ].filter((line): line is string => Boolean(line));
@@ -624,7 +637,16 @@ export function TopValuesScreen({
       ),
       React.createElement(
         Box,
-        { flexDirection: "row", flexGrow: 1 },
+        { flexDirection: "row", gap: 1, flexGrow: 1 },
+        React.createElement(TopListPanel, {
+          title: "Top statuses",
+          panelKey: "statuses",
+          items: insights.statuses,
+          width: panelWidth,
+          active: focus === "statuses",
+          selectedIndex: selectedIndexes.statuses,
+          loading
+        }),
         React.createElement(TopListPanel, {
           title: "Top query param values",
           panelKey: "paramValues",

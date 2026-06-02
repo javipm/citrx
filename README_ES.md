@@ -51,7 +51,7 @@ telemetría.
     <td width="50%"><img src="./assets/tui-incident.webp" alt="Pantalla de incidente — evidencia + filas relacionadas"><br><sub><b>Incidente</b> — evidencia + filas de log relacionadas</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="./assets/tui-top-values.webp" alt="Pantalla de top values"><br><sub><b>Top values</b> — top de IPs, rutas, UAs, parámetros</sub></td>
+    <td width="50%"><img src="./assets/tui-top-values.webp" alt="Pantalla de top values"><br><sub><b>Top values</b> — top de IPs, rutas, UAs, estados, parámetros</sub></td>
     <td width="50%"><img src="./assets/tui-filter.webp" alt="Barra de filtro con una expresión de consulta"><br><sub><b>Filtro</b> — lenguaje de consulta sobre el log</sub></td>
   </tr>
   <tr>
@@ -385,8 +385,8 @@ b                volver al resumen
 
 ### Top values · detalle de petición · exportación
 
-- **Top values** (`t`): top de IPs, rutas, user-agents, parámetros y valores de
-  parámetro. Respeta el filtro activo. `Enter` aplica un filtro desde un valor.
+- **Top values** (`t`): top de IPs, rutas, user-agents, estados, parámetros y
+  valores de parámetro. Respeta el filtro activo. `Enter` aplica un filtro desde un valor.
 - **Detalle de petición** (`Enter`/`d`): fuente, timestamp, IP, método, estado,
   bytes, ruta, target, user-agent y línea cruda con ajuste de texto.
 - **Exportación** (`e`): CSV / JSON / TSV. El resumen exporta las filas

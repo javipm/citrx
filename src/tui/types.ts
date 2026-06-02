@@ -27,7 +27,7 @@ export type SummaryFocus = "accesses" | "compromise" | "saturation" | "noise";
 export type TopScope = "summary" | "incident";
 
 /** Which top-N panel is currently active in the tops screen. */
-export type TopPanelKey = "ips" | "paths" | "userAgents" | "params" | "paramValues";
+export type TopPanelKey = "ips" | "paths" | "userAgents" | "statuses" | "params" | "paramValues";
 
 /** Column by which the access log table is currently sorted. */
 export type SortKey = "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
@@ -124,6 +124,8 @@ export interface IncidentInsights {
   paths: import("../analysis/types.js").TopItem[];
   /** Top User-Agent strings seen in this incident's log lines. */
   userAgents: import("../analysis/types.js").TopItem[];
+  /** Top HTTP status codes seen in this incident's log lines. */
+  statuses: import("../analysis/types.js").TopItem[];
   /** Top query parameter names seen in this incident's log lines. */
   params: import("../analysis/types.js").TopItem[];
   /** Top query parameter values seen in this incident's log lines. */
@@ -163,6 +165,7 @@ export const TOP_PANEL_KEYS: TopPanelKey[] = [
   "ips",
   "paths",
   "userAgents",
+  "statuses",
   "params",
   "paramValues"
 ];

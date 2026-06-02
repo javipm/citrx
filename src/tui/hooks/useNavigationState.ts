@@ -28,6 +28,7 @@ export function useNavigationState(run: CitrxRun) {
     ips: 0,
     paths: 0,
     userAgents: 0,
+    statuses: 0,
     params: 0,
     paramValues: 0
   });

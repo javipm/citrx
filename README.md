@@ -50,7 +50,7 @@ opens a full-screen TUI. No account, no upload, no telemetry.
     <td width="50%"><img src="./assets/tui-incident.webp" alt="Incident screen — evidence + related rows"><br><sub><b>Incident</b> — evidence + related access-log rows</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="./assets/tui-top-values.webp" alt="Top values screen"><br><sub><b>Top values</b> — top IPs, paths, UAs, params</sub></td>
+    <td width="50%"><img src="./assets/tui-top-values.webp" alt="Top values screen"><br><sub><b>Top values</b> — top IPs, paths, UAs, statuses, params</sub></td>
     <td width="50%"><img src="./assets/tui-filter.webp" alt="Filter bar with a query expression"><br><sub><b>Filter</b> — query language across the log</sub></td>
   </tr>
   <tr>
@@ -381,8 +381,8 @@ b                back to summary
 
 ### Top values · request detail · export
 
-- **Top values** (`t`): top IPs, paths, user-agents, query params, and param
-  values. Respects the active filter. `Enter` applies a filter from a value.
+- **Top values** (`t`): top IPs, paths, user-agents, statuses, query params,
+  and param values. Respects the active filter. `Enter` applies a filter from a value.
 - **Request detail** (`Enter`/`d`): full source, timestamp, IP, method, status,
   bytes, path, target, user-agent, and raw line with wrapping.
 - **Export** (`e`): CSV / JSON / TSV. Summary exports the selected rows or the

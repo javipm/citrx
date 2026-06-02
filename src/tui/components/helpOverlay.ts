@@ -32,7 +32,7 @@ const SUMMARY_SECTIONS: HelpSection[] = [
       ["/ or f", "Filter access log (Tab cycles presets in prompt)"],
       ["r", "Reset filter, sort, and row selection"],
       ["s", "Open sort menu"],
-      ["t", "Top values (IPs, paths, UAs, params)"],
+      ["t", "Top values (IPs, paths, UAs, statuses, params)"],
       ["a", "Ask OpenAI (requires OPENAI_API_KEY)"],
       ["e", "Export selection or current filtered result"],
       ["Space", "Toggle row selection"],
