@@ -1,4 +1,4 @@
-// Derives viewport + detail/AI slices. Incident lines load on demand by bucket.
+// Derives viewport + detail slices. Incident lines load on demand by bucket.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { IncidentLogLine } from "../../analysis/types.js";
 import {
@@ -7,8 +7,7 @@ import {
   arrayOrderedRowNumbers,
   iterateAccessLogIndexChunks
 } from "../../run/access-index.js";
-import type { OpenAiAnswerState } from "../types.js";
-import { renderMarkdownAnswer, requestDetailLines } from "../utils/text.js";
+import { requestDetailLines } from "../utils/text.js";
 
 const INCIDENT_BUCKET_SIZE = 200;
 const INCIDENT_PAGE_CACHE_MAX = 50;
@@ -48,14 +47,6 @@ interface VisibleLinesOptions {
   detailScroll: number;
   /** Number of visible rows in the detail panel. */
   detailRows: number;
-  /** Current AI answer state, or `undefined` when the panel is closed. */
-  openAiAnswer: OpenAiAnswerState | undefined;
-  /** Terminal column-width available for the AI answer panel. */
-  answerWidth: number;
-  /** Vertical scroll offset inside the AI answer panel (rows from top). */
-  openAiAnswerScroll: number;
-  /** Number of visible rows in the AI answer panel. */
-  answerRows: number;
   /** Selection map (line key → line) across all screens. */
   selection: Map<string, IncidentLogLine>;
   /** Sorted row numbers of the current incident match set (for cross-screen selection filtering). */
@@ -73,10 +64,6 @@ export function useVisibleLines({
   detailWidth,
   detailScroll,
   detailRows,
-  openAiAnswer,
-  answerWidth,
-  openAiAnswerScroll,
-  answerRows,
   selection,
   incidentRowNumbers
 }: VisibleLinesOptions) {
@@ -239,17 +226,6 @@ export function useVisibleLines({
     [detailLines, detailScroll, detailRows]
   );
 
-  // ── AI answer panel ────────────────────────────────────────────────────────
-  const openAiAnswerLines = useMemo(
-    () => (openAiAnswer ? renderMarkdownAnswer(openAiAnswer.answer, answerWidth) : []),
-    [openAiAnswer, answerWidth]
-  );
-
-  const visibleOpenAiAnswerLines = useMemo(
-    () => openAiAnswerLines.slice(openAiAnswerScroll, openAiAnswerScroll + answerRows),
-    [openAiAnswerLines, openAiAnswerScroll, answerRows]
-  );
-
   return {
     pageLines,
     pageLoading,
@@ -259,8 +235,6 @@ export function useVisibleLines({
     selectedGlobalLines,
     summaryPageStart,
     detailLines,
-    visibleDetailLines,
-    openAiAnswerLines,
-    visibleOpenAiAnswerLines
+    visibleDetailLines
   };
 }

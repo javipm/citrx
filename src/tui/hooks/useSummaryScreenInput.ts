@@ -1,4 +1,4 @@
-// Handles keyboard input on the summary screen: navigation, filtering, selection, export, AI.
+// Handles keyboard input on the summary screen: navigation, filtering, selection, export.
 import type { Incident, IncidentLogLine } from "../../analysis/types.js";
 import type { SummaryFocus, SortKey, SortDirection, PromptState } from "../types.js";
 import { lineKey } from "../utils/table.js";
@@ -118,7 +118,6 @@ export function firstIncidentIndexForFocus(incidents: Incident[], focus: Summary
  * - `r`               — Reset filter, scroll position, and line selection.
  * - `/` / `f` / `F`   — Open the filter prompt, pre-filled with the current filter string.
  * - `t`               — Navigate to the tops screen scoped to the summary.
- * - `a`               — Open the AI prompt scoped to the summary, using selected lines or visible page lines.
  * - `e`               — Open the export format menu.
  *
  * @param params.inputValue             - Raw character string from the key event.
@@ -149,7 +148,7 @@ export function firstIncidentIndexForFocus(incidents: Incident[], focus: Summary
  * @param params.setDetailScroll        - Resets the detail panel scroll position.
  * @param params.setSortMenu            - Opens the sort menu with a pre-populated state, or closes it (undefined).
  * @param params.setTopScope            - Sets the scope context before navigating to the tops screen.
- * @param params.setPrompt              - Opens a prompt overlay (filter or AI kind).
+ * @param params.setPrompt              - Opens a filter prompt overlay.
  * @param params.setExportMenu          - Opens the export format menu.
  * @param params.setMessage             - Sets the status-bar message string.
  */
@@ -168,7 +167,6 @@ export function handleSummaryScreenInput({
   filter,
   sortKey,
   sortDirection,
-  runId,
   setSummaryFocus,
   setIncidentIndex,
   setSummaryLineIndex,
@@ -198,7 +196,6 @@ export function handleSummaryScreenInput({
   filter: string;
   sortKey: SortKey;
   sortDirection: SortDirection;
-  runId: string;
   setSummaryFocus: (value: SummaryFocus) => void;
   setIncidentIndex: (updater: (value: number) => number) => void;
   setSummaryLineIndex: (updater: (value: number) => number) => void;
@@ -218,7 +215,6 @@ export function handleSummaryScreenInput({
   setExportMenu: (value: { format: "csv" | "json" | "tsv" }) => void;
   setMessage: (value: string) => void;
 }): void {
-  void runId;
   const incidentBounds = isIncidentFocus(summaryFocus)
     ? kindRange(incidents, summaryFocus)
     : { start: -1, end: -1 };
@@ -355,17 +351,6 @@ export function handleSummaryScreenInput({
     setTopScope("summary");
     setScreen("tops");
     setMessage("Global top values");
-    return;
-  }
-
-  if (inputValue === "a") {
-    setPrompt({
-      kind: "ai",
-      value: "",
-      cursor: 0,
-      scope: "summary",
-      lines: selectedGlobalLines.length > 0 ? selectedGlobalLines : summaryPageLines
-    });
     return;
   }
 

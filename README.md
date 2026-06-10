@@ -5,8 +5,7 @@
 ### Local-first Apache & Nginx access-log analysis, in your terminal
 
 Stream huge access logs, detect attacks and abuse with deterministic local
-rules, explore everything in an interactive TUI — and only ask AI when **you**
-decide to.
+rules, and explore everything in an interactive TUI.
 
 [![npm](https://img.shields.io/npm/v/@javipm/citrx?color=cb3837&logo=npm)](https://www.npmjs.com/package/@javipm/citrx)
 [![node](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org)
@@ -73,7 +72,6 @@ opens a full-screen TUI. No account, no upload, no telemetry.
 - [Inputs & formats](#-inputs--formats)
 - [Interactive TUI](#-interactive-tui)
 - [Filtering](#-filtering)
-- [AI mode (opt-in)](#-ai-mode-opt-in)
 - [Reports](#-reports)
 - [Detection rules](#-detection-rules)
 - [Scoring](#-scoring)
@@ -100,7 +98,7 @@ The workflow is deliberately offline-first:
 1. Run deterministic local analysis   →  no network, bounded memory
 2. Explore incidents + raw requests    →  interactive TUI
 3. Filter, sort, inspect, select rows  →  small query language
-4. Ask AI — only when you press `a`     →  compact, redacted context
+4. Export focused evidence             →  CSV, JSON, TSV, Markdown, or HTML
 ```
 
 ---
@@ -116,7 +114,6 @@ The workflow is deliberately offline-first:
 | 🖥️ **Full TUI** | Incident tabs, indexed access-log table, on-demand row loading, top values, request detail, exports. |
 | 🔎 **Query language** | `AND`/`OR`/`NOT`, parentheses, field operators, status families, wildcards, per-param filters. |
 | 📤 **Reports** | Terminal, JSON, Markdown, and self-contained offline HTML. |
-| 🤖 **Opt-in AI** | OpenAI is never called during analysis — only on explicit `a`, with redacted context. |
 | 📦 **Compressed inputs** | `.gz`, `.br`, `.zip`, `.tar.gz`, `.tgz`, folders, and stdin. |
 | 🔒 **Local-first** | No telemetry, secrets redacted, temp index deleted on exit. |
 
@@ -328,7 +325,7 @@ full-screen terminal UI. It's the core product surface, not a debug view.
 │  7     192.0.2.55      10:02:00  GET  404      0  /wp-admin/                  │
 │ ...                                                                           │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│  f filter   s sort   t top   Enter detail   a ask AI   e export   h help     │
+│  f filter   s sort   t top   Enter detail   e export   h help               │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -357,7 +354,6 @@ Enter / d        open incident or request detail
 f or /           filter access-log rows
 s or S           open sort menu      t           global top values
 Space            select current row  A           select visible rows
-a                ask AI about current view/selection
 e                open export menu (CSV, JSON, TSV)
 r                reset filter, sort, and row selection
 h                contextual help overlay (keys + filter syntax)
@@ -375,7 +371,7 @@ cancel and revert.
 ↑/↓ · PgUp/PgDn  navigate            Enter / d   open request detail
 t                top values for this incident (computed from full row set)
 f · s/S          filter · sort       Space · A   select row · visible page
-a · e            ask AI · export     r           reset filter + selection
+e                export              r           reset filter + selection
 b                back to summary
 ```
 
@@ -430,34 +426,6 @@ source:access.log line>=10000 line<20000
 
 Bare text is great for quick hunting — `googlebot checkout` requires both words
 somewhere in the searchable line.
-
----
-
-## 🤖 AI mode (opt-in)
-
-OpenAI is **never** called during analysis — only when you press `a` in the TUI
-and `OPENAI_API_KEY` is set.
-
-```bash
-export OPENAI_API_KEY="sk-proj-..."
-
-# optional
-export CITRX_OPENAI_MODEL="gpt-5.4-mini"
-export CITRX_AI_MAX_LINES="200"
-export CITRX_AI_MAX_CHARS="60000"
-```
-
-It receives **compact, redacted** context only:
-
-- report summary + time stats
-- top IPs / paths / methods / statuses + behavior stats
-- selected incident evidence
-- selected rows, or visible filtered rows when nothing is selected
-- user-agent references instead of repeating long UAs
-
-The answer renders in a dedicated scrollable screen with lightweight Markdown.
-Access logs contain no ASN data, so the model is instructed never to invent
-ASN/organization details.
 
 ---
 
@@ -586,7 +554,6 @@ for weeks, so duration alone isn't a signal. Panels sort by `kind` weight
 
 - **Local analysis first** — no network call during analysis.
 - **No telemetry**, ever. (If ever added, strict opt-in only.)
-- **AI only on explicit `a`**, with redacted context.
 - **Secrets redacted** in URL/query values:
   `token, _token, sid, session, password, passwd, key, secret, jwt, auth, authorization`
 - **HTML output escaped**; log content is never executed.
@@ -619,12 +586,11 @@ analysis/ streaming aggregation, behavior tracking, incident match sets
 rules/    deterministic request/path rules and scoring
 run/      temporary run workspace and access-log index
 tui/      Ink screens, hooks, filters, tables, overlays
-ai/       compact redacted context builder + OpenAI client
 report/   terminal, JSON, Markdown, HTML renderers
 ```
 
 **Stack:** TypeScript (ESM) · `commander` · `ink` + React · `zod` ·
-`picocolors` · official `openai` SDK · Vitest.
+`picocolors` · Vitest.
 
 ---
 

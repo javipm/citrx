@@ -1,4 +1,4 @@
-// Handles keyboard input in the prompt bar overlay (filter input and AI query input).
+// Handles keyboard input in the filter prompt bar overlay.
 import type { IncidentLogLine } from "../../analysis/types.js";
 import type { PromptState } from "../types.js";
 import { FILTER_PRESETS } from "../types.js";
@@ -11,13 +11,12 @@ function isPrintableInput(inputValue: string): boolean {
 /**
  * Handles keyboard input for the prompt bar overlay.
  *
- * Supports two prompt kinds:
- * - `"filter"`: validates and applies an access-log filter expression on Enter.
- * - `"ai"`: submits the typed question to the AI panel on Enter.
+ * Supports the `"filter"` prompt, validating and applying an access-log filter
+ * expression on Enter.
  *
  * Key bindings:
  * - `Escape`     — cancel prompt, clear overlay, show "Prompt cancelled" message.
- * - `Enter`      — confirm: validate+apply filter or submit AI question.
+ * - `Enter`      — confirm: validate+apply filter.
  * - `←` / `→`   — move cursor left / right within the input value.
  * - `Backspace`  — delete character before cursor.
  * - `Delete`     — delete character after cursor.
@@ -32,7 +31,6 @@ function isPrintableInput(inputValue: string): boolean {
  * @param params.setLineIndex     - Setter to reset the selected line index to 0 after filter apply.
  * @param params.setSelectedLineKeys - Setter to clear the selection set after filter apply.
  * @param params.setMessage       - Setter to display a status message in the TUI.
- * @param params.submitAi         - Callback to submit the AI question with its prompt state.
  */
 export function handlePromptInput({
   inputValue,
@@ -42,8 +40,7 @@ export function handlePromptInput({
   setFilter,
   setLineIndex,
   setSelection,
-  setMessage,
-  submitAi
+  setMessage
 }: {
   inputValue: string;
   key: {
@@ -62,9 +59,8 @@ export function handlePromptInput({
   setLineIndex: (value: number) => void;
   setSelection: (value: Map<string, IncidentLogLine>) => void;
   setMessage: (value: string) => void;
-  submitAi: (question: string, state: Extract<PromptState, { kind: "ai" }>) => void;
 }): void {
-  if (key.tab && prompt.kind === "filter") {
+  if (key.tab) {
     const presets = FILTER_PRESETS as readonly string[];
     const currentIdx = presets.indexOf(prompt.value);
     const nextIdx = currentIdx === -1 ? 0 : (currentIdx + 1) % presets.length;
@@ -82,28 +78,19 @@ export function handlePromptInput({
   if (key.return) {
     const value = prompt.value.trim();
 
-    if (prompt.kind === "filter") {
-      const validation = validateAccessLogFilter(value);
+    const validation = validateAccessLogFilter(value);
 
-      if (!validation.ok) {
-        setMessage(`Invalid filter: ${validation.error}`);
-        setPrompt(prompt);
-        return;
-      }
-
-      setPrompt(undefined);
-      setFilter(value);
-      setLineIndex(0);
-      setSelection(new Map());
-      setMessage(value ? `Filter: ${value}` : "Filter cleared");
+    if (!validation.ok) {
+      setMessage(`Invalid filter: ${validation.error}`);
+      setPrompt(prompt);
       return;
     }
 
     setPrompt(undefined);
-
-    if (value) {
-      submitAi(value, prompt);
-    }
+    setFilter(value);
+    setLineIndex(0);
+    setSelection(new Map());
+    setMessage(value ? `Filter: ${value}` : "Filter cleared");
     return;
   }
 

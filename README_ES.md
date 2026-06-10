@@ -5,8 +5,7 @@
 ### Análisis local de logs de acceso Apache y Nginx, en tu terminal
 
 Procesa logs enormes en streaming, detecta ataques y abuso con reglas locales
-deterministas, explóralo todo en una TUI interactiva — y consulta a la IA solo
-cuando **tú** lo decides.
+deterministas y explóralo todo en una TUI interactiva.
 
 [![npm](https://img.shields.io/npm/v/@javipm/citrx?color=cb3837&logo=npm)](https://www.npmjs.com/package/@javipm/citrx)
 [![node](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org)
@@ -74,7 +73,6 @@ telemetría.
 - [Entradas y formatos](#-entradas-y-formatos)
 - [TUI interactiva](#-tui-interactiva)
 - [Filtrado](#-filtrado)
-- [Modo IA (opt-in)](#-modo-ia-opt-in)
 - [Informes](#-informes)
 - [Reglas de detección](#-reglas-de-detección)
 - [Puntuación](#-puntuación)
@@ -102,7 +100,7 @@ El flujo es deliberadamente offline-first:
 1. Análisis local determinista       →  sin red, memoria acotada
 2. Explorar incidentes + peticiones   →  TUI interactiva
 3. Filtrar, ordenar, inspeccionar     →  pequeño lenguaje de consulta
-4. Preguntar a la IA — solo con `a`    →  contexto compacto y redactado
+4. Exportar evidencia enfocada         →  CSV, JSON, TSV, Markdown o HTML
 ```
 
 ---
@@ -118,7 +116,6 @@ El flujo es deliberadamente offline-first:
 | 🖥️ **TUI completa** | Pestañas de incidentes, tabla de logs indexada, carga de filas bajo demanda, top values, detalle de petición, exportaciones. |
 | 🔎 **Lenguaje de consulta** | `AND`/`OR`/`NOT`, paréntesis, operadores de campo, familias de estado, comodines, filtros por parámetro. |
 | 📤 **Informes** | Terminal, JSON, Markdown y HTML offline autocontenido. |
-| 🤖 **IA opt-in** | OpenAI nunca se llama durante el análisis — solo al pulsar `a`, con contexto redactado. |
 | 📦 **Entradas comprimidas** | `.gz`, `.br`, `.zip`, `.tar.gz`, `.tgz`, carpetas y stdin. |
 | 🔒 **Local-first** | Sin telemetría, secretos redactados, índice temporal borrado al salir. |
 
@@ -332,7 +329,7 @@ vista de depuración.
 │  7     192.0.2.55      10:02:00  GET  404      0  /wp-admin/                  │
 │ ...                                                                           │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│  f filtrar  s ordenar  t top   Enter detalle  a IA   e exportar  h ayuda     │
+│  f filtrar  s ordenar  t top   Enter detalle  e exportar  h ayuda           │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -361,7 +358,6 @@ Enter / d        abrir incidente o detalle de petición
 f o /            filtrar filas del log
 s o S            menú de orden      t           top values global
 Space            seleccionar fila   A           seleccionar filas visibles
-a                preguntar a la IA sobre la vista/selección
 e                menú de exportación (CSV, JSON, TSV)
 r                reiniciar filtro, orden y selección de filas
 h                overlay de ayuda contextual (teclas + sintaxis de filtros)
@@ -379,7 +375,7 @@ plano en la barra de estado — pulsa `Esc` para cancelar y revertir.
 ↑/↓ · PgUp/PgDn  navegar            Enter / d   abrir detalle de petición
 t                top values del incidente (sobre el conjunto completo de filas)
 f · s/S          filtrar · ordenar  Space · A   seleccionar fila · página visible
-a · e            preguntar IA · exportar        r   reiniciar filtro + selección
+e                exportar           r           reiniciar filtro + selección
 b                volver al resumen
 ```
 
@@ -436,34 +432,6 @@ source:access.log line>=10000 line<20000
 
 El texto suelto va genial para cazar rápido — `googlebot checkout` exige ambas
 palabras en algún punto de la línea buscable.
-
----
-
-## 🤖 Modo IA (opt-in)
-
-OpenAI **nunca** se llama durante el análisis — solo al pulsar `a` en la TUI con
-`OPENAI_API_KEY` definida.
-
-```bash
-export OPENAI_API_KEY="sk-proj-..."
-
-# opcional
-export CITRX_OPENAI_MODEL="gpt-5.4-mini"
-export CITRX_AI_MAX_LINES="200"
-export CITRX_AI_MAX_CHARS="60000"
-```
-
-Recibe **solo** contexto compacto y redactado:
-
-- resumen del informe + estadísticas de tiempo
-- top de IPs / rutas / métodos / estados + estadísticas de comportamiento
-- evidencia del incidente seleccionado
-- filas seleccionadas, o filas filtradas visibles si no hay selección
-- referencias a user-agents en vez de repetir UAs largos
-
-La respuesta se renderiza en una pantalla scrollable dedicada con Markdown
-ligero. Los logs de acceso no contienen datos de ASN, así que se instruye al
-modelo para que nunca invente ASN/organización.
 
 ---
 
@@ -627,12 +595,11 @@ analysis/ agregación en streaming, seguimiento de comportamiento, match sets
 rules/    reglas deterministas de request/path y puntuación
 run/      workspace temporal de ejecución e índice de log
 tui/      pantallas Ink, hooks, filtros, tablas, overlays
-ai/       constructor de contexto compacto redactado + cliente OpenAI
 report/   renderers de terminal, JSON, Markdown, HTML
 ```
 
 **Stack:** TypeScript (ESM) · `commander` · `ink` + React · `zod` ·
-`picocolors` · SDK oficial de `openai` · Vitest.
+`picocolors` · Vitest.
 
 ---
 

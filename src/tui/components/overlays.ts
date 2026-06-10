@@ -20,12 +20,7 @@ export function PromptBar({
   prompt: PromptState;
   columns: number;
 }): React.ReactElement {
-  const label =
-    prompt.kind === "filter"
-      ? "Filter"
-      : prompt.scope === "summary"
-        ? "Ask OpenAI about analysis"
-        : "Ask OpenAI about incident";
+  const label = "Filter";
   const display = promptDisplay(prompt, columns - label.length - 8);
 
   return React.createElement(
@@ -350,8 +345,6 @@ export function Footer({
   screen,
   summaryFocus,
   detailOpen,
-  answerOpen,
-  busy,
   loading,
   incidentExportReady,
   message,
@@ -361,20 +354,16 @@ export function Footer({
   screen: Screen;
   summaryFocus: SummaryFocus;
   detailOpen: boolean;
-  answerOpen: boolean;
-  busy: boolean;
   loading: boolean;
   incidentExportReady: boolean;
   message: string;
   selected: number;
   columns: number;
 }): React.ReactElement {
-  const spinner = useSpinner(loading || busy);
+  const spinner = useSpinner(loading);
 
   let shortcuts: string;
-  if (answerOpen) {
-    shortcuts = "↑/↓ PgUp/PgDn scroll | Esc/b close | h help";
-  } else if (detailOpen) {
+  if (detailOpen) {
     shortcuts = "↑/↓ PgUp/PgDn scroll | Esc/d/b close | h help";
   } else if (screen === "summary") {
     shortcuts =
@@ -389,15 +378,15 @@ export function Footer({
     shortcuts = `↑/↓ rows | Enter/d detail | / filter${exportHint} | b back | h help (all keys)`;
   }
 
-  const prefix = loading || busy ? `${spinner} ` : "";
-  const status = `${prefix}${busy ? "Asking OpenAI..." : message}${selected ? ` | selected=${selected}` : ""}`;
+  const prefix = loading ? `${spinner} ` : "";
+  const status = `${prefix}${message}${selected ? ` | selected=${selected}` : ""}`;
 
   return React.createElement(
     Box,
     { flexDirection: "column" },
     React.createElement(
       Text,
-      { color: busy || loading ? "yellow" : "cyan", wrap: "truncate" },
+      { color: loading ? "yellow" : "cyan", wrap: "truncate" },
       fitText(status, columns - 2)
     ),
     React.createElement(Text, { color: "gray", wrap: "truncate" }, fitText(shortcuts, columns - 2))

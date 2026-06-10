@@ -29,12 +29,10 @@ interface PageLayoutOptions {
  * - `summaryPageSize` — visible row count for the summary list.
  * - `detailRows` — visible row count for the detail panel.
  * - `detailWidth` — character width of the detail panel.
- * - `answerRows` — visible row count for the AI answer panel.
- * - `answerWidth` — character width of the AI answer panel.
  */
 export function usePageLayout({ screen, rows, columns, prompt, exportNotice }: PageLayoutOptions) {
   return useMemo(() => {
-    const controlRows = (prompt ? 3 : 0) + (prompt?.kind === "filter" ? 1 : 0) + (exportNotice ? 4 : 0);
+    const controlRows = (prompt ? 4 : 0) + (exportNotice ? 4 : 0);
     const pageSize =
       screen === "incident"
         ? Math.max(4, rows - 13 - controlRows)
@@ -42,16 +40,12 @@ export function usePageLayout({ screen, rows, columns, prompt, exportNotice }: P
     const summaryPageSize = Math.max(4, rows - 16 - controlRows);
     const detailRows = Math.max(4, rows - 6 - controlRows);
     const detailWidth = Math.max(40, columns - 10);
-    const answerRows = Math.max(4, rows - 7 - controlRows);
-    const answerWidth = Math.max(40, columns - 10);
     return {
       controlRows,
       pageSize,
       summaryPageSize,
       detailRows,
-      detailWidth,
-      answerRows,
-      answerWidth
+      detailWidth
     };
   }, [screen, rows, columns, prompt, exportNotice]);
 }

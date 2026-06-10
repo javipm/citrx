@@ -1,6 +1,6 @@
 {
   "name": "@javipm/citrx",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "CLI for local-first Apache/Nginx access log analysis.",
   "type": "module",
   "packageManager": "pnpm@11.1.0",
@@ -37,7 +37,6 @@
     "security",
     "cli",
     "forensics",
-    "openai",
     "tui"
   ],
   "license": "MIT",
@@ -55,7 +54,6 @@
   "dependencies": {
     "commander": "^14.0.2",
     "ink": "^7.0.3",
-    "openai": "^6.10.0",
     "picocolors": "^1.1.1",
     "react": "^19.2.6",
     "tar-stream": "^3.2.0",
@@ -71,8 +69,8 @@
     "eslint": "^9.39.1",
     "prettier": "^3.6.2",
     "tsx": "^4.20.6",
-    "typescript-eslint": "^8.48.0",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.48.0",
     "vitest": "^4.0.14"
   },
   "pnpm": {

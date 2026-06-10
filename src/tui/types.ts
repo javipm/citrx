@@ -1,9 +1,7 @@
-import type { IncidentLogLine, Incident } from "../analysis/types.js";
-import type { IncidentQuestionClient } from "../ai/incident-question.js";
 import type { LineCompareKey } from "../utils/line-compare.js";
 import type { Readable, Writable } from "node:stream";
 
-/** I/O handles and optional AI client injected into the TUI at startup. */
+/** I/O handles injected into the TUI at startup. */
 export interface TuiRuntime {
   /** Process environment variables (used for feature flags and config). */
   env: NodeJS.ProcessEnv;
@@ -13,8 +11,6 @@ export interface TuiRuntime {
   stdout: Writable;
   /** Writable stream for error / diagnostic output. */
   stderr: Writable;
-  /** Optional AI client used to answer incident questions inline. */
-  aiClient?: IncidentQuestionClient;
 }
 
 /** The top-level screen currently rendered in the TUI. */
@@ -51,7 +47,6 @@ export type HelpContext =
   | "incident"
   | "tops"
   | "detail"
-  | "answer"
   | "exportMenu"
   | "sortMenu"
   | "prompt";
@@ -77,16 +72,6 @@ export interface PromptInputState {
   cursor: number;
 }
 
-/** State for an AI answer panel displaying a streamed or completed response. */
-export interface OpenAiAnswerState {
-  /** Heading displayed above the answer (usually the question text). */
-  title: string;
-  /** Secondary metadata line (model name, latency, token counts, etc.). */
-  meta: string;
-  /** The answer text, potentially still streaming in. */
-  answer: string;
-}
-
 /** A single rendered terminal line with optional styling attributes. */
 export interface RenderLine {
   /** Text content of the line. */
@@ -100,21 +85,8 @@ export interface RenderLine {
 /**
  * Active prompt overlay shown over the TUI.
  * - `filter`: user is typing a log-line filter expression.
- * - `ai`: user is typing a question to send to the AI client.
  */
-export type PromptState =
-  | ({ kind: "filter" } & PromptInputState)
-  | ({
-      kind: "ai";
-      /** Whether the question is scoped to the full report or a single incident. */
-      scope: "summary" | "incident";
-      /** The incident in context when scope is "incident". */
-      incident?: Incident;
-      /** Log lines associated with the current incident, sent as context to the AI. */
-      lines: IncidentLogLine[];
-      /** Any additional context string appended to the AI prompt. */
-      extraContext?: string;
-    } & PromptInputState);
+export type PromptState = { kind: "filter" } & PromptInputState;
 
 /** Pre-computed top-N insight lists derived from a single incident's matched log lines. */
 export interface IncidentInsights {

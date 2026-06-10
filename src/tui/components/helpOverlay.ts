@@ -33,7 +33,6 @@ const SUMMARY_SECTIONS: HelpSection[] = [
       ["r", "Reset filter, sort, and row selection"],
       ["s", "Open sort menu"],
       ["t", "Top values (IPs, paths, UAs, statuses, params)"],
-      ["a", "Ask OpenAI (requires OPENAI_API_KEY)"],
       ["e", "Export selection or current filtered result"],
       ["Space", "Toggle row selection"],
       ["A", "Select all visible rows (capped at 10 000)"]
@@ -80,7 +79,6 @@ const INCIDENT_SECTIONS: HelpSection[] = [
       ["r", "Reset filter and row selection"],
       ["s", "Open sort menu"],
       ["t", "Top values for this incident"],
-      ["a", "Ask OpenAI about this incident"],
       ["e", "Export incident rows (selection or all)"],
       ["Space", "Toggle row selection"],
       ["A", "Select all rows (async on large incidents, Esc cancels)"]
@@ -114,8 +112,7 @@ const TOPS_SECTIONS: HelpSection[] = [
   {
     title: "Actions",
     rows: [
-      ["Enter", "Apply selected value as filter"],
-      ["a", "Ask OpenAI about top values"]
+      ["Enter", "Apply selected value as filter"]
     ]
   },
   {
@@ -137,21 +134,6 @@ const DETAIL_SECTIONS: HelpSection[] = [
     title: "Exit",
     rows: [
       ["d / b / Esc", "Close detail"],
-      ["q", "Quit"],
-      ["h", "This help"]
-    ]
-  }
-];
-
-const ANSWER_SECTIONS: HelpSection[] = [
-  {
-    title: "Navigation",
-    rows: [["↑/↓ PgUp/PgDn", "Scroll answer"]]
-  },
-  {
-    title: "Exit",
-    rows: [
-      ["b / Esc", "Close answer"],
       ["q", "Quit"],
       ["h", "This help"]
     ]
@@ -197,14 +179,6 @@ const PROMPT_SECTIONS: HelpSection[] = [
     ]
   },
   {
-    title: "AI question prompt",
-    rows: [
-      ["Type", "Enter your question"],
-      ["Enter", "Submit to OpenAI"],
-      ["Esc", "Cancel"]
-    ]
-  },
-  {
     title: "Tip",
     rows: [
       ["h", "Close this prompt first, then press h for filter syntax help"]
@@ -217,7 +191,6 @@ const CONTEXT_SECTIONS: Record<HelpContext, HelpSection[]> = {
   incident: INCIDENT_SECTIONS,
   tops: TOPS_SECTIONS,
   detail: DETAIL_SECTIONS,
-  answer: ANSWER_SECTIONS,
   exportMenu: EXPORT_MENU_SECTIONS,
   sortMenu: SORT_MENU_SECTIONS,
   prompt: PROMPT_SECTIONS
@@ -228,7 +201,6 @@ const CONTEXT_TITLE: Record<HelpContext, string> = {
   incident: "Keys — Incident",
   tops: "Keys — Top values",
   detail: "Keys — Request detail",
-  answer: "Keys — OpenAI answer",
   exportMenu: "Keys — Export menu",
   sortMenu: "Keys — Sort menu",
   prompt: "Keys — Prompt"

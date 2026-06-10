@@ -284,54 +284,6 @@ function filterValue(value: string): string {
   return `"${value.replace(/["\\]/g, (char) => `\\${char}`)}"`;
 }
 
-export function currentTopContext(
-  report: AnalyzeReport,
-  scope: TopScope,
-  incident: Incident | undefined,
-  filter: string,
-  focus: TopPanelKey,
-  selectedIndexes: Record<TopPanelKey, number>
-): string {
-  const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
-  const insights =
-    scope === "summary"
-      ? {
-          ips: report.topIps,
-          paths: report.topPaths,
-          userAgents: report.topUserAgents,
-          statuses: report.topStatuses,
-          params: report.topParams,
-          paramValues: report.topParamValues
-        }
-      : incidentInsights(filteredTopLines(matchSet?.lines ?? [], filter));
-  const selected = selectedTopValue(insights, focus, selectedIndexes[focus]);
-  const lines = [
-    `scope=${scope}`,
-    filter ? `filter=${filter}` : undefined,
-    incident ? `incident=${incident.id}` : undefined,
-    selected
-      ? `selectedPanel=${focus} selected=${selected.value} count=${selected.count}`
-      : `selectedPanel=${focus}`,
-    `topIps=${topItemsForContext(insights.ips)}`,
-    `topPaths=${topItemsForContext(insights.paths)}`,
-    `topUserAgents=${topItemsForContext(insights.userAgents)}`,
-    `topStatuses=${topItemsForContext(insights.statuses)}`,
-    `topParams=${topItemsForContext(insights.params)}`,
-    `topParamValues=${topItemsForContext(insights.paramValues)}`
-  ].filter((line): line is string => Boolean(line));
-
-  return lines.join("\n");
-}
-
-function topItemsForContext(items: TopItem[]): string {
-  return (
-    items
-      .slice(0, 10)
-      .map((item) => `${item.value}:${item.count}`)
-      .join(" | ") || "none"
-  );
-}
-
 export function nextTopPanel(value: TopPanelKey): TopPanelKey {
   const index = TOP_PANEL_KEYS.indexOf(value);
   return TOP_PANEL_KEYS[(index + 1) % TOP_PANEL_KEYS.length] ?? "ips";

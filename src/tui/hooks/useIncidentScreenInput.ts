@@ -1,4 +1,4 @@
-// Handles keyboard input on the incident screen: line navigation, sort, filter, export, AI.
+// Handles keyboard input on the incident screen: line navigation, sort, filter, export.
 import type { Incident, IncidentLogLine } from "../../analysis/types.js";
 import type { SortKey, SortDirection, PromptState } from "../types.js";
 import { lineKey } from "../utils/table.js";
@@ -7,8 +7,6 @@ import {
   INCIDENT_MANUAL_SELECT_LIMIT,
   INCIDENT_SELECT_ALL_LIMIT
 } from "../utils/selection.js";
-
-const AI_CONTEXT_MAX_ROWS = 200;
 
 /**
  * Subset of ink's Key object representing keys used by the incident screen.
@@ -50,7 +48,6 @@ function isPageDown(inputValue: string, key: Key): boolean {
  * - `r`                — reset filter and selection.
  * - `/` / `f` / `F`    — open filter prompt.
  * - `e`                — open the export format menu.
- * - `a`                — open AI prompt scoped to incident.
  */
 export function handleIncidentScreenInput({
   inputValue,
@@ -238,18 +235,4 @@ export function handleIncidentScreenInput({
     return;
   }
 
-  if (inputValue === "a") {
-    const contextLines = (selectedLines.length > 0 ? selectedLines : pageLines).slice(
-      0,
-      AI_CONTEXT_MAX_ROWS
-    );
-    setPrompt({
-      kind: "ai",
-      value: "",
-      cursor: 0,
-      scope: "incident",
-      incident,
-      lines: contextLines
-    });
-  }
 }

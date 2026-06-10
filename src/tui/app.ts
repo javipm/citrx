@@ -40,9 +40,7 @@ import { useIncidentQuery, IncidentQueryCache } from "./hooks/useIncidentQuery.j
 import { handleSortMenuInput } from "./hooks/useSortMenuInput.js";
 import { handleExportMenuInput } from "./hooks/useExportMenuInput.js";
 import { handlePromptInput } from "./hooks/usePromptInput.js";
-import { submitOpenAi } from "./hooks/useSubmitOpenAi.js";
 import { handleDetailViewInput } from "./hooks/useDetailViewInput.js";
-import { handleOpenAiAnswerInput } from "./hooks/useOpenAiAnswerInput.js";
 import { handleSummaryScreenInput } from "./hooks/useSummaryScreenInput.js";
 import { handleIncidentScreenInput } from "./hooks/useIncidentScreenInput.js";
 import { handleTopsScreenInput } from "./hooks/useTopsScreenInput.js";
@@ -64,7 +62,7 @@ import { HelpOverlay } from "./components/helpOverlay.js";
 // Screens
 import { SummaryScreen } from "./screens/summary.js";
 import { IncidentScreen } from "./screens/incident.js";
-import { RequestDetailScreen, OpenAiAnswerScreen } from "./screens/detail.js";
+import { RequestDetailScreen } from "./screens/detail.js";
 import { TopValuesScreen } from "./screens/tops.js";
 import type { ExportFormat, HelpOverlayState, HelpContext } from "./types.js";
 
@@ -74,8 +72,7 @@ import type { ExportFormat, HelpOverlayState, HelpContext } from "./types.js";
 export async function openRunTui(run: CitrxRun, runtime: TuiRuntime): Promise<void> {
   const instance = render(
     React.createElement(CitrxExplorer, {
-      run,
-      runtime
+      run
     }),
     {
       stdin: runtime.stdin as NodeJS.ReadStream,
@@ -155,7 +152,7 @@ function Header({ run, columns }: { run: CitrxRun; columns: number }) {
 /**
  * Main TUI orchestrator component.
  */
-function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime }) {
+function CitrxExplorer({ run }: { run: CitrxRun }) {
   const { exit } = useApp();
   const { rows, columns } = useWindowSize();
   const [quitConfirm, setQuitConfirm] = useState(false);
@@ -185,11 +182,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     detailLine,
     setDetailLine,
     detailScroll,
-    setDetailScroll,
-    openAiAnswer,
-    setOpenAiAnswer,
-    openAiAnswerScroll,
-    setOpenAiAnswerScroll
+    setDetailScroll
   } = useContentState();
 
   const {
@@ -212,8 +205,6 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     setExportNotice,
     message,
     setMessage,
-    busy,
-    setBusy,
     exportLoading,
     setExportLoading,
     indexLoading,
@@ -245,8 +236,13 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     setMessage
   });
 
-  const { pageSize, summaryPageSize, detailRows, detailWidth, answerRows, answerWidth } =
-    usePageLayout({ screen, rows, columns, prompt, exportNotice });
+  const { pageSize, summaryPageSize, detailRows, detailWidth } = usePageLayout({
+    screen,
+    rows,
+    columns,
+    prompt,
+    exportNotice
+  });
 
   const {
     globalTotal,
@@ -273,9 +269,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     selectedLineKeys: derivedSelectedLineKeys,
     selectedGlobalLines,
     detailLines,
-    visibleDetailLines,
-    openAiAnswerLines,
-    visibleOpenAiAnswerLines
+    visibleDetailLines
   } = useVisibleLines({
     accessIndex: run.accessIndex,
     orderedRowNumbers,
@@ -287,10 +281,6 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     detailWidth,
     detailScroll,
     detailRows,
-    openAiAnswer,
-    answerWidth,
-    openAiAnswerScroll,
-    answerRows,
     selection,
     incidentRowNumbers: incidentMatchSet?.rowNumbers
   });
@@ -554,12 +544,10 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
     if (!prompt && (inputValue === "h" || inputValue === "H")) {
       const context: HelpContext = detailLine
         ? "detail"
-        : openAiAnswer
-          ? "answer"
-          : exportMenu
-            ? "exportMenu"
-            : sortMenu
-              ? "sortMenu"
+        : exportMenu
+          ? "exportMenu"
+          : sortMenu
+            ? "sortMenu"
               : (screen as HelpContext);
       setHelpOverlay({ context, tab: "keys", scroll: 0 });
       setMessage("Help: Tab switch tab | Esc/h close");
@@ -610,23 +598,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
         setFilter,
         setLineIndex: screen === "summary" ? setSummaryLineIndex : setLineIndex,
         setSelection: (v) => setSelection(() => v),
-        setMessage,
-        submitAi: (question, state) => {
-          void submitOpenAi({
-            run,
-            runtime,
-            scope: state.scope,
-            incident: state.incident,
-            lines: state.lines,
-            question: state.extraContext
-              ? `${question}\n\nContexto TUI:\n${state.extraContext}`
-              : question,
-            setBusy,
-            setMessage,
-            setOpenAiAnswer,
-            setOpenAiAnswerScroll
-          });
-        }
+        setMessage
       });
       return;
     }
@@ -636,20 +608,6 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       activeAbort.controller.abort();
       setActiveAbort(undefined);
       setMessage("Cancelled");
-      return;
-    }
-
-    if (openAiAnswer) {
-      handleOpenAiAnswerInput({
-        inputValue,
-        key,
-        openAiAnswerLines,
-        answerRows,
-        exit: requestExit,
-        setOpenAiAnswer,
-        setOpenAiAnswerScroll,
-        setMessage
-      });
       return;
     }
 
@@ -705,7 +663,6 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
         filter,
         sortKey,
         sortDirection,
-        runId: run.id,
         setSummaryFocus,
         setIncidentIndex,
         setSummaryLineIndex,
@@ -732,12 +689,9 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
         incident,
         topScope,
         topFocus,
-        topIndexes,
-        filter,
         setTopFocus,
         setTopIndexes,
         setScreen,
-        setPrompt,
         setMessage
       });
       return;
@@ -789,14 +743,7 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
             scroll: detailScroll,
             totalLines: detailLines.length
           })
-        : openAiAnswer
-          ? React.createElement(OpenAiAnswerScreen, {
-              answer: openAiAnswer,
-              visibleLines: visibleOpenAiAnswerLines,
-              scroll: openAiAnswerScroll,
-              totalLines: openAiAnswerLines.length
-            })
-          : screen === "summary"
+        : screen === "summary"
             ? React.createElement(SummaryScreen, {
                 report: run.report,
                 incidents,
@@ -865,8 +812,6 @@ function CitrxExplorer({ run, runtime }: { run: CitrxRun; runtime: TuiRuntime })
       screen,
       summaryFocus,
       detailOpen: Boolean(detailLine),
-      answerOpen: Boolean(openAiAnswer),
-      busy,
       loading,
       incidentExportReady: selectedLines.length > 0 || Boolean(orderedRowNumbers),
       message,

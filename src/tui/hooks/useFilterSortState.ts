@@ -23,7 +23,6 @@ export function useFilterSortState() {
     format: ExportFormat;
   }>();
   const [message, setMessage] = useState("h: help  |  Tab: switch type  |  Enter: drill  |  /: filter  |  q: quit");
-  const [busy, setBusy] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [indexLoading, setIndexLoading] = useState(false);
 
@@ -49,8 +48,6 @@ export function useFilterSortState() {
     setExportNotice,
     message,
     setMessage,
-    busy,
-    setBusy,
     exportLoading,
     setExportLoading,
     indexLoading,
