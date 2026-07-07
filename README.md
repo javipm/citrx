@@ -21,10 +21,10 @@ rules, and explore everything in an interactive TUI.
 
 ```bash
 # A single file, a folder, compressed or plain — citrx figures it out
-npx @javipm/citrx /var/log/nginx/access.log
-npx @javipm/citrx /var/log/nginx/          # a whole folder of logs
-npx @javipm/citrx access.log.gz logs.zip   # .gz .br .zip .tar.gz .tgz
-cat access.log | npx @javipm/citrx -        # stdin
+npx @javipm/citrx@latest /var/log/nginx/access.log
+npx @javipm/citrx@latest /var/log/nginx/          # a whole folder of logs
+npx @javipm/citrx@latest access.log.gz logs.zip   # .gz .br .zip .tar.gz .tgz
+cat access.log | npx @javipm/citrx@latest -        # stdin
 ```
 
 That command streams the input, validates it, runs ~30 detection rules, and
@@ -125,17 +125,21 @@ The workflow is deliberately offline-first:
 
 ```bash
 # npm
-npx @javipm/citrx /var/log/nginx/access.log
+npx @javipm/citrx@latest /var/log/nginx/access.log
 
 # pnpm
-pnpx @javipm/citrx /var/log/nginx/access.log
+pnpx @javipm/citrx@latest /var/log/nginx/access.log
 
 # yarn
-yarn dlx @javipm/citrx /var/log/nginx/access.log
+yarn dlx @javipm/citrx@latest /var/log/nginx/access.log
 
 # bun
-bunx @javipm/citrx /var/log/nginx/access.log
+bunx @javipm/citrx@latest /var/log/nginx/access.log
 ```
+
+> Use the `@latest` tag: `npx` reuses a cached copy for a bare package name and
+> won't re-check the registry, so without it you may keep running an older
+> version. Alternatively, install globally (below).
 
 ### Install globally
 

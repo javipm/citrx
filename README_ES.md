@@ -21,10 +21,10 @@ deterministas y explóralo todo en una TUI interactiva.
 
 ```bash
 # Un fichero, una carpeta, comprimido o plano — citrx lo detecta solo
-npx @javipm/citrx /var/log/nginx/access.log
-npx @javipm/citrx /var/log/nginx/          # una carpeta entera de logs
-npx @javipm/citrx access.log.gz logs.zip   # .gz .br .zip .tar.gz .tgz
-cat access.log | npx @javipm/citrx -        # stdin
+npx @javipm/citrx@latest /var/log/nginx/access.log
+npx @javipm/citrx@latest /var/log/nginx/          # una carpeta entera de logs
+npx @javipm/citrx@latest access.log.gz logs.zip   # .gz .br .zip .tar.gz .tgz
+cat access.log | npx @javipm/citrx@latest -        # stdin
 ```
 
 Ese comando procesa la entrada en streaming, la valida, ejecuta ~30 reglas de
@@ -127,17 +127,22 @@ El flujo es deliberadamente offline-first:
 
 ```bash
 # npm
-npx @javipm/citrx /var/log/nginx/access.log
+npx @javipm/citrx@latest /var/log/nginx/access.log
 
 # pnpm
-pnpx @javipm/citrx /var/log/nginx/access.log
+pnpx @javipm/citrx@latest /var/log/nginx/access.log
 
 # yarn
-yarn dlx @javipm/citrx /var/log/nginx/access.log
+yarn dlx @javipm/citrx@latest /var/log/nginx/access.log
 
 # bun
-bunx @javipm/citrx /var/log/nginx/access.log
+bunx @javipm/citrx@latest /var/log/nginx/access.log
 ```
+
+> Usa la etiqueta `@latest`: `npx` reutiliza una copia cacheada cuando indicas
+> solo el nombre del paquete y no vuelve a consultar el registro, así que sin
+> ella podrías seguir ejecutando una versión antigua. Como alternativa,
+> instálalo de forma global (más abajo).
 
 ### Instalación global
 
