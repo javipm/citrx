@@ -15,7 +15,8 @@
   ],
   "scripts": {
     "sync-version": "tsx scripts/sync-version.ts",
-    "prebuild": "pnpm run sync-version",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "prebuild": "pnpm run sync-version && pnpm run clean",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
