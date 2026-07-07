@@ -1,3 +1,5 @@
+import { isSensitiveParamName } from "../utils/redact.js";
+
 export interface QueryParamEntry {
   name: string;
   value: string;
@@ -8,7 +10,6 @@ export interface QueryParamLabels {
   values: string[];
 }
 
-const SENSITIVE_PARAM_PATTERN = /pass(word)?|token|secret|key|auth|session|sid|jwt|credential/i;
 const UA_LABEL_CACHE_MAX = 20_000;
 const UA_LABEL_CACHE_EVICT = 5_000;
 const uaLabelCache = new Map<string, string>();
@@ -99,7 +100,7 @@ function computeUserAgentLabel(userAgent: string): string {
     return os ? `${browser} ${os}` : browser;
   }
 
-  return normalized.length <= 42 ? normalized : `${normalized.slice(0, 41)}…`;
+  return normalized;
 }
 
 function cacheUserAgentLabel(userAgent: string, label: string): void {
@@ -116,10 +117,6 @@ function cacheUserAgentLabel(userAgent: string, label: string): void {
   }
 
   uaLabelCache.set(userAgent, label);
-}
-
-export function isSensitiveParamName(name: string): boolean {
-  return SENSITIVE_PARAM_PATTERN.test(name);
 }
 
 function parseQueryPart(part: string): QueryParamEntry {

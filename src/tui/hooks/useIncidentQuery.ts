@@ -125,7 +125,7 @@ function sortableValueForKey(
   return String((line as Record<string, unknown>)[sortKey]);
 }
 
-async function buildIncidentSubset(
+export async function buildIncidentSubset(
   matchSet: IncidentMatchSet,
   accessIndex: AccessLogIndex,
   filter: string,

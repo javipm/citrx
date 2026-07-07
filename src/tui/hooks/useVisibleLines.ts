@@ -12,7 +12,7 @@ import { requestDetailLines } from "../utils/text.js";
 const INCIDENT_BUCKET_SIZE = 200;
 const INCIDENT_PAGE_CACHE_MAX = 50;
 
-function binarySearchIncludes(arr: readonly number[], val: number): boolean {
+export function binarySearchIncludes(arr: readonly number[], val: number): boolean {
   let lo = 0;
   let hi = arr.length - 1;
   while (lo <= hi) {

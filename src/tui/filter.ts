@@ -89,7 +89,13 @@ export function createAccessLogLineFilter(query: string): (line: IncidentLogLine
     return () => true;
   }
 
-  return (line) => evaluateExpression(expression, line);
+  // Per-instance caches: memoize compiled wildcard regexes and the concatenated
+  // searchable string per line. Scoped to this filter's closure (not module-level)
+  // so state never leaks between distinct queries/instances.
+  const wildcardRegexCache = new Map<string, RegExp>();
+  const searchableLineCache = new WeakMap<IncidentLogLine, string>();
+
+  return (line) => evaluateExpression(expression, line, wildcardRegexCache, searchableLineCache);
 }
 
 /**
@@ -418,16 +424,28 @@ function normalizeField(value: string): FilterField | undefined {
  * `not` negates its child; `binary` short-circuits AND/OR; `term` delegates
  * to `evaluateTerm`.
  */
-function evaluateExpression(expression: FilterExpression, line: IncidentLogLine): boolean {
+function evaluateExpression(
+  expression: FilterExpression,
+  line: IncidentLogLine,
+  wildcardRegexCache: Map<string, RegExp>,
+  searchableLineCache: WeakMap<IncidentLogLine, string>
+): boolean {
   switch (expression.kind) {
     case "term":
-      return evaluateTerm(expression.term, line);
+      return evaluateTerm(expression.term, line, wildcardRegexCache, searchableLineCache);
     case "not":
-      return !evaluateExpression(expression.expression, line);
+      return !evaluateExpression(
+        expression.expression,
+        line,
+        wildcardRegexCache,
+        searchableLineCache
+      );
     case "binary":
       return expression.operator === "and"
-        ? evaluateExpression(expression.left, line) && evaluateExpression(expression.right, line)
-        : evaluateExpression(expression.left, line) || evaluateExpression(expression.right, line);
+        ? evaluateExpression(expression.left, line, wildcardRegexCache, searchableLineCache) &&
+            evaluateExpression(expression.right, line, wildcardRegexCache, searchableLineCache)
+        : evaluateExpression(expression.left, line, wildcardRegexCache, searchableLineCache) ||
+            evaluateExpression(expression.right, line, wildcardRegexCache, searchableLineCache);
   }
 }
 
@@ -438,22 +456,42 @@ function evaluateExpression(expression: FilterExpression, line: IncidentLogLine)
  * - numeric fields (`bytes`, `line`, `status`): uses `matchNumericField`.
  * - all other fields: uses `matchPattern` with the field's string value.
  */
-function evaluateTerm(term: FilterTerm, line: IncidentLogLine): boolean {
+function evaluateTerm(
+  term: FilterTerm,
+  line: IncidentLogLine,
+  wildcardRegexCache: Map<string, RegExp>,
+  searchableLineCache: WeakMap<IncidentLogLine, string>
+): boolean {
   if (term.kind === "text") {
-    return matchPattern(searchableLine(line), term.value, true);
+    return matchPattern(
+      searchableLine(line, searchableLineCache),
+      term.value,
+      true,
+      wildcardRegexCache
+    );
   }
 
   if (term.field === "param") {
-    const result = matchParam(line.target, term.value, term.operator !== "!=");
+    const result = matchParam(
+      line.target,
+      term.value,
+      term.operator !== "!=",
+      wildcardRegexCache
+    );
     return term.operator === "!=" ? !result : result;
   }
 
   if (isNumericField(term.field)) {
-    return matchNumericField(numericFieldValue(line, term.field), term.operator, term.value);
+    return matchNumericField(
+      numericFieldValue(line, term.field),
+      term.operator,
+      term.value,
+      wildcardRegexCache
+    );
   }
 
   const actual = fieldValue(line, term.field);
-  const matched = matchPattern(actual, term.value, term.operator === ":");
+  const matched = matchPattern(actual, term.value, term.operator === ":", wildcardRegexCache);
 
   return term.operator === "!=" ? !matched : matched;
 }
@@ -468,7 +506,8 @@ function evaluateTerm(term: FilterTerm, line: IncidentLogLine): boolean {
 function matchNumericField(
   actual: number | null,
   operator: MatchOperator,
-  expected: string
+  expected: string,
+  wildcardRegexCache: Map<string, RegExp>
 ): boolean {
   if (actual === null) {
     return operator === "!=";
@@ -482,7 +521,7 @@ function matchNumericField(
   const expectedNumber = Number(expected);
 
   if (!Number.isFinite(expectedNumber)) {
-    const matched = matchPattern(String(actual), expected, operator === ":");
+    const matched = matchPattern(String(actual), expected, operator === ":", wildcardRegexCache);
     return operator === "!=" ? !matched : matched;
   }
 
@@ -510,20 +549,28 @@ function matchNumericField(
  * matches any param name). `positive` controls whether value matching is
  * contains (`true`) or exact (`false`).
  */
-function matchParam(target: string, expected: string, positive: boolean): boolean {
+function matchParam(
+  target: string,
+  expected: string,
+  positive: boolean,
+  wildcardRegexCache: Map<string, RegExp>
+): boolean {
   const entries = queryEntries(target);
   const separator = expected.indexOf("=");
 
   if (separator === -1) {
-    return entries.some(([name]) => matchPattern(name, expected, false));
+    return entries.some(([name]) => matchPattern(name, expected, false, wildcardRegexCache));
   }
 
   const namePattern = expected.slice(0, separator);
   const valuePattern = expected.slice(separator + 1);
 
   return entries.some(([name, value]) => {
-    const nameMatches = namePattern === "*" || matchPattern(name, namePattern, false);
-    const valueMatches = matchPattern(value, valuePattern, positive);
+    const nameMatches =
+      namePattern === "*" || matchPattern(name, namePattern, false, wildcardRegexCache);
+    // Param values are already decoded (incl. `+` -> space) by requestParamEntries,
+    // so the user's pattern must go through the same decoding to compare consistently.
+    const valueMatches = matchPattern(value, valuePattern, positive, wildcardRegexCache, true);
     return nameMatches && valueMatches;
   });
 }
@@ -537,18 +584,25 @@ function queryEntries(target: string): Array<[string, string]> {
  * Case-insensitive pattern match. If `expectedValue` contains `*` wildcards,
  * compiles a regex via `wildcardRegex`. Otherwise uses substring inclusion when
  * `containsByDefault` is `true`, or strict equality when `false`.
- * Both sides are lowercased; `expectedValue` is URI-decoded before comparison.
+ * Both sides are lowercased; `expectedValue` is percent-decoded before comparison.
+ * `decodePlus` additionally maps `+` to space and must only be `true` when the
+ * actual value being compared against is itself a decoded query-param value
+ * (see `matchParam`) — for free-text fields such as `ua`, `path`, `target`,
+ * or `raw`, `+` is a literal character (e.g. Googlebot's UA contains
+ * `(+http://...)`) and must not be decoded to a space.
  */
 function matchPattern(
   actualValue: string,
   expectedValue: string,
-  containsByDefault: boolean
+  containsByDefault: boolean,
+  wildcardRegexCache: Map<string, RegExp>,
+  decodePlus = false
 ): boolean {
   const actual = actualValue.toLowerCase();
-  const expected = safeDecode(expectedValue).toLowerCase();
+  const expected = (decodePlus ? safeDecode(expectedValue) : percentDecode(expectedValue)).toLowerCase();
 
   if (hasWildcard(expected)) {
-    return wildcardRegex(expected).test(actual);
+    return wildcardRegex(expected, wildcardRegexCache).test(actual);
   }
 
   return containsByDefault ? actual.includes(expected) : actual === expected;
@@ -557,9 +611,17 @@ function matchPattern(
 /**
  * Converts a wildcard pattern (where `*` means "any characters") into a
  * case-insensitive anchored `RegExp`. All other regex special characters are
- * escaped before compilation.
+ * escaped before compilation. The pattern is constant for a given query, so
+ * the compiled regex is memoized in `cache` (per filter instance) to avoid
+ * recompiling it for every evaluated line.
  */
-function wildcardRegex(value: string): RegExp {
+function wildcardRegex(value: string, cache: Map<string, RegExp>): RegExp {
+  const cached = cache.get(value);
+
+  if (cached) {
+    return cached;
+  }
+
   const pattern = value
     .split("")
     .map((char) => {
@@ -571,7 +633,9 @@ function wildcardRegex(value: string): RegExp {
     })
     .join("");
 
-  return new RegExp(`^${pattern}$`, "i");
+  const regex = new RegExp(`^${pattern}$`, "i");
+  cache.set(value, regex);
+  return regex;
 }
 
 /** Returns `true` if `value` contains at least one `*` wildcard character. */
@@ -640,10 +704,19 @@ function numericFieldValue(line: IncidentLogLine, field: FilterField): number | 
 /**
  * Builds a single lowercased string concatenating all searchable fields of a
  * log line (ip, timestamp, method, path, target, status, bytes, userAgent, raw)
- * for use by bare text-term matching.
+ * for use by bare text-term matching. A query may contain several plain-text
+ * terms evaluated against the same line, so the built string is memoized in
+ * `cache` (per filter instance, keyed by line identity) to avoid rebuilding it
+ * for every term.
  */
-function searchableLine(line: IncidentLogLine): string {
-  return [
+function searchableLine(line: IncidentLogLine, cache: WeakMap<IncidentLogLine, string>): string {
+  const cached = cache.get(line);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const built = [
     line.ip,
     line.timestamp,
     line.method,
@@ -656,6 +729,9 @@ function searchableLine(line: IncidentLogLine): string {
   ]
     .join(" ")
     .toLowerCase();
+
+  cache.set(line, built);
+  return built;
 }
 
 /** Extracts the query string (without the leading `?`) from a URL target, or `""` if absent. */
@@ -664,10 +740,28 @@ function queryString(target: string): string {
   return queryStart === -1 ? "" : target.slice(queryStart + 1);
 }
 
-/** URI-decodes `value` (replacing `+` with space), returning the original string on error. */
+/**
+ * URI-decodes `value`, replacing `+` with space. Only correct for comparing
+ * against query-string parameter values (see `matchParam`), where `+` is a
+ * space encoding by convention. Returns the original string on error.
+ */
 function safeDecode(value: string): string {
   try {
     return decodeURIComponent(value.replace(/\+/g, " "));
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Percent-decodes `value` without touching `+`, since `+` is a literal
+ * character outside of query-string values (e.g. user agents like
+ * `Googlebot/2.1 (+http://www.google.com/bot.html)`). Returns the original
+ * string on error.
+ */
+function percentDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
   } catch {
     return value;
   }

@@ -17,12 +17,14 @@ import {
   buildAggregateIncidents,
   detectRequestHits,
   mergeRuleHit,
+  parseTargetUrl,
   pruneNoise,
   redactTarget,
   querySignature
 } from "../rules/local.js";
 import type { PathStats } from "../rules/local.js";
 import { applyScoringMultipliers } from "../rules/scoring.js";
+import { redactSecretPairs } from "../utils/redact.js";
 import type {
   AnalyzeInputSource,
   AnalyzeReport,
@@ -414,6 +416,9 @@ function analyzeLine(
 
   counters.parsedLines += 1;
   counters.totalBytes += entry.bytes ?? 0;
+  // Parse the target URL once per request and reuse it for redaction and the
+  // query-variant signature, instead of each helper re-parsing independently.
+  const targetUrl = parseTargetUrl(entry.target);
   const storedLine: IncidentLogLine = {
     row: -1,
     source: sourceLabel,
@@ -423,7 +428,7 @@ function analyzeLine(
     timestamp: entry.timestamp,
     method: entry.method,
     path: entry.path,
-    target: redactTarget(entry.target),
+    target: redactTarget(entry.target, targetUrl),
     status: entry.status,
     bytes: entry.bytes,
     userAgent: entry.userAgent
@@ -443,7 +448,7 @@ function analyzeLine(
   for (const paramValue of params.values) {
     increment(counters.paramValues, paramValue);
   }
-  updatePathStats(counters.pathStats, entry, epochSecond);
+  updatePathStats(counters.pathStats, entry, epochSecond, targetUrl);
   addIncidentLine(counters.pathMatches, entry.path, storedLine);
 
   for (const hit of detectRequestHits(entry)) {
@@ -489,11 +494,22 @@ async function topItems(
   return top;
 }
 
-function insertTopItem(top: TopItem[], item: TopItem, limit: number): void {
-  const insertAt = top.findIndex(
-    (current) =>
-      item.count > current.count || (item.count === current.count && item.value < current.value)
-  );
+function compareTopItem(a: TopItem, b: TopItem): number {
+  if (a.count !== b.count) {
+    return b.count - a.count;
+  }
+  return a.value < b.value ? -1 : a.value > b.value ? 1 : 0;
+}
+
+export function insertTopItem(top: TopItem[], item: TopItem, limit: number): void {
+  if (top.length === limit) {
+    const last = top[top.length - 1];
+    if (last !== undefined && compareTopItem(item, last) >= 0) {
+      return;
+    }
+  }
+
+  const insertAt = top.findIndex((current) => compareTopItem(item, current) < 0);
 
   if (insertAt === -1) {
     if (top.length < limit) {
@@ -743,16 +759,14 @@ function incrementLineNumber(map: Map<string, number>, sourceLabel: string): num
 }
 
 function redactRawLine(line: string): string {
-  return line.replace(
-    /(token|_token|sid|session|password|passwd|key|secret|jwt|auth|authorization)=([^&\s"]+)/gi,
-    "$1=[REDACTED]"
-  );
+  return redactSecretPairs(line);
 }
 
 function updatePathStats(
   statsByPath: Map<string, PathStats>,
   entry: AccessLogEntry,
-  epoch: number | null
+  epoch: number | null,
+  targetUrl?: URL | null
 ): void {
   let stats = statsByPath.get(entry.path);
 
@@ -784,7 +798,7 @@ function updatePathStats(
   stats.bytes += entry.bytes ?? 0;
   stats.ipCounts.set(entry.ip, (stats.ipCounts.get(entry.ip) ?? 0) + 1);
 
-  const signature = querySignature(entry.target);
+  const signature = querySignature(entry.target, targetUrl);
   if (signature) {
     stats.queryVariants.add(signature);
   }
@@ -813,7 +827,7 @@ function updatePathStats(
 
   // Collect up to 5 redacted sample targets (query-bearing only) for operator review.
   if (stats.samples.length < 5 && entry.target.includes("?")) {
-    const sample = redactTarget(entry.target);
+    const sample = redactTarget(entry.target, targetUrl);
     if (!stats.samples.includes(sample)) {
       stats.samples.push(sample);
     }

@@ -1,6 +1,10 @@
 import pc from "picocolors";
 
 import type { AnalyzeReport, Incident, TopItem } from "../analysis/types.js";
+import { truncateForDisplay } from "../utils/text.js";
+
+/** Max rendered length for a user agent value in top-value tables. */
+const UA_DISPLAY_MAX_LENGTH = 60;
 
 /** Options for controlling terminal report rendering. */
 export interface TerminalReportOptions {
@@ -46,7 +50,7 @@ export function renderTerminalReport(
   lines.push("");
   lines.push(section("Top IPs", report.topIps, colors));
   lines.push(section("Top paths", report.topPaths, colors));
-  lines.push(section("Top user agents", report.topUserAgents, colors));
+  lines.push(section("Top user agents", report.topUserAgents, colors, UA_DISPLAY_MAX_LENGTH));
   lines.push(section("Top query params", report.topParams, colors));
   lines.push(section("Top query param values", report.topParamValues, colors));
   lines.push(section("Methods", report.topMethods, colors));
@@ -94,14 +98,18 @@ function aiBotSection(report: AnalyzeReport, colors: ReturnType<typeof pc.create
  * Renders a titled list of top-N items with right-aligned counts.
  *
  * @param title - Section heading (e.g. `"Top IPs"`).
- * @param items - Array of `{ value, count }` items to display.
+ * @param items - Array of `{ value, count }` items to display. Values are the
+ *   full untruncated aggregation key; truncation for display happens here.
  * @param colors - A picocolors instance.
+ * @param maxValueLength - Optional max rendered length for `item.value`
+ *   (e.g. user agents, which can be much longer than IPs/paths).
  * @returns A newline-joined string block, showing "none" when the list is empty.
  */
 function section(
   title: string,
   items: TopItem[],
-  colors: ReturnType<typeof pc.createColors>
+  colors: ReturnType<typeof pc.createColors>,
+  maxValueLength?: number
 ): string {
   const lines = [colors.bold(title)];
 
@@ -111,7 +119,8 @@ function section(
   }
 
   for (const item of items) {
-    lines.push(`  ${item.count.toString().padStart(6, " ")}  ${item.value}`);
+    const value = maxValueLength ? truncateForDisplay(item.value, maxValueLength) : item.value;
+    lines.push(`  ${item.count.toString().padStart(6, " ")}  ${value}`);
   }
 
   return lines.join("\n");

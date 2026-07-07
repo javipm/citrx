@@ -1,4 +1,8 @@
 import type { AnalyzeReport, Incident, TopItem } from "../analysis/types.js";
+import { truncateForDisplay } from "../utils/text.js";
+
+/** Max rendered length for a user agent value in top-value tables. */
+const UA_DISPLAY_MAX_LENGTH = 60;
 
 /**
  * Renders a GitHub-Flavored Markdown report from an `AnalyzeReport`.
@@ -39,7 +43,7 @@ export function renderMarkdownReport(report: AnalyzeReport): string {
     "",
     topSection("Top IPs", report.topIps),
     topSection("Top Paths", report.topPaths),
-    topSection("Top User Agents", report.topUserAgents),
+    topSection("Top User Agents", report.topUserAgents, UA_DISPLAY_MAX_LENGTH),
     topSection("Top Query Params", report.topParams),
     topSection("Top Query Param Values", report.topParamValues),
     topSection("Methods", report.topMethods),
@@ -86,16 +90,24 @@ function aiBotSection(report: AnalyzeReport): string {
  * for a ranked list of top items. Renders a "none" row when the list is empty.
  *
  * @param title - Section heading text (rendered as `## title`).
- * @param items - Ranked items, each with a `count` and a `value` string.
+ * @param items - Ranked items, each with a `count` and a `value` string. The
+ *   value is the full untruncated aggregation key; truncation happens here.
+ * @param maxValueLength - Optional max rendered length for `item.value`
+ *   (e.g. user agents, which can be much longer than IPs/paths).
  * @returns A Markdown string for the section (no trailing newline).
  */
-function topSection(title: string, items: TopItem[]): string {
+function topSection(title: string, items: TopItem[], maxValueLength?: number): string {
   const lines = [`## ${title}`, "", "| Count | Value |", "| ---: | --- |"];
 
   if (items.length === 0) {
     lines.push("| 0 | none |");
   } else {
-    lines.push(...items.map((item) => `| ${item.count} | ${escapeCell(item.value)} |`));
+    lines.push(
+      ...items.map((item) => {
+        const value = maxValueLength ? truncateForDisplay(item.value, maxValueLength) : item.value;
+        return `| ${item.count} | ${escapeCell(value)} |`;
+      })
+    );
   }
 
   return lines.join("\n");

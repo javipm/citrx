@@ -62,5 +62,6 @@ export const AI_BOT_PATTERNS: UserAgentPattern[] = [
   { name: "Diffbot", regex: /Diffbot/i },
   { name: "FirecrawlAgent", regex: /FirecrawlAgent/i },
   { name: "FriendlyCrawler", regex: /FriendlyCrawler/i },
-  { name: "Gemini-Deep-Research", regex: /Gemini-Deep-Research/i }
+  { name: "Gemini-Deep-Research", regex: /Gemini-Deep-Research/i },
+  { name: "Grok", regex: /\bGrok\b/i }
 ];

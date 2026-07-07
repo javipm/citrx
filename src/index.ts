@@ -180,8 +180,6 @@ async function runRootAnalysis(
       return;
     }
 
-    accessLogWriter.close();
-
     if (typeof options.out === "string") {
       const output = await progress.withStep(`Writing report to ${options.out}`, async () =>
         renderReport(report, outputFormat, options, runtime)

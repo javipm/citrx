@@ -23,5 +23,13 @@ export const SCANNER_UA_PATTERNS: UserAgentPattern[] = [
   // Anchor katana to a slash + version to avoid matching Facebook Android app
   // ("com.facebook.katana"). Real katana scanner UA is e.g. "katana/v1.0".
   { name: "katana", regex: /\bkatana\/\d/i },
-  { name: "subfinder", regex: /subfinder/i }
+  { name: "subfinder", regex: /subfinder/i },
+  { name: "burpsuite", regex: /burp\s?suite|burpsuite|\bburp\/\d/i },
+  // Use owasp-zap|zaproxy to avoid collision with "zap" substring in legit UAs
+  { name: "zaproxy", regex: /owasp[- ]?zap|zaproxy/i },
+  { name: "appscan", regex: /appscan/i },
+  { name: "hakrawler", regex: /hakrawler/i },
+  { name: "paramspider", regex: /paramspider/i },
+  { name: "aquatone", regex: /aquatone/i },
+  { name: "metasploit", regex: /\bmetasploit\/\d|metasploit-framework/i }
 ];

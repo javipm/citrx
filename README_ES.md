@@ -562,7 +562,6 @@ score descendente.
 
 - **Análisis local primero** — sin llamadas de red durante el análisis.
 - **Sin telemetría**, nunca. (Si alguna vez se añade, será opt-in estricto.)
-- **IA solo al pulsar `a`**, con contexto redactado.
 - **Secretos redactados** en valores de URL/query:
   `token, _token, sid, session, password, passwd, key, secret, jwt, auth, authorization`
 - **Salida HTML escapada**; el contenido del log nunca se ejecuta.

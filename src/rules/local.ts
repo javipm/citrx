@@ -1,5 +1,6 @@
 import type { AccessLogEntry } from "../parser/access-log.js";
 import type { Incident, IncidentKind, IncidentSeverity } from "../analysis/types.js";
+import { redactSecretPairs } from "../utils/redact.js";
 
 export interface RuleHit {
   ruleId: string;
@@ -85,7 +86,18 @@ const RULES: RuleDefinition[] = [
       /\buser\s*\(\s*\)/i,
       /\bconnection_id\s*\(\s*\)/i,
       // SQL comment injection: /**/ and version-conditional /*!…*/
-      /\/\*(?:\d+|\s*)\*\//
+      /\/\*(?:\d+|\s*)\*\//,
+      // SQL-context comment terminators: quote/close-paren followed by -- or #
+      // (never bare -- or # — those are legitimate in slugs "foo--bar" and
+      // fragments "#top").
+      /(?:'|%27)\s*--/,
+      /\)\s*--\s/,
+      /\d\s*--\s/,
+      /(?:'|%27)\s*#/,
+      // UNION(SELECT — no-space variant used to dodge naive "union select" filters
+      /\bunion\s*\(\s*select/i,
+      // Exfiltration/fingerprinting functions — only when actually called
+      /\b(?:substring|substr|mid|concat|group_concat|cast)\s*\(/i
     ]
   },
   {
@@ -106,7 +118,13 @@ const RULES: RuleDefinition[] = [
       /\balert\s*\(/i,
       /document\.cookie/i,
       // HTML5 event handlers that fire without <script> or onload/onerror
-      /\bon(?:mouseover|focus|focusin|click|pointerdown|animationstart|toggle)\s*=/i
+      /\bon(?:mouseover|focus|focusin|click|pointerdown|animationstart|toggle|wheel|pointerover|beforeload|transitionend)\s*=/i,
+      // JS execution sinks used to run injected script without a <script> tag
+      /\beval\s*\(/i,
+      /\bsetTimeout\s*\(/i,
+      /\bsetInterval\s*\(/i,
+      /\b(?:inner|outer)HTML\b/i,
+      /\binsertAdjacentHTML\s*\(/i
     ]
   },
   {
@@ -121,9 +139,18 @@ const RULES: RuleDefinition[] = [
       /\.\.\//,
       /\.\.%2f/i,
       /%252e%252e/i,
+      // Windows backslash traversal (literal and URL-encoded)
+      /\.\.\\/,
+      /\.\.%5c/i,
       /\/etc\/passwd/i,
+      /\/etc\/shadow/i,
+      /\/etc\/sudoers/i,
       /\/proc\/self\/environ/i,
+      /\/proc\/self\/cmdline/i,
       /php:\/\/filter/i,
+      /php:\/\/input/i,
+      /php:\/\/fd/i,
+      /phar:\/\//i,
       /(?:file|path|template)=https?:\/\//i
     ]
   },
@@ -139,7 +166,11 @@ const RULES: RuleDefinition[] = [
       /169\.254\.169\.254/,
       /metadata\.google\.internal/i,
       /(?:127\.0\.0\.1|localhost|0\.0\.0\.0)/i,
-      /(?:url|uri|callback|webhook|next|redirect)=https?:\/\//i
+      // Require an internal/loopback/link-local/metadata destination — a bare
+      // url=https:// param is extremely common in legitimate OAuth/redirect
+      // flows (accounts.google.com, api.stripe.com, etc.) and is not a signal
+      // on its own.
+      /(?:url|uri|callback|webhook|next|redirect|dest|target|feed|host|domain)=https?:\/\/(?:127\.0\.0\.1|localhost|0\.0\.0\.0|169\.254\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|\[::1\]|metadata\.)/i
     ]
   },
   {
@@ -152,11 +183,16 @@ const RULES: RuleDefinition[] = [
     description: "Request target contains shell metacharacters with command execution indicators.",
     patterns: [
       // Classic metachar + known Unix binaries
-      /(?:;|%3b|\||%7c|`|%60|\$\(|%24%28).*(?:\bid\b|\bwhoami\b|\bcat\b|\bwget\b|\bcurl\b|\bbash\b|\bnc\b|\bsh\b|\bpython\b|\bperl\b|\bphp\b|\bping\b|\bnslookup\b)/i,
+      /(?:;|%3b|\||%7c|`|%60|\$\(|%24%28).*(?:\bid\b|\bwhoami\b|\bcat\b|\bwget\b|\bcurl\b|\bbash\b|\bnc\b|\bsh\b|\bpython\b|\bperl\b|\bphp\b|\bping\b|\bnslookup\b|\bbase64\b|\bxxd\b|\bopenssl\b)/i,
       // Windows/PowerShell variants
       /(?:;|%3b|\||%7c|`|%60|\$\(|%24%28).*(?:powershell|cmd\.exe|wscript|cscript)/i,
-      // $IFS and newline-based separator bypass
-      /\$IFS|\$\{IFS\}|%0a[a-z]|%0d%0a[a-z]/i
+      // $IFS and newline-based separator bypass.
+      // normalizeForMatching() decodes %0a/%0d%0a to real \n/\r\n before RULES
+      // run, so matching the literal "%0a" string here would be dead code —
+      // match the decoded newline instead. Scoped to a shell metacharacter
+      // right after the newline (not a bare letter) to avoid flagging benign
+      // multi-line query values (e.g. a textarea field with embedded newlines).
+      /\$IFS|\$\{IFS\}|\r?\n[;|`$]/
     ]
   },
   {
@@ -169,11 +205,23 @@ const RULES: RuleDefinition[] = [
     description: "Request target probes common sensitive files or application internals.",
     patterns: [
       /\/\.env(?:\.|$|\?)/i,
+      /\/\.env\.local(?:$|\?)/i,
+      /\/\.env\.production(?:$|\?)/i,
       /\/\.git(?:\/|$|\?)/i,
+      /\/\.git\/head(?:$|\?)/i,
+      /\/\.git\/config(?:$|\?)/i,
+      /\/\.svn\//i,
+      /\/\.hg\//i,
+      /\/\.bzr\//i,
       /\/composer\.json(?:$|\?)/i,
       /\/vendor\/(?:autoload\.php|composer\/|phpunit\/|bin\/)/i,
       /\/phpinfo\.php(?:$|\?)/i,
-      /\.(?:sql|bak|old|zip|tar\.gz)(?:$|\?)/i
+      /\.(?:sql|bak|old|zip|tar\.gz|tar|7z|rar|orig|bkp)(?:$|\?)/i,
+      /\/\.ssh\/id_rsa(?:$|\?)/i,
+      /\/\.kube\/config(?:$|\?)/i,
+      /\/wp-config\.php(?:$|\?)/i,
+      /\/docker-compose\.yml(?:$|\?)/i,
+      /\/\.ds_store(?:$|\?)/i
     ]
   }
 ];
@@ -250,6 +298,15 @@ const PAYLOAD_PREFIXES = [
   // SQLi — comment injection
   "/**/",
   "/*!",
+  "--",
+  "#",
+  "union(",
+  "substring(",
+  "substr(",
+  "mid(",
+  "concat(",
+  "group_concat(",
+  "cast(",
   // XSS — script tags and execution
   "<script",
   "%3cscript",
@@ -267,13 +324,27 @@ const PAYLOAD_PREFIXES = [
   "onpointerdown",
   "onanimationstart",
   "ontoggle",
+  "onwheel",
+  "onpointerover",
+  "onbeforeload",
+  "ontransitionend",
+  // XSS — execution sinks
+  "eval(",
+  "settimeout(",
+  "setinterval(",
+  "innerhtml",
+  "outerhtml",
+  "insertadjacenthtml(",
   // LFI/RFI
   "../",
   "..%2f",
   "%252e",
+  "..\\",
+  "..%5c",
   "/etc/",
   "/proc/",
   "php://",
+  "phar://",
   "file=http",
   "path=http",
   "template=http",
@@ -287,6 +358,11 @@ const PAYLOAD_PREFIXES = [
   "callback=http",
   "webhook=http",
   "redirect=http",
+  "dest=http",
+  "target=http",
+  "feed=http",
+  "host=http",
+  "domain=http",
   // Command injection — metacharacters
   ";",
   "%3b",
@@ -302,6 +378,9 @@ const PAYLOAD_PREFIXES = [
   "%0d%0a",
   "powershell",
   "cmd.exe",
+  "base64",
+  "xxd",
+  "openssl",
   // Sensitive file probes
   ".env",
   ".git",
@@ -309,7 +388,25 @@ const PAYLOAD_PREFIXES = [
   "phpinfo",
   ".sql",
   ".bak",
-  ".old"
+  ".old",
+  // Recon — additional sensitive files/dirs (Phase 2, D6)
+  ".env.local",
+  ".env.production",
+  ".git/head",
+  ".git/config",
+  ".svn/",
+  ".hg/",
+  ".bzr/",
+  ".tar",
+  ".7z",
+  ".rar",
+  ".orig",
+  ".bkp",
+  ".ssh/id_rsa",
+  ".kube/config",
+  "wp-config.php",
+  "docker-compose.yml",
+  ".ds_store"
 ];
 
 const PAYLOAD_PREFIX_RE = new RegExp(PAYLOAD_PREFIXES.map(escapeRegex).join("|"), "i");
@@ -1005,11 +1102,25 @@ export function pruneNoise(incidents: Map<string, Incident>): void {
   }
 }
 
-export function redactTarget(target: string): string {
-  return truncateSample(redactSensitiveTarget(target));
+/**
+ * Parse a raw request target into a URL once, for reuse across redactTarget
+ * and querySignature in the hot per-request path (see access-log.ts). Returns
+ * null when the target cannot be parsed (callers fall back to the raw string,
+ * matching prior try/catch behavior exactly).
+ */
+export function parseTargetUrl(target: string): URL | null {
+  try {
+    return new URL(target, "http://citrx.local");
+  } catch {
+    return null;
+  }
 }
 
-export function querySignature(target: string): string {
+export function redactTarget(target: string, parsed?: URL | null): string {
+  return truncateSample(redactSensitiveTarget(target, parsed));
+}
+
+export function querySignature(target: string, parsed?: URL | null): string {
   const queryStart = target.indexOf("?");
   if (queryStart === -1) return "";
 
@@ -1017,37 +1128,28 @@ export function querySignature(target: string): string {
   // fbclid/gclid/utm_*/etc. are unique per click and inflate query-variant counts
   // for legitimate marketing traffic. We keep all real application params so genuine
   // query-explosion abuse is still detected.
-  try {
-    const url = new URL(target, "http://citrx.local");
-    for (const key of [...url.searchParams.keys()]) {
+  const url = parsed !== undefined ? parsed : parseTargetUrl(target);
+  if (url) {
+    // Clone so we don't mutate a URL instance the caller may reuse elsewhere
+    // (e.g. redactTarget's own parse of the same target).
+    const cloned = new URL(url.toString());
+    for (const key of [...cloned.searchParams.keys()]) {
       if (TRACKING_PARAM_RE.test(key)) {
-        url.searchParams.delete(key);
+        cloned.searchParams.delete(key);
       }
     }
-    if (!url.search) return "";
-    return redactSensitiveTarget(`/${url.search}`).slice(1);
-  } catch {
-    return redactSensitiveTarget(`/${target.slice(queryStart)}`).slice(1);
+    if (!cloned.search) return "";
+    return redactSensitiveTarget(`/${cloned.search}`).slice(1);
   }
+  return redactSensitiveTarget(`/${target.slice(queryStart)}`).slice(1);
 }
 
-function redactSensitiveTarget(target: string): string {
-  try {
-    const url = new URL(target, "http://citrx.local");
-
-    for (const key of [...url.searchParams.keys()]) {
-      if (/token|_token|sid|session|password|passwd|key|secret|jwt|auth|authorization/i.test(key)) {
-        url.searchParams.set(key, "[REDACTED]");
-      }
-    }
-
-    return `${url.pathname}${url.search}`;
-  } catch {
-    return target.replace(
-      /(token|_token|sid|session|password|passwd|key|secret|jwt|auth|authorization)=([^&\s]+)/gi,
-      "$1=[REDACTED]"
-    );
+function redactSensitiveTarget(target: string, parsed?: URL | null): string {
+  const url = parsed !== undefined ? parsed : parseTargetUrl(target);
+  if (url) {
+    return redactSecretPairs(`${url.pathname}${url.search}`);
   }
+  return redactSecretPairs(target);
 }
 
 /**
@@ -1066,7 +1168,9 @@ function normalizeForMatching(target: string): string {
       break;
     }
   }
-  return current.toLowerCase();
+  // Strip null bytes injected to break naive string matching / truncate paths
+  // (classic PHP null-byte injection against legacy file-handling code).
+  return current.replace(/\x00/g, "").toLowerCase();
 }
 
 function truncateSample(value: string): string {

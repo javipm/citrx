@@ -13,7 +13,6 @@ Primary goals:
 - Be useful by default with deterministic local rules and bounded-memory
   streaming analysis.
 - Open an interactive terminal UI by default when stdin/stdout are TTYs.
-- Use OpenAI only when the user explicitly asks from the TUI.
 - Be easy to install and run across macOS, Linux, and Windows with `npx citrx`.
 
 ## Local Instructions
@@ -81,7 +80,6 @@ Use:
 - `ink` + React for the interactive TUI.
 - `zod` for runtime schema validation.
 - `picocolors` for terminal color.
-- Official `openai` SDK for TUI AI questions.
 - Vitest for tests.
 
 Avoid:
@@ -100,7 +98,6 @@ Keep code modular and aligned with the current layout:
 - `rules/`: deterministic request/path rules and scoring.
 - `run/`: temporary run workspace and access-log index.
 - `tui/`: Ink screens, hooks, filters, tables, overlays.
-- `ai/`: compact redacted context builder and OpenAI question client.
 - `report/`: terminal, JSON, Markdown, HTML renderers.
 - `utils/`: shared small helpers when needed.
 
@@ -193,7 +190,6 @@ Current screens:
 - Incident: evidence and related access-log rows for one incident.
 - Top values: top IPs, paths, UAs, params, and param values for summary or incident.
 - Request detail: wrapped single-request inspection.
-- OpenAI answer: scrollable answer view.
 
 Current UX rules:
 
@@ -225,31 +221,6 @@ TUI filters are powerful and should stay documented:
 - URL-decoded comparison
 - query parameter filters such as `param:q`, `param:q=*select*`, `param:*=*sleep*`
 - aliases such as `url`, `ua`, `st`, `ln`, `src`, `qs`, `mth`
-
-## OpenAI Mode
-
-OpenAI is not a CLI flag. It is triggered only when the user presses `a` in the
-TUI and `OPENAI_API_KEY` is available.
-
-Rules:
-
-- Never call OpenAI during initial analysis.
-- Never send raw full logs by default.
-- Send compact, redacted context only:
-  - report summary,
-  - selected incident evidence,
-  - selected or visible log rows,
-  - top values,
-  - redacted samples.
-- Validate and render model output safely.
-- AI output must never be the only source of truth.
-
-Environment variables:
-
-- `OPENAI_API_KEY`
-- `CITRX_OPENAI_MODEL`
-- `CITRX_AI_MAX_LINES`
-- `CITRX_AI_MAX_CHARS`
 
 ## Reports
 
@@ -292,7 +263,6 @@ Core coverage areas:
 - Rules: payload outcomes, recon, saturation, POST hotspots, fake bots, AI crawlers.
 - Access index: pagination, filtering, sorting, random row reads.
 - TUI hooks: summary/incident input, filters, exports, top values.
-- OpenAI: disabled by default, redacted payload, schema/render behavior.
 - CLI: flags, stdout/stderr, exit codes.
 - HTML/Markdown/terminal reports.
 

@@ -4,7 +4,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { analyzeAccessLogs } from "./access-log.js";
+import { analyzeAccessLogs, insertTopItem } from "./access-log.js";
+import type { TopItem } from "./types.js";
 
 describe("access log analysis incident matches", () => {
   it("links known AI crawler incidents to matching access lines", async () => {
@@ -203,5 +204,67 @@ describe("access log analysis incident matches", () => {
     ]);
     expect(report.topParamValues).toContainEqual({ value: "token=<redacted>", count: 1 });
     expect(report.topParamValues).toContainEqual({ value: "q=camper", count: 2 });
+  });
+});
+
+describe("insertTopItem", () => {
+  function fullTop(limit: number): TopItem[] {
+    const top: TopItem[] = [];
+    for (let i = 0; i < limit; i++) {
+      insertTopItem(top, { value: `v${i}`, count: limit - i }, limit);
+    }
+    return top;
+  }
+
+  it("does not mutate a full top list when the item is not better than the last entry", () => {
+    const top = fullTop(3);
+    const snapshot = [...top];
+
+    insertTopItem(top, { value: "zzz", count: 1 }, 3);
+
+    expect(top).toEqual(snapshot);
+  });
+
+  it("displaces the last entry and pops when the item is better", () => {
+    const top = fullTop(3);
+
+    insertTopItem(top, { value: "new", count: 10 }, 3);
+
+    expect(top).toEqual([
+      { value: "new", count: 10 },
+      { value: "v0", count: 3 },
+      { value: "v1", count: 2 }
+    ]);
+    expect(top).toHaveLength(3);
+  });
+
+  it("resolves count ties by value ascending at the boundary", () => {
+    // Full list with the last entry count=1, value="b". A new item with the
+    // same count but a smaller value should displace it (tie-break: value asc).
+    const top: TopItem[] = [
+      { value: "a", count: 2 },
+      { value: "b", count: 1 }
+    ];
+
+    insertTopItem(top, { value: "aa", count: 1 }, 2);
+
+    expect(top).toEqual([
+      { value: "a", count: 2 },
+      { value: "aa", count: 1 }
+    ]);
+  });
+
+  it("does not displace when the tie-break value is not smaller", () => {
+    const top: TopItem[] = [
+      { value: "a", count: 2 },
+      { value: "b", count: 1 }
+    ];
+
+    insertTopItem(top, { value: "zz", count: 1 }, 2);
+
+    expect(top).toEqual([
+      { value: "a", count: 2 },
+      { value: "b", count: 1 }
+    ]);
   });
 });

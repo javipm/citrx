@@ -1,6 +1,6 @@
 {
   "name": "@javipm/citrx",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "CLI for local-first Apache/Nginx access log analysis.",
   "type": "module",
   "packageManager": "pnpm@11.1.0",
@@ -49,29 +49,29 @@
   },
   "homepage": "https://github.com/javipm/citrx#readme",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "dependencies": {
-    "commander": "^14.0.2",
-    "ink": "^7.0.3",
+    "commander": "^15.0.0",
+    "ink": "^7.1.0",
     "picocolors": "^1.1.1",
-    "react": "^19.2.6",
+    "react": "^19.2.7",
     "tar-stream": "^3.2.0",
-    "yauzl": "^3.3.1",
-    "zod": "^4.1.13"
+    "yauzl": "^3.4.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.1",
-    "@types/node": "^24.10.1",
-    "@types/react": "^19.2.15",
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
     "@types/tar-stream": "^3.1.4",
-    "@types/yauzl": "^2.10.3",
-    "eslint": "^9.39.1",
-    "prettier": "^3.6.2",
-    "tsx": "^4.20.6",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.48.0",
-    "vitest": "^4.0.14"
+    "@types/yauzl": "^3.4.0",
+    "eslint": "^9.39.4",
+    "prettier": "^3.9.4",
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.63.0",
+    "vitest": "^4.1.10"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

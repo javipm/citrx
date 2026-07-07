@@ -1,4 +1,8 @@
 import type { AnalyzeReport, Incident, TopItem } from "../analysis/types.js";
+import { truncateForDisplay } from "../utils/text.js";
+
+/** Max rendered length for a user agent value in top-value tables. */
+const UA_DISPLAY_MAX_LENGTH = 60;
 
 /**
  * Renders a complete, self-contained HTML report from an `AnalyzeReport`.
@@ -71,7 +75,7 @@ export function renderHtmlReport(report: AnalyzeReport): string {
     <section class="two">
       ${topTable("Top IPs", report.topIps)}
       ${topTable("Top Paths", report.topPaths)}
-      ${topTable("Top User Agents", report.topUserAgents)}
+      ${topTable("Top User Agents", report.topUserAgents, UA_DISPLAY_MAX_LENGTH)}
       ${topTable("Top Query Params", report.topParams)}
       ${topTable("Top Query Param Values", report.topParamValues)}
       ${topTable("Methods", report.topMethods)}
@@ -123,18 +127,23 @@ function metric(label: string, value: string | number): string {
  * for a ranked list of top items. Renders "none" when the list is empty.
  *
  * @param title - Section heading rendered as an `<h2>`.
- * @param items - Ranked items, each with a `count` and a `value` string.
+ * @param items - Ranked items, each with a `count` and a `value` string. The
+ *   value is the full untruncated aggregation key; truncation happens here.
+ * @param maxValueLength - Optional max rendered length for `item.value`
+ *   (e.g. user agents, which can be much longer than IPs/paths).
  * @returns An HTML `<div>` wrapping the heading and table.
  */
-function topTable(title: string, items: TopItem[]): string {
+function topTable(title: string, items: TopItem[], maxValueLength?: number): string {
   const rows =
     items.length === 0
       ? '<tr><td colspan="2">none</td></tr>'
       : items
-          .map(
-            (item) =>
-              `<tr><td>${item.count}</td><td><code>${escapeHtml(item.value)}</code></td></tr>`
-          )
+          .map((item) => {
+            const value = maxValueLength
+              ? truncateForDisplay(item.value, maxValueLength)
+              : item.value;
+            return `<tr><td>${item.count}</td><td><code>${escapeHtml(value)}</code></td></tr>`;
+          })
           .join("");
 
   return `<div><h2>${escapeHtml(title)}</h2><table><thead><tr><th>Count</th><th>Value</th></tr></thead><tbody>${rows}</tbody></table></div>`;

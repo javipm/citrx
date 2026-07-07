@@ -75,6 +75,12 @@ export async function openRunTui(run: CitrxRun, runtime: TuiRuntime): Promise<vo
       run
     }),
     {
+      // Ink's render() types stdin/stdout/stderr as concrete Node.js stream
+      // classes, but TuiRuntime declares them as generic Readable/Writable so
+      // callers can pass PassThrough streams in tests. The casts are safe here
+      // because Ink only relies on the Readable/Writable surface (read/write,
+      // "data"/"resize" events) at runtime, never on Node-stream-specific
+      // members like fd or isTTY beyond what TuiRuntime already exposes.
       stdin: runtime.stdin as NodeJS.ReadStream,
       stdout: runtime.stdout as NodeJS.WriteStream,
       stderr: runtime.stderr as NodeJS.WriteStream,

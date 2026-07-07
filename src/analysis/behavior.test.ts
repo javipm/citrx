@@ -337,6 +337,65 @@ describe("behavior tracker", () => {
     );
   });
 
+  it("detects Burp Suite scanner", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ userAgent: "Burp Suite Professional/2024.2" }));
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "scanner_ua_known:burpsuite:203.0.113.10",
+          severity: "high"
+        })
+      ])
+    );
+  });
+
+  it("detects OWASP ZAP scanner", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ userAgent: "OWASP ZAP/2.14.0" }));
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "scanner_ua_known:zaproxy:203.0.113.10",
+          severity: "high"
+        })
+      ])
+    );
+  });
+
+  it("detects Metasploit scanner", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ userAgent: "Metasploit/6.3.5" }));
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "scanner_ua_known:metasploit:203.0.113.10",
+          severity: "high"
+        })
+      ])
+    );
+  });
+
+  it("does not detect normal Chrome user-agent as a scanner", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(
+      entry({
+        userAgent:
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+      })
+    );
+
+    const incidents = tracker.finalize().incidents;
+    expect(incidents).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: expect.stringMatching(/^scanner_ua_known/) })
+      ])
+    );
+  });
+
   it("detects scanner fingerprint paths in one minute bucket", () => {
     const tracker = new BehaviorTracker();
 

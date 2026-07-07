@@ -2,7 +2,9 @@ import { writeFile } from "node:fs/promises";
 
 const SOURCES = [
   {
-    url: "https://developers.google.com/static/search/apis/ipranges/googlebot.json",
+    // Google's common-crawlers list (Googlebot and other Google crawlers).
+    // The old googlebot-only endpoint was retired; Google now directs callers here.
+    url: "https://developers.google.com/static/crawling/ipranges/common-crawlers.json",
     out: "src/rules/data/googlebot-ranges.ts",
     constName: "GOOGLEBOT_RANGES"
   },
@@ -26,16 +28,31 @@ for (const source of SOURCES) {
       ipv6Prefix?: string;
     }>;
   };
+
+  if (!Array.isArray(data.prefixes)) {
+    throw new Error(
+      `Unexpected payload from ${source.url}: missing "prefixes" array. ` +
+        `Refusing to overwrite ${source.out}.`
+    );
+  }
+
   const ipv4: string[] = [];
   const ipv6: string[] = [];
 
-  for (const entry of data.prefixes ?? []) {
+  for (const entry of data.prefixes) {
     if (entry.ipv4Prefix) {
       ipv4.push(entry.ipv4Prefix);
     }
     if (entry.ipv6Prefix) {
       ipv6.push(entry.ipv6Prefix);
     }
+  }
+
+  if (ipv4.length === 0 && ipv6.length === 0) {
+    throw new Error(
+      `Fetched 0 ranges from ${source.url}. ` +
+        `Refusing to overwrite ${source.out} with an empty snapshot.`
+    );
   }
 
   const header =

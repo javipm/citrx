@@ -235,7 +235,7 @@ describe("citrx CLI", () => {
       ])
     );
     expect(report.incidents.flatMap((incident) => incident.samples).join("\n")).toContain(
-      "token=%5BREDACTED%5D"
+      "token=[REDACTED]"
     );
     expect(report.accessLog).toEqual(
       expect.objectContaining({

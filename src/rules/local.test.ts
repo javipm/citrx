@@ -5,6 +5,8 @@ import {
   buildAggregateIncidents,
   detectRequestHits,
   mergeRuleHit,
+  parseTargetUrl,
+  pruneNoise,
   querySignature,
   redactTarget
 } from "./local.js";
@@ -102,9 +104,9 @@ describe("local rules", () => {
 
   it("redacts sensitive query values in samples", () => {
     expect(redactTarget("/login?token=secret&next=/admin")).toBe(
-      "/login?token=%5BREDACTED%5D&next=%2Fadmin"
+      "/login?token=[REDACTED]&next=/admin"
     );
-    expect(querySignature("/api?password=hunter2&page=1")).toBe("?password=%5BREDACTED%5D&page=1");
+    expect(querySignature("/api?password=hunter2&page=1")).toBe("?password=[REDACTED]&page=1");
     expect(redactTarget(`/search?q=${"a".repeat(400)}`)).toHaveLength(300);
   });
 
@@ -825,5 +827,335 @@ describe("local rules", () => {
         title: "Concentrated URL pressure"
       })
     ]);
+  });
+});
+
+describe("payload signatures — Phase 1 (D1-D5)", () => {
+  it("D1: strips null bytes before matching (bypass attempt via %00)", () => {
+    const hits = detectRequestHits(entry("/etc/passwd%00.jpg?x=%2e%2e%2fetc%2fpasswd%00"));
+    expect(hits).toEqual(
+      expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
+    );
+  });
+
+  describe("D2: SQLi comment/exfiltration signatures", () => {
+    it("detects quote-anchored -- comment terminator", () => {
+      const hits = detectRequestHits(entry("/login?user=admin'--%20"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })])
+      );
+    });
+
+    it("detects numeric-anchored -- comment terminator", () => {
+      const hits = detectRequestHits(entry("/item?id=1-- "));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })])
+      );
+    });
+
+    it("does NOT flag a legitimate slug containing bare --", () => {
+      const hits = detectRequestHits(entry("/blog/foo--bar-review"));
+      expect(hits.some((h) => h.ruleId === "sqli")).toBe(false);
+    });
+
+    it("does NOT flag a legitimate #top-style fragment token in query", () => {
+      const hits = detectRequestHits(entry("/page?section=%23top"));
+      expect(hits.some((h) => h.ruleId === "sqli")).toBe(false);
+    });
+
+    it("detects UNION(SELECT with no space", () => {
+      const hits = detectRequestHits(entry("/search?q=1%20UNION(SELECT%20password%20FROM%20users)"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })])
+      );
+    });
+
+    it("detects exfiltration functions only when called with parens", () => {
+      const hits = detectRequestHits(entry("/search?q=1%20AND%20substring(password,1,1)=%27a%27"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })])
+      );
+    });
+
+    it("does NOT flag bare mentions of function names without parens", () => {
+      const hits = detectRequestHits(entry("/blog/concat-of-two-strings-tutorial"));
+      expect(hits.some((h) => h.ruleId === "sqli")).toBe(false);
+    });
+  });
+
+  describe("D3: XSS execution sinks and expanded event handlers", () => {
+    it("detects eval( sink", () => {
+      const hits = detectRequestHits(entry("/page?x=%22);eval(atob('YWxlcnQoMSk='))//"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })])
+      );
+    });
+
+    it("detects innerHTML sink", () => {
+      const hits = detectRequestHits(entry("/page?x=<img src=x onerror=this.parentNode.innerHTML=1>"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })])
+      );
+    });
+
+    it("detects onwheel handler", () => {
+      const hits = detectRequestHits(entry("/page?x=<div onwheel=alert(1)>"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })])
+      );
+    });
+
+    it("detects onpointerover handler", () => {
+      const hits = detectRequestHits(entry("/page?x=<div onpointerover=alert(1)>"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })])
+      );
+    });
+
+    it("does NOT flag ?onsale=1 as XSS (X1 anti-FP)", () => {
+      const hits = detectRequestHits(entry("/products?onsale=1"));
+      expect(hits.some((h) => h.ruleId === "xss")).toBe(false);
+    });
+
+    it("does NOT flag ?onboarding=step2 as XSS (X1 anti-FP)", () => {
+      const hits = detectRequestHits(entry("/app?onboarding=step2"));
+      expect(hits.some((h) => h.ruleId === "xss")).toBe(false);
+    });
+  });
+
+  describe("D4: LFI/traversal expanded signatures", () => {
+    it("detects double-encoded traversal %252e%252e", () => {
+      const hits = detectRequestHits(entry("/download?file=%252e%252e%252f%252e%252e%252fetc%252fpasswd"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
+      );
+    });
+
+    it("detects Windows backslash traversal", () => {
+      const hits = detectRequestHits(entry("/download?file=..\\..\\windows\\win.ini"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
+      );
+    });
+
+    it("detects URL-encoded backslash traversal ..%5c", () => {
+      const hits = detectRequestHits(entry("/download?file=..%5c..%5cwindows%5cwin.ini"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
+      );
+    });
+
+    it("detects /etc/shadow probe", () => {
+      const hits = detectRequestHits(entry("/download?file=/etc/shadow"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
+      );
+    });
+
+    it("detects /etc/sudoers probe", () => {
+      const hits = detectRequestHits(entry("/download?file=/etc/sudoers"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
+      );
+    });
+
+    it("detects /proc/self/cmdline probe", () => {
+      const hits = detectRequestHits(entry("/download?file=/proc/self/cmdline"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
+      );
+    });
+
+    it("detects php://input wrapper", () => {
+      const hits = detectRequestHits(entry("/index.php?page=php://input"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
+      );
+    });
+
+    it("detects php://fd wrapper", () => {
+      const hits = detectRequestHits(entry("/index.php?page=php://fd/3"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
+      );
+    });
+
+    it("detects phar:// wrapper", () => {
+      const hits = detectRequestHits(entry("/index.php?page=phar://evil.phar/x.php"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
+      );
+    });
+  });
+
+  describe("D5: command injection expanded binaries and %0a separator", () => {
+    it("detects base64 binary via pipe metachar", () => {
+      const hits = detectRequestHits(entry("/ping?host=127.0.0.1|base64%20/etc/passwd"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "command_injection" })])
+      );
+    });
+
+    it("detects xxd binary via semicolon metachar", () => {
+      const hits = detectRequestHits(entry("/ping?host=127.0.0.1;xxd%20/etc/passwd"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "command_injection" })])
+      );
+    });
+
+    it("detects openssl binary via backtick metachar", () => {
+      const hits = detectRequestHits(entry("/ping?host=`openssl enc -d`"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "command_injection" })])
+      );
+    });
+
+    it("detects relaxed %0a separator followed by shell metachar (no metachar+known binary elsewhere)", () => {
+      // "reboot" is not in the known-binary list and there is no metachar
+      // anywhere else in the payload, so this can only be caught by the
+      // decoded-newline branch (\n followed by a metachar), not by the
+      // metachar+binary branch above.
+      const hits = detectRequestHits(entry("/ping?host=127.0.0.1%0a$(reboot)"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "command_injection" })])
+      );
+    });
+
+    it("detects %0d%0a followed by shell metachar with no metachar+binary elsewhere", () => {
+      const hits = detectRequestHits(entry("/ping?host=127.0.0.1%0d%0a;shutdown"));
+      expect(hits).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "command_injection" })])
+      );
+    });
+
+    it("does NOT flag %0a followed by a harmless letter with no metachar/binary", () => {
+      const hits = detectRequestHits(entry("/search?q=line1%0aline2"));
+      expect(hits.some((h) => h.ruleId === "command_injection")).toBe(false);
+    });
+  });
+
+  it("guards that every RULES pattern has prefix coverage in PAYLOAD_PREFIXES", async () => {
+    // Import the module source to introspect RULES/PAYLOAD_PREFIXES indirectly:
+    // we can't reach the private arrays directly, so this guard instead asserts
+    // known representative payloads for each rule id pass the public fast-path
+    // by successfully producing a hit through detectRequestHits. This catches
+    // the R1 hard-rule regression (new pattern added without a prefix entry).
+    const representativePayloads: Array<{ ruleId: string; target: string }> = [
+      { ruleId: "sqli", target: "/x?q=1%20union%20select%201" },
+      { ruleId: "sqli", target: "/x?q=admin'--%20" },
+      { ruleId: "sqli", target: "/x?q=1%20UNION(SELECT%201)" },
+      { ruleId: "sqli", target: "/x?q=substring(a,1,1)" },
+      { ruleId: "xss", target: "/x?q=<script>alert(1)</script>" },
+      { ruleId: "xss", target: "/x?q=<div onwheel=alert(1)>" },
+      { ruleId: "xss", target: "/x?q=eval(1)" },
+      { ruleId: "lfi_rfi", target: "/x?f=../../etc/passwd" },
+      { ruleId: "lfi_rfi", target: "/x?f=..%5c..%5cwin.ini" },
+      { ruleId: "lfi_rfi", target: "/x?f=php://input" },
+      { ruleId: "ssrf", target: "/x?url=http://169.254.169.254/latest/meta-data" },
+      { ruleId: "command_injection", target: "/x?q=;base64%20/etc/passwd" },
+      { ruleId: "recon_sensitive_file", target: "/.env.local" },
+      { ruleId: "recon_sensitive_file", target: "/.git/HEAD" }
+    ];
+
+    for (const { ruleId, target } of representativePayloads) {
+      const hits = detectRequestHits(entry(target));
+      expect(hits.some((h) => h.ruleId === ruleId), `expected ${ruleId} to fire for ${target}`).toBe(
+        true
+      );
+    }
+  });
+});
+
+describe("D7: SSRF anti-FP — requires internal/loopback/metadata destination", () => {
+  it("does NOT flag ?redirect=https://accounts.google.com/o/oauth2 (legit OAuth)", () => {
+    const hits = detectRequestHits(
+      entry("/auth/callback?redirect=https://accounts.google.com/o/oauth2")
+    );
+    expect(hits.some((h) => h.ruleId === "ssrf")).toBe(false);
+  });
+
+  it("does NOT flag ?callback=https://api.stripe.com (legit payment callback)", () => {
+    const hits = detectRequestHits(entry("/checkout?callback=https://api.stripe.com"));
+    expect(hits.some((h) => h.ruleId === "ssrf")).toBe(false);
+  });
+
+  it("detects ?url=http://169.254.169.254/latest/meta-data (cloud metadata SSRF)", () => {
+    const hits = detectRequestHits(
+      entry("/fetch?url=http://169.254.169.254/latest/meta-data")
+    );
+    expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "ssrf" })]));
+  });
+
+  it("detects ?next=http://127.0.0.1:8080/admin (loopback SSRF)", () => {
+    const hits = detectRequestHits(entry("/login?next=http://127.0.0.1:8080/admin"));
+    expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "ssrf" })]));
+  });
+
+  it("detects ?target=http://192.168.1.1/ (private-range SSRF)", () => {
+    const hits = detectRequestHits(entry("/proxy?target=http://192.168.1.1/"));
+    expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "ssrf" })]));
+  });
+});
+
+describe("D6: recon sensitive file probes (Phase 2)", () => {
+  const positives = [
+    "/.env.local",
+    "/.env.production",
+    "/.git/HEAD",
+    "/.git/config",
+    "/backup/site.tar",
+    "/backup/site.7z",
+    "/backup/site.rar",
+    "/config.php.orig",
+    "/config.php.bkp",
+    "/.ssh/id_rsa",
+    "/.kube/config",
+    "/wp-config.php",
+    "/docker-compose.yml",
+    "/.DS_Store"
+  ];
+
+  it.each(positives)("flags sensitive file probe: %s", (target) => {
+    const hits = detectRequestHits(entry(target));
+    expect(hits).toEqual(
+      expect.arrayContaining([expect.objectContaining({ ruleId: "recon_sensitive_file" })])
+    );
+  });
+
+  it("prunes a single 404 sensitive-file probe as noise (not persistent)", () => {
+    const incidents = new Map();
+    const req = entry("/.env.local", { status: 404 });
+    const [hit] = detectRequestHits(req);
+    const incidentId = mergeRuleHit(incidents, hit!, req);
+
+    pruneNoise(incidents);
+
+    expect(incidents.has(incidentId)).toBe(false);
+  });
+});
+
+describe("P1 perf refactor: single-parse equivalence (R4 anti-regression guard)", () => {
+  it("redactTarget and querySignature produce identical output whether or not a pre-parsed URL is reused", () => {
+    const target = "/checkout?token=abc&q=x";
+    const parsed = parseTargetUrl(target);
+
+    // Reusing a single pre-parsed URL (the hot-path optimization) must yield
+    // byte-identical results to each function parsing independently — secret
+    // redaction and tracking-param stripping must not regress silently.
+    expect(redactTarget(target, parsed)).toBe(redactTarget(target));
+    expect(querySignature(target, parsed)).toBe(querySignature(target));
+
+    expect(redactTarget(target, parsed)).toBe("/checkout?token=[REDACTED]&q=x");
+    expect(querySignature(target, parsed)).toBe("?token=[REDACTED]&q=x");
+  });
+
+  it("passing an explicit null (simulated parse failure) uses the same raw-string fallback as before the refactor", () => {
+    // Passing `null` simulates parseTargetUrl having failed to parse the
+    // target upstream. Both functions must still redact secrets on the raw
+    // string via redactSecretPairs, matching the original pre-refactor catch
+    // branch exactly (no new fallback behavior introduced).
+    const target = "/checkout?token=abc&q=x";
+    expect(redactTarget(target, null)).toBe("/checkout?token=[REDACTED]&q=x");
+    expect(querySignature(target, null)).toBe("?token=[REDACTED]&q=x");
   });
 });
