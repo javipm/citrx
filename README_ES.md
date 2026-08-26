@@ -7,7 +7,7 @@
 Procesa logs enormes en streaming, detecta ataques y abuso con reglas locales
 deterministas y explóralo todo en una TUI interactiva.
 
-[![npm](https://img.shields.io/npm/v/citrx?color=cb3837&logo=npm)](https://www.npmjs.com/package/citrx)
+[![npm](https://img.shields.io/npm/v/@javipm/citrx?color=cb3837&logo=npm)](https://www.npmjs.com/package/@javipm/citrx)
 [![node](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![types](https://img.shields.io/badge/types-TypeScript-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -21,10 +21,10 @@ deterministas y explóralo todo en una TUI interactiva.
 
 ```bash
 # Un fichero, una carpeta, comprimido o plano — citrx lo detecta solo
-npx citrx@latest /var/log/nginx/access.log
-npx citrx@latest /var/log/nginx/          # una carpeta entera de logs
-npx citrx@latest access.log.gz logs.zip   # .gz .br .zip .tar.gz .tgz
-cat access.log | npx citrx@latest -        # stdin
+npx @javipm/citrx@latest /var/log/nginx/access.log
+npx @javipm/citrx@latest /var/log/nginx/          # una carpeta entera de logs
+npx @javipm/citrx@latest access.log.gz logs.zip   # .gz .br .zip .tar.gz .tgz
+cat access.log | npx @javipm/citrx@latest -        # stdin
 ```
 
 Ese comando procesa la entrada en streaming, la valida, ejecuta ~30 reglas de
@@ -127,16 +127,16 @@ El flujo es deliberadamente offline-first:
 
 ```bash
 # npm
-npx citrx@latest /var/log/nginx/access.log
+npx @javipm/citrx@latest /var/log/nginx/access.log
 
 # pnpm
-pnpx citrx@latest /var/log/nginx/access.log
+pnpx @javipm/citrx@latest /var/log/nginx/access.log
 
 # yarn
-yarn dlx citrx@latest /var/log/nginx/access.log
+yarn dlx @javipm/citrx@latest /var/log/nginx/access.log
 
 # bun
-bunx citrx@latest /var/log/nginx/access.log
+bunx @javipm/citrx@latest /var/log/nginx/access.log
 ```
 
 > Usa la etiqueta `@latest`: `npx` reutiliza una copia cacheada cuando indicas
@@ -147,7 +147,7 @@ bunx citrx@latest /var/log/nginx/access.log
 ### Instalación global
 
 ```bash
-npm i -g citrx
+npm i -g @javipm/citrx
 citrx /var/log/nginx/access.log
 ```
 

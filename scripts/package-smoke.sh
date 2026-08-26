@@ -13,7 +13,7 @@ cleanup() {
 trap cleanup EXIT
 
 pnpm pack --pack-destination "$pack_dir"
-tarball="$(find "$pack_dir" -name 'citrx-*.tgz' | head -n 1)"
+tarball="$(find "$pack_dir" -name '*citrx-*.tgz' | head -n 1)"
 if [[ -z "$tarball" ]]; then
   echo "package smoke: no tarball produced" >&2
   exit 1
