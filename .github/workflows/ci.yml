@@ -11,28 +11,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        shell: bash
+        run: |
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Format
-        run: pnpm format:check
+      - name: Quality
+        shell: bash
+        run: |
+          source scripts/ci-setup-node.sh 24.15.0
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm lint
+          pnpm format:check
 
   test:
     needs: quality
@@ -41,51 +34,45 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            node: "22"
+            node: "22.12.0"
           - os: ubuntu-latest
-            node: "24.15"
+            node: "24.15.0"
           - os: macos-latest
-            node: "24.15"
+            node: "24.15.0"
           - os: windows-latest
-            node: "24.15"
+            node: "24.15.0"
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        shell: bash
+        run: |
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
 
       - name: Test
-        run: pnpm test
+        shell: bash
+        run: |
+          source scripts/ci-setup-node.sh "${{ matrix.node }}"
+          pnpm install --frozen-lockfile
+          pnpm test
 
   package:
     needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        shell: bash
+        run: |
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
 
       - name: Package smoke
-        run: bash scripts/package-smoke.sh
+        shell: bash
+        run: |
+          source scripts/ci-setup-node.sh 24.15.0
+          pnpm install --frozen-lockfile
+          bash scripts/package-smoke.sh

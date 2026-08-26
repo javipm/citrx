@@ -19,7 +19,7 @@ const pkg = JSON.parse(
 describe("package metadata", () => {
   it("matches the published package contract", () => {
     expect(pkg.name).toBe("citrx");
-    expect(pkg.bin).toEqual({ citrx: "./dist/cli.js" });
+    expect(pkg.bin).toEqual({ citrx: "dist/cli.js" });
     expect(pkg.files).toEqual(["dist", "README.md", "README_ES.md", "LICENSE"]);
     expect(pkg.engines.node).toBe(">=22.12");
     expect(pkg.license).toBe("MIT");
