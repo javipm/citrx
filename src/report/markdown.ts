@@ -1,5 +1,7 @@
 import type { AnalyzeReport, Incident, TopItem } from "../analysis/types.js";
+import { sanitizeText } from "../utils/sanitize.js";
 import { truncateForDisplay } from "../utils/text.js";
+import { formatTruncation } from "./truncation.js";
 
 /** Max rendered length for a user agent value in top-value tables. */
 const UA_DISPLAY_MAX_LENGTH = 60;
@@ -13,6 +15,7 @@ const UA_DISPLAY_MAX_LENGTH = 60;
  * @returns A Markdown string ready to be written to a `.md` file.
  */
 export function renderMarkdownReport(report: AnalyzeReport): string {
+  const truncation = formatTruncation(report.summary);
   const lines: string[] = [
     "# citrx access log analysis",
     "",
@@ -27,6 +30,7 @@ export function renderMarkdownReport(report: AnalyzeReport): string {
     `| Lines filtered | ${report.summary.filteredLines} |`,
     `| Invalid lines | ${report.summary.invalidLines} |`,
     `| Bytes served | ${report.summary.totalBytes} |`,
+    ...(truncation ? [`| Truncation | ${truncation} |`] : []),
     `| First seen | ${report.timeStats.firstSeen ?? "unknown"} |`,
     `| Last seen | ${report.timeStats.lastSeen ?? "unknown"} |`,
     `| Peak global RPS | ${report.timeStats.peakGlobalRps} |`,
@@ -157,5 +161,5 @@ function incidentSection(incidents: Incident[]): string {
  * @returns The Markdown-safe string representation.
  */
 function escapeCell(value: string | number | boolean): string {
-  return String(value).replaceAll("|", "\\|").replaceAll("\n", " ");
+  return sanitizeText(String(value), "markdown");
 }

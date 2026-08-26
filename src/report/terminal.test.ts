@@ -29,7 +29,12 @@ function buildReport(overrides: Partial<AnalyzeReport> = {}): AnalyzeReport {
       parsedLines: 10,
       filteredLines: 0,
       invalidLines: 0,
-      totalBytes: 4096
+      totalBytes: 4096,
+      droppedAggregationKeys: 0,
+      droppedPathStats: 0,
+      droppedPathIps: 0,
+      droppedQueryVariants: 0,
+      droppedRpsSeconds: 0
     },
     topIps: [{ value: "203.0.113.10", count: 5 }],
     topPaths: [{ value: "/login", count: 3 }],

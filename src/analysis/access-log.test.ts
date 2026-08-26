@@ -4,7 +4,9 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { createAccessLogIndexWriter } from "../run/access-index.js";
 import { analyzeAccessLogs, insertTopItem } from "./access-log.js";
+import { MAX_PATH_UNIQUE_IPS, MAX_QUERY_VARIANTS } from "./capped-counter.js";
 import type { TopItem } from "./types.js";
 
 describe("access log analysis incident matches", () => {
@@ -113,6 +115,89 @@ describe("access log analysis incident matches", () => {
     expect(matches?.lines).toHaveLength(200);
   });
 
+  it("builds exact match sets for multiple incidents from one index scan", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    const lines: string[] = [];
+    for (let index = 0; index < 220; index += 1) {
+      const second = String(index % 60).padStart(2, "0");
+      const minute = String(10 + Math.floor(index / 60)).padStart(2, "0");
+      lines.push(
+        `203.0.113.10 - - [25/May/2026:03:${minute}:${second} +0200] "GET /catalog HTTP/1.1" 200 80 "-" "GPTBot/1.0"`
+      );
+      lines.push(
+        `203.0.113.11 - - [25/May/2026:03:${minute}:${second} +0200] "GET /search?q=${index}%20UNION%20SELECT%20password HTTP/1.1" 200 80 "-" "Mozilla/5.0"`
+      );
+    }
+    await writeFile(logFile, lines.join("\n"));
+
+    const report = await analyzeAccessLogs([logFile], { top: 5, format: "auto" });
+    const bot = report.incidentMatches.find(
+      (item) => item.incidentId === "ai_scraper_known:GPTBot"
+    );
+    const sqli = report.incidentMatches.find((item) => item.incidentId === "sqli:203.0.113.11");
+    expect(bot?.totalMatches).toBe(220);
+    expect(bot?.rowNumbers).toHaveLength(220);
+    expect(bot?.lines).toHaveLength(200);
+    expect(sqli?.totalMatches).toBe(220);
+    expect(sqli?.rowNumbers).toHaveLength(220);
+    expect(sqli?.lines).toHaveLength(200);
+    for (let i = 1; i < (bot?.rowNumbers.length ?? 0); i++) {
+      expect(bot!.rowNumbers[i]).toBeGreaterThan(bot!.rowNumbers[i - 1]!);
+    }
+  });
+
+  it("keeps exact behavior match rowNumbers when one path exceeds 200 lines", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    const lines = Array.from(
+      { length: 250 },
+      (_, index) =>
+        `203.0.113.10 - - [25/May/2026:03:${String(10 + Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")} +0200] "GET /catalog HTTP/1.1" 200 80 "-" "GPTBot/1.0"`
+    );
+    await writeFile(logFile, lines.join("\n"));
+    const writer = await createAccessLogIndexWriter(directory);
+    try {
+      const report = await analyzeAccessLogs([logFile], {
+        top: 5,
+        format: "auto",
+        accessLogWriter: writer
+      });
+      const match = report.incidentMatches.find(
+        (item) => item.incidentId === "ai_scraper_known:GPTBot"
+      );
+      expect(match?.totalMatches).toBe(250);
+      expect(match?.rowNumbers).toHaveLength(250);
+      expect(match?.lines).toHaveLength(200);
+    } finally {
+      writer.close();
+    }
+  });
+
+  it("excludes invalid timestamps when --since/--until is set", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    await writeFile(
+      logFile,
+      [
+        '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /ok HTTP/1.1" 200 10 "-" "Mozilla/5.0"',
+        '203.0.113.10 - - [99/Foo/2026:03:12:49 +0200] "GET /bad HTTP/1.1" 200 10 "-" "Mozilla/5.0"'
+      ].join("\n")
+    );
+
+    const withFilter = await analyzeAccessLogs([logFile], {
+      top: 5,
+      format: "auto",
+      since: new Date("2026-01-01T00:00:00Z")
+    });
+    expect(withFilter.summary.parsedLines).toBe(1);
+    expect(withFilter.summary.filteredLines).toBe(1);
+    expect(withFilter.topPaths).toEqual([{ value: "/ok", count: 1 }]);
+
+    const withoutFilter = await analyzeAccessLogs([logFile], { top: 5, format: "auto" });
+    expect(withoutFilter.summary.parsedLines).toBe(2);
+  });
+
   it("normalizes stream-kind rowNumbers to monotonic ascending (rule incidents)", async () => {
     const directory = await mkdtemp(join(tmpdir(), "citrx-"));
     const logFile = join(directory, "access.log");
@@ -204,6 +289,79 @@ describe("access log analysis incident matches", () => {
     ]);
     expect(report.topParamValues).toContainEqual({ value: "token=<redacted>", count: 1 });
     expect(report.topParamValues).toContainEqual({ value: "q=camper", count: 2 });
+  });
+
+  it("detects /running saturation from lower-bound cardinality after PathStats caps", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    const total = 1_100;
+    const lines: string[] = [];
+
+    for (let index = 0; index < total; index += 1) {
+      const octet3 = Math.floor(index / 256);
+      const octet4 = index % 256;
+      lines.push(
+        `10.0.${octet3}.${octet4} - - [25/May/2026:03:12:00 +0200] "GET /running?q=${index} HTTP/1.1" 200 120 "-" "Mozilla/5.0"`
+      );
+    }
+
+    await writeFile(logFile, lines.join("\n"));
+
+    const report = await analyzeAccessLogs([logFile], { top: 5, format: "auto" });
+    const incident = report.incidents.find((item) => item.id === "abusive_crawl:/running");
+
+    expect(incident).toEqual(
+      expect.objectContaining({
+        id: "abusive_crawl:/running",
+        kind: "saturation"
+      })
+    );
+    expect(incident?.evidence).toEqual(
+      expect.arrayContaining([
+        { key: "uniqueIps", value: total },
+        { key: "queryVariants", value: total },
+        { key: "uniqueIpsLowerBound", value: true },
+        { key: "queryVariantsLowerBound", value: true },
+        { key: "status2xx", value: total }
+      ])
+    );
+    expect(report.summary.droppedPathIps).toBe(total - MAX_PATH_UNIQUE_IPS);
+    expect(report.summary.droppedQueryVariants).toBe(total - MAX_QUERY_VARIANTS);
+  });
+
+  it("counts a dropped path IP only once toward distinguished cardinality", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    const uniqueIps = 1_000;
+    const extraRepeats = 100;
+    const lines: string[] = [];
+
+    for (let index = 0; index < uniqueIps; index += 1) {
+      const octet3 = Math.floor(index / 256);
+      const octet4 = index % 256;
+      lines.push(
+        `10.1.${octet3}.${octet4} - - [25/May/2026:03:12:00 +0200] "GET /running?q=${index} HTTP/1.1" 200 80 "-" "Mozilla/5.0"`
+      );
+    }
+
+    const droppedIp = "10.1.0.64";
+    for (let extra = 0; extra < extraRepeats; extra += 1) {
+      lines.push(
+        `${droppedIp} - - [25/May/2026:03:12:00 +0200] "GET /running?q=${uniqueIps + extra} HTTP/1.1" 200 80 "-" "Mozilla/5.0"`
+      );
+    }
+
+    await writeFile(logFile, lines.join("\n"));
+
+    const report = await analyzeAccessLogs([logFile], { top: 5, format: "auto" });
+    const incident = report.incidents.find((item) => item.id === "abusive_crawl:/running");
+    const uniqueIpEvidence = incident?.evidence.find((item) => item.key === "uniqueIps")?.value;
+    const variantEvidence = incident?.evidence.find((item) => item.key === "queryVariants")?.value;
+
+    expect(incident?.kind).toBe("saturation");
+    expect(uniqueIpEvidence).toBe(uniqueIps);
+    expect(variantEvidence).toBe(uniqueIps + extraRepeats);
+    expect(report.summary.droppedPathIps).toBe(uniqueIps - MAX_PATH_UNIQUE_IPS);
   });
 });
 

@@ -321,11 +321,7 @@ export function FilterHintBar({
   return React.createElement(
     Box,
     { paddingX: 1 },
-    React.createElement(
-      Text,
-      { color: "gray", wrap: "truncate" },
-      fitText(hint, columns - 4)
-    )
+    React.createElement(Text, { color: "gray", wrap: "truncate" }, fitText(hint, columns - 4))
   );
 }
 

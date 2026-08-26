@@ -35,7 +35,7 @@ const SUMMARY_SECTIONS: HelpSection[] = [
       ["t", "Top values (IPs, paths, UAs, statuses, params)"],
       ["e", "Export selection or current filtered result"],
       ["Space", "Toggle row selection"],
-      ["A", "Select all visible rows (capped at 10 000)"]
+      ["A", "Select visible rows (capped at 5 000)"]
     ]
   },
   {
@@ -81,7 +81,7 @@ const INCIDENT_SECTIONS: HelpSection[] = [
       ["t", "Top values for this incident"],
       ["e", "Export incident rows (selection or all)"],
       ["Space", "Toggle row selection"],
-      ["A", "Select all rows (async on large incidents, Esc cancels)"]
+      ["A", "Select all (page only above 5 000; Esc cancels)"]
     ]
   },
   {
@@ -111,9 +111,7 @@ const TOPS_SECTIONS: HelpSection[] = [
   },
   {
     title: "Actions",
-    rows: [
-      ["Enter", "Apply selected value as filter"]
-    ]
+    rows: [["Enter", "Apply selected value as filter"]]
   },
   {
     title: "Exit",
@@ -180,9 +178,7 @@ const PROMPT_SECTIONS: HelpSection[] = [
   },
   {
     title: "Tip",
-    rows: [
-      ["h", "Close this prompt first, then press h for filter syntax help"]
-    ]
+    rows: [["h", "Close this prompt first, then press h for filter syntax help"]]
   }
 ];
 
@@ -359,11 +355,7 @@ export function HelpOverlay({
         fitText("   Tab / ←→ to switch", Math.max(0, innerWidth - 28))
       )
     ),
-    React.createElement(
-      Text,
-      { color: "gray", backgroundColor: "black" },
-      "─".repeat(innerWidth)
-    ),
+    React.createElement(Text, { color: "gray", backgroundColor: "black" }, "─".repeat(innerWidth)),
     ...visible.map((line, index) =>
       React.createElement(
         Text,

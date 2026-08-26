@@ -35,6 +35,13 @@ describe("isSensitiveParamName", () => {
       expect(isSensitiveParamName(name)).toBe(false);
     }
   });
+
+  it("flags percent-encoded and repeatedly encoded names", () => {
+    expect(isSensitiveParamName("%74oken")).toBe(true);
+    expect(isSensitiveParamName("tok%65n")).toBe(true);
+    expect(isSensitiveParamName("%74%6f%6b%65%6e")).toBe(true);
+    expect(isSensitiveParamName("%2574oken")).toBe(true);
+  });
 });
 
 describe("redactSecretPairs", () => {
@@ -53,9 +60,7 @@ describe("redactSecretPairs", () => {
   });
 
   it("stops the value at whitespace", () => {
-    expect(redactSecretPairs('GET /x?token=abc HTTP/1.1')).toBe(
-      "GET /x?token=[REDACTED] HTTP/1.1"
-    );
+    expect(redactSecretPairs("GET /x?token=abc HTTP/1.1")).toBe("GET /x?token=[REDACTED] HTTP/1.1");
   });
 
   it("stops the value at a double quote and does not consume it", () => {
@@ -70,5 +75,11 @@ describe("redactSecretPairs", () => {
     expect(redactSecretPairs("token=abc&password=hunter2&q=camper")).toBe(
       "token=[REDACTED]&password=[REDACTED]&q=camper"
     );
+  });
+
+  it("redacts percent-encoded parameter names and keeps the original spelling", () => {
+    expect(redactSecretPairs("/x?%74oken=abc&q=ok")).toBe("/x?%74oken=[REDACTED]&q=ok");
+    expect(redactSecretPairs("/x?tok%65n=abc")).toBe("/x?tok%65n=[REDACTED]");
+    expect(redactSecretPairs("/x?%2574oken=abc")).toBe("/x?%2574oken=[REDACTED]");
   });
 });

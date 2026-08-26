@@ -8,8 +8,8 @@ const COMBINED_PATTERN =
   /^(?<ip>\S+)\s+\S+\s+\S+\s+\[(?<timestamp>[^\]]+)]\s+"(?<request>[^"]*)"\s+(?<status>\d{3})\s+(?<bytes>\S+)\s+"(?<referer>[^"]*)"\s+"(?<userAgent>[^"]*)"\s*$/;
 
 export const builtInParsers: AccessLogParser[] = [
-  createRegexParser("apache_combined", "Apache combined", COMBINED_PATTERN),
-  createRegexParser("nginx_combined", "Nginx combined", COMBINED_PATTERN),
+  createRegexParser("apache_combined", "Combined (Apache/Nginx)", COMBINED_PATTERN),
+  createRegexParser("nginx_combined", "Combined (Nginx alias)", COMBINED_PATTERN),
   createRegexParser("apache_common", "Apache common", APACHE_COMMON_PATTERN)
 ];
 

@@ -1,4 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction
+} from "react";
 import { Box, Text, useInput } from "ink";
 import { setImmediate } from "node:timers/promises";
 import type { AnalyzeReport, Incident, IncidentLogLine, TopItem } from "../../analysis/types.js";
@@ -12,6 +19,7 @@ import {
 import type { CitrxRun } from "../../run/types.js";
 import { createAccessLogLineFilter } from "../filter.js";
 import type { TopScope, TopPanelKey, IncidentInsights, ActiveAbortEntry } from "../types.js";
+import { clearAbortIfCurrent } from "../utils/active-abort.js";
 import { TOP_PANEL_KEYS } from "../types.js";
 import { severityColor } from "../utils/colors.js";
 import { fitText } from "../utils/format.js";
@@ -214,7 +222,9 @@ export async function incidentInsightsFromRows(
       options.onProgress(done, total);
       lastProgress = now;
     }
-    if (options?.signal?.aborted) break;
+    if (options?.signal?.aborted) {
+      throw new DOMException("incidentInsightsFromRows aborted", "AbortError");
+    }
   }
 
   return {
@@ -287,6 +297,25 @@ function filterValue(value: string): string {
 export function nextTopPanel(value: TopPanelKey): TopPanelKey {
   const index = TOP_PANEL_KEYS.indexOf(value);
   return TOP_PANEL_KEYS[(index + 1) % TOP_PANEL_KEYS.length] ?? "ips";
+}
+
+/** Applies incident-tops completion only while this effect still owns the load. */
+export function applyOwnedTopsSettle(
+  owner: {
+    cancelled: boolean;
+    abortRef: { current: AbortController | null };
+    controller: AbortController;
+  },
+  apply: () => void
+): boolean {
+  if (owner.cancelled) {
+    return false;
+  }
+  if (owner.abortRef.current === owner.controller) {
+    owner.abortRef.current = null;
+  }
+  apply();
+  return true;
 }
 
 function TopListPanel({
@@ -370,7 +399,7 @@ export function TopValuesScreen({
   focus: TopPanelKey;
   selectedIndexes: Record<TopPanelKey, number>;
   onApplyFilter: (filter: string) => void;
-  setActiveAbort?: (v: ActiveAbortEntry | undefined) => void;
+  setActiveAbort?: Dispatch<SetStateAction<ActiveAbortEntry | undefined>>;
   columns: number;
 }): React.ReactElement {
   const matchSet = report.incidentMatches.find((item) => item.incidentId === incident?.id);
@@ -444,6 +473,7 @@ export function TopValuesScreen({
     setIncidentTopValues(undefined);
     setLoading(true);
 
+    let cancelled = false;
     const controller = new AbortController();
     topsAbortRef.current = controller;
     const total = matchSet.rowNumbers.length;
@@ -471,22 +501,27 @@ export function TopValuesScreen({
       });
     })()
       .then((value) => {
-        topsAbortRef.current = null;
-        setActiveAbort?.(undefined);
-        setIncidentTopValues(value);
-        setLoading(false);
+        clearAbortIfCurrent(setActiveAbort, controller);
+        applyOwnedTopsSettle({ cancelled, abortRef: topsAbortRef, controller }, () => {
+          setIncidentTopValues(value);
+          setLoading(false);
+        });
       })
       .catch(() => {
-        topsAbortRef.current = null;
-        setActiveAbort?.(undefined);
-        setIncidentTopValues(undefined);
-        setLoading(false);
+        clearAbortIfCurrent(setActiveAbort, controller);
+        applyOwnedTopsSettle({ cancelled, abortRef: topsAbortRef, controller }, () => {
+          setIncidentTopValues(undefined);
+          setLoading(false);
+        });
       });
 
     return () => {
+      cancelled = true;
       controller.abort();
-      topsAbortRef.current = null;
-      setActiveAbort?.(undefined);
+      if (topsAbortRef.current === controller) {
+        topsAbortRef.current = null;
+      }
+      clearAbortIfCurrent(setActiveAbort, controller);
     };
   }, [filter, matchSet, run, scope]);
 

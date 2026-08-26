@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { AnalyzeReport } from "../analysis/types.js";
-import { renderHtmlReport } from "./html.js";
+import {
+  collectActionRows,
+  collectPayloadRows,
+  collectTimelineEvents,
+  renderHtmlReport
+} from "./html.js";
 
 /**
  * Minimal synthetic AnalyzeReport builder shared (by copy-paste) between
@@ -29,7 +34,12 @@ function buildReport(overrides: Partial<AnalyzeReport> = {}): AnalyzeReport {
       parsedLines: 10,
       filteredLines: 0,
       invalidLines: 0,
-      totalBytes: 4096
+      totalBytes: 4096,
+      droppedAggregationKeys: 0,
+      droppedPathStats: 0,
+      droppedPathIps: 0,
+      droppedQueryVariants: 0,
+      droppedRpsSeconds: 0
     },
     topIps: [{ value: "203.0.113.10", count: 5 }],
     topPaths: [{ value: "/login", count: 3 }],
@@ -75,7 +85,9 @@ function buildReport(overrides: Partial<AnalyzeReport> = {}): AnalyzeReport {
         title: "SQL injection attempt",
         description: "Detected a SQL injection payload in the request target.",
         evidence: [{ key: "payload", value: "' OR 1=1--" }],
-        samples: ['203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /?id=1 OR 1=1-- HTTP/1.1" 200 100'],
+        samples: [
+          '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /?id=1 OR 1=1-- HTTP/1.1" 200 100'
+        ],
         successful: true
       }
     ],
@@ -98,6 +110,8 @@ describe("renderHtmlReport", () => {
     const html = renderHtmlReport(buildReport());
 
     expect(html).toContain("<h1>citrx access log analysis</h1>");
+    expect(html).toContain("<h2>Executive summary</h2>");
+    expect(html).toContain("<h2>Timeline</h2>");
     expect(html).toContain("<h2>Inputs</h2>");
     expect(html).toContain("<h2>Top IPs</h2>");
     expect(html).toContain("<h2>Top Paths</h2>");
@@ -108,6 +122,14 @@ describe("renderHtmlReport", () => {
     expect(html).toContain("<h2>Statuses</h2>");
     expect(html).toContain("<h2>Known AI Bots</h2>");
     expect(html).toContain("<h2>Incidents</h2>");
+    expect(html).toContain("<h2>Payloads</h2>");
+    expect(html).toContain("<h2>Suggested actions</h2>");
+    expect(html).toContain('id="summary"');
+    expect(html).toContain('id="timeline"');
+    expect(html).toContain('id="incidents"');
+    expect(html).toContain('id="paths"');
+    expect(html).toContain('id="ips"');
+    expect(html).toContain('id="uas"');
   });
 
   it("renders report data values in the document", () => {
@@ -200,5 +222,86 @@ describe("renderHtmlReport", () => {
     // The report itself embeds no http(s) URLs unless they come from report data.
     expect(html).not.toContain("http://");
     expect(html).not.toContain("https://");
+  });
+
+  it("embeds offline CSS/JS, client filters, sortable tables, and print styles", () => {
+    const html = renderHtmlReport(buildReport());
+
+    expect(html).toContain("<style>");
+    expect(html).toContain("@media print");
+    expect(html).toContain("<script>");
+    expect(html).not.toMatch(/<script\s+src=/i);
+    expect(html).toContain('id="report-filter"');
+    expect(html).toContain("table.js-filter");
+    expect(html).toContain('data-sort="num"');
+    expect(html).toContain('data-sort="text"');
+    expect(html).toContain("addEventListener");
+  });
+
+  it("omits payload and action sections when nothing actionable exists", () => {
+    const html = renderHtmlReport(
+      buildReport({
+        incidents: [
+          {
+            id: "noise-1",
+            category: "http_anomaly",
+            kind: "noise",
+            severity: "low",
+            score: 20,
+            title: "Rare method",
+            description: "OPTIONS",
+            evidence: [{ key: "count", value: 1 }],
+            samples: []
+          }
+        ]
+      })
+    );
+
+    expect(html).not.toContain("<h2>Payloads</h2>");
+    expect(html).not.toContain("<h2>Suggested actions</h2>");
+  });
+
+  it("does not turn injected javascript URLs or markup into executable tags", () => {
+    const html = renderHtmlReport(
+      buildReport({
+        topPaths: [{ value: 'javascript:alert(1)"><img src=x>', count: 1 }],
+        topIps: [{ value: "<svg onload=alert(1)>", count: 1 }]
+      })
+    );
+
+    expect(html).not.toMatch(/<img\b/i);
+    expect(html).not.toMatch(/<svg\b/i);
+    expect(html).not.toContain('javascript:alert(1)">');
+    expect(html).toContain("javascript:alert(1)");
+    expect(html).toContain("&lt;svg onload=alert(1)&gt;");
+  });
+
+  it("collects timeline, payload, and action rows from report data", () => {
+    const report = buildReport({
+      incidents: [
+        {
+          id: "sqli-ip",
+          category: "sql_injection",
+          kind: "compromise",
+          severity: "critical",
+          score: 100,
+          title: "SQL injection payload",
+          description: "payload",
+          evidence: [
+            { key: "ip", value: "198.51.100.23" },
+            { key: "payload", value: "' OR 1=1--" },
+            { key: "peakRpsAt", value: "2026-05-25T03:05:00.000Z" }
+          ],
+          samples: ["GET /?id=1"],
+          successful: true
+        }
+      ]
+    });
+
+    expect(collectTimelineEvents(report).some((event) => event.label.includes("Peak"))).toBe(true);
+    expect(collectPayloadRows(report.incidents).length).toBeGreaterThan(0);
+    expect(
+      collectActionRows(report.incidents).some((row) => row.action.includes("198.51.100.23"))
+    ).toBe(true);
   });
 });

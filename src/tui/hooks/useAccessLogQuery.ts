@@ -1,13 +1,17 @@
 // Reads paginated access log index pages reactively, managing loading state and message feedback.
-import { useEffect, useState } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { setImmediate } from "node:timers/promises";
 
 import type { IncidentLogLine } from "../../analysis/types.js";
 import type { AccessLogIndexQueryCache } from "../../run/access-index.js";
-import { passThroughFilter, readAccessLogIndexCachedPage } from "../../run/access-index.js";
+import {
+  canUseMonotonicTimestampFastPath,
+  passThroughFilter,
+  readAccessLogIndexCachedPage
+} from "../../run/access-index.js";
 import type { CitrxRun } from "../../run/types.js";
 import { createAccessLogLineFilter } from "../filter.js";
-import type { SortKey, SortDirection } from "../types.js";
+import type { ActiveAbortEntry, SortKey, SortDirection } from "../types.js";
 
 /**
  * Derives a stable string key for the query cache from the active filter,
@@ -47,6 +51,7 @@ interface AccessLogQueryOptions {
   setMessage: (value: string) => void;
   /** Functional updater that clamps the cursor to the new total after each fetch. */
   setSummaryLineIndex: (updater: (value: number) => number) => void;
+  setActiveAbort?: Dispatch<SetStateAction<ActiveAbortEntry | undefined>>;
 }
 
 /**
@@ -79,7 +84,8 @@ export function useAccessLogQuery({
   summaryPageSize,
   summaryLineIndex,
   setMessage,
-  setSummaryLineIndex
+  setSummaryLineIndex,
+  setActiveAbort
 }: AccessLogQueryOptions) {
   const [globalTotal, setGlobalTotal] = useState(run.report.accessLog.indexedLines);
   const [summaryPageLines, setSummaryPageLines] = useState<IncidentLogLine[]>([]);
@@ -98,11 +104,19 @@ export function useAccessLogQuery({
     let cancelled = false;
     const filterFn = filter ? createAccessLogLineFilter(filter) : passThroughFilter;
     const cacheKey = accessQueryKey(filter, sortKey, sortDirection);
-    const needsIndexBuild = !accessQueryCache.has(cacheKey) && (filter || sortKey !== "timestamp");
+    const needsIndexBuild =
+      !canUseMonotonicTimestampFastPath(run.accessIndex, { filter: filterFn, sortKey }) &&
+      !accessQueryCache.has(cacheKey);
+    const controller = new AbortController();
 
     if (needsIndexBuild) {
       setSummaryLoading(true);
       setMessage(filter ? "Building filter cache..." : "Building sort cache...");
+      setActiveAbort?.({
+        kind: "filter-sort",
+        controller,
+        label: "Building access-log query… Esc to cancel"
+      });
     }
 
     void (async () => {
@@ -110,35 +124,51 @@ export function useAccessLogQuery({
         await setImmediate();
       }
 
-      return readAccessLogIndexCachedPage(run.accessIndex, accessQueryCache, cacheKey, {
-        filter: filterFn,
-        sortKey,
-        sortDirection,
-        start: summaryPageStart,
-        limit: summaryPageSize
-      });
+      return readAccessLogIndexCachedPage(
+        run.accessIndex,
+        accessQueryCache,
+        cacheKey,
+        {
+          filter: filterFn,
+          sortKey,
+          sortDirection,
+          start: summaryPageStart,
+          limit: summaryPageSize
+        },
+        controller.signal
+      );
     })()
       .then((page) => {
-        if (cancelled) {
+        if (cancelled || controller.signal.aborted) {
           return;
         }
 
         setGlobalTotal(page.total);
         setSummaryPageLines(page.lines);
         setSummaryLoading(false);
-        setMessage(filter || sortKey !== "timestamp" ? "Filter cache ready" : "Ready");
+        setActiveAbort?.((prev) => (prev?.controller === controller ? undefined : prev));
+        setMessage("Ready");
 
         setSummaryLineIndex((value) => Math.min(Math.max(0, page.total - 1), value));
       })
       .catch((error) => {
-        if (!cancelled) {
-          setSummaryLoading(false);
-          setMessage(error instanceof Error ? error.message : String(error));
+        if (cancelled) {
+          return;
         }
+        setSummaryLoading(false);
+        setActiveAbort?.((prev) => (prev?.controller === controller ? undefined : prev));
+        const isAbort = error instanceof DOMException && error.name === "AbortError";
+        setMessage(
+          isAbort ? "Query cancelled" : error instanceof Error ? error.message : String(error)
+        );
       });
 
     return () => {
       cancelled = true;
+      if (needsIndexBuild) {
+        controller.abort();
+        setActiveAbort?.((prev) => (prev?.controller === controller ? undefined : prev));
+      }
     };
   }, [
     accessQueryCache,

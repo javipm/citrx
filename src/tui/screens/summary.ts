@@ -4,6 +4,8 @@ import type { AnalyzeReport, Incident, IncidentLogLine } from "../../analysis/ty
 import type { SummaryFocus, SortKey, SortDirection } from "../types.js";
 import { severityColor, severityIcon } from "../utils/colors.js";
 import { formatBytes, truncate } from "../utils/format.js";
+import { formatTruncation } from "../../report/truncation.js";
+import { sanitizeText } from "../../utils/sanitize.js";
 import { LineTable } from "../components/table.js";
 
 export function SummaryScreen({
@@ -89,6 +91,9 @@ function SummaryPanel({ report }: { report: AnalyzeReport }) {
     React.createElement(Text, null, `bytes served: ${formatBytes(report.summary.totalBytes)}`),
     React.createElement(Text, null, `peak rps: ${report.timeStats.peakGlobalRps}`),
     React.createElement(Text, null, `indexed lines: ${report.accessLog.indexedLines}`),
+    formatTruncation(report.summary)
+      ? React.createElement(Text, { color: "yellow" }, formatTruncation(report.summary))
+      : null,
     React.createElement(Text, { color: "gray" }, "press t for global top values")
   );
 }
@@ -105,10 +110,6 @@ function IncidentRow({
   active: boolean;
 }) {
   const selected = active && index === incidentIndex;
-  const successMark = incident.successful ? " 2XX_HIT" : "";
-  const ip = incident.evidence.find((item) => item.key === "ip")?.value;
-  const ipTag = ip ? ` ${String(ip)}` : "";
-  const icon = severityIcon(incident.severity);
   return React.createElement(
     Text,
     {
@@ -117,8 +118,17 @@ function IncidentRow({
       backgroundColor: selected ? "cyan" : undefined,
       wrap: "truncate"
     },
-    `${selected ? ">" : " "} ${icon} ${incident.severity.padEnd(8)} ${String(incident.score).padStart(3)}${successMark}${ipTag} ${truncate(incident.title, 38)}`
+    formatIncidentRowText(incident, selected)
   );
+}
+
+export function formatIncidentRowText(incident: Incident, selected: boolean): string {
+  const successMark = incident.successful ? " 2XX_HIT" : "";
+  const ip = incident.evidence.find((item) => item.key === "ip")?.value;
+  const ipTag = ip ? ` ${sanitizeText(String(ip), "tui")}` : "";
+  const icon = severityIcon(incident.severity);
+  const title = truncate(sanitizeText(incident.title, "tui"), 38);
+  return `${selected ? ">" : " "} ${icon} ${incident.severity.padEnd(8)} ${String(incident.score).padStart(3)}${successMark}${ipTag} ${title}`;
 }
 
 function IncidentTabHeader({

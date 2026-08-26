@@ -25,6 +25,20 @@ describe("query param extraction", () => {
     ]);
   });
 
+  it("redacts percent-encoded sensitive parameter names", () => {
+    expect(requestParamValueLabels("/login?%74oken=abc&q=camper")).toEqual([
+      "token=<redacted>",
+      "q=camper"
+    ]);
+  });
+
+  it("redacts a double-encoded sensitive parameter name", () => {
+    expect(requestParamValueLabels("/login?%2574oken=abc&q=camper")).toEqual([
+      "token=<redacted>",
+      "q=camper"
+    ]);
+  });
+
   it("keeps malformed escapes deterministic", () => {
     expect(requestParamValueLabels("/x?bad=%E0%A4%A&q=ok")).toEqual(["bad=%E0%A4%A", "q=ok"]);
   });
@@ -40,15 +54,16 @@ describe("userAgentLabel", () => {
   });
 
   it("collapses internal whitespace but keeps full length", () => {
-    const messyUa = "Weird-Agent/9.9   with    lots  of\tspaces  and-a-tail-well-past-forty-two-characters";
+    const messyUa =
+      "Weird-Agent/9.9   with    lots  of\tspaces  and-a-tail-well-past-forty-two-characters";
     const label = userAgentLabel(messyUa);
     expect(label).toBe(messyUa.replace(/\s+/g, " ").trim());
     expect(label).not.toMatch(/…$/);
   });
 
   it("still extracts a short bot/browser signature when recognizable", () => {
-    expect(userAgentLabel("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")).toBe(
-      "Googlebot/2.1"
-    );
+    expect(
+      userAgentLabel("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
+    ).toBe("Googlebot/2.1");
   });
 });

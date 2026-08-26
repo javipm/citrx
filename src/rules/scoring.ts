@@ -129,12 +129,7 @@ function saturationImpactBonus(incident: Incident): number {
     [60, 1]
   ]);
   bonus += thresholdBonus(
-    maxNumberEvidence(incident, [
-      "peakRps",
-      "peakGlobalRps",
-      "peakSubnetRps",
-      "peakHeadRps"
-    ]),
+    maxNumberEvidence(incident, ["peakRps", "peakGlobalRps", "peakSubnetRps", "peakHeadRps"]),
     [
       [500, 8],
       [250, 6],

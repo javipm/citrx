@@ -131,7 +131,7 @@ describe("apache_combined / nginx_combined parsers", () => {
     expect(entry?.userAgent).toBeNull();
   });
 
-  it("parses nginx_combined the same shape as apache_combined", () => {
+  it("treats nginx_combined as an explicit alias of the same combined regex", () => {
     const parser = parserFor("nginx_combined");
     const entry = parser.parse(
       '198.51.100.5 - - [25/May/2026:03:12:49 +0200] "POST /checkout HTTP/1.1" 500 12 "https://ref.example/" "curl/8.0"'
@@ -181,8 +181,6 @@ describe("getBuiltInParser", () => {
   });
 
   it("throws for an unknown format id", () => {
-    expect(() => getBuiltInParser("unknown" as BuiltInFormatId)).toThrow(
-      /Unknown built-in format/
-    );
+    expect(() => getBuiltInParser("unknown" as BuiltInFormatId)).toThrow(/Unknown built-in format/);
   });
 });

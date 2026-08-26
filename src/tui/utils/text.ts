@@ -1,8 +1,9 @@
 import type { IncidentLogLine } from "../../analysis/types.js";
+import { sanitizeText } from "../../utils/sanitize.js";
 
 export function wrapHard(value: string, width: number): string[] {
   const chunks: string[] = [];
-  let remaining = value || "-";
+  let remaining = sanitizeText(value || "-", "tui");
 
   while (remaining.length > width) {
     chunks.push(remaining.slice(0, width));

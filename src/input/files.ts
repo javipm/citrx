@@ -1,7 +1,17 @@
 import { opendir, stat } from "node:fs/promises";
 import path from "node:path";
 
-export async function discoverInputFiles(paths: string[]): Promise<string[]> {
+import { matchesGlob } from "../utils/glob.js";
+
+export interface DiscoverFileOptions {
+  include?: string;
+  exclude?: string;
+}
+
+export async function discoverInputFiles(
+  paths: string[],
+  options: DiscoverFileOptions = {}
+): Promise<string[]> {
   const files: string[] = [];
 
   for (const inputPath of paths) {
@@ -23,7 +33,29 @@ export async function discoverInputFiles(paths: string[]): Promise<string[]> {
     throw new Error(`Unsupported input path: ${inputPath}`);
   }
 
-  return files.sort();
+  files.sort();
+  return filterDiscoveredFiles(files, options);
+}
+
+export function filterDiscoveredFiles(files: string[], options: DiscoverFileOptions): string[] {
+  const include = options.include?.trim();
+  const exclude = options.exclude?.trim();
+
+  if (include === "" || exclude === "") {
+    throw new Error("--include and --exclude glob patterns must be non-empty.");
+  }
+
+  return files.filter((file) => {
+    if (include && !matchesGlob(file, include)) {
+      return false;
+    }
+
+    if (exclude && matchesGlob(file, exclude)) {
+      return false;
+    }
+
+    return true;
+  });
 }
 
 async function* walkDirectory(directory: string): AsyncGenerator<string> {

@@ -5,11 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { IncidentLogLine, IncidentMatchSet } from "../../analysis/types.js";
 import { createAccessLogIndexWriter } from "../../run/access-index.js";
-import {
-  buildIncidentSubset,
-  IncidentQueryCache,
-  incidentQueryKey
-} from "./useIncidentQuery.js";
+import { buildIncidentSubset, IncidentQueryCache, incidentQueryKey } from "./useIncidentQuery.js";
 
 describe("incidentQueryKey", () => {
   it("is stable for identical inputs", () => {
@@ -51,7 +47,10 @@ describe("IncidentQueryCache", () => {
 
   it("set/get round-trips an entry", () => {
     const cache = new IncidentQueryCache();
-    const entry = { promise: Promise.resolve({ orderedRowNumbers: emptyOrdered(), total: 0 }), resolved: true };
+    const entry = {
+      promise: Promise.resolve({ orderedRowNumbers: emptyOrdered(), total: 0 }),
+      resolved: true
+    };
     cache.set("k1", entry);
     expect(cache.get("k1")).toBe(entry);
   });
@@ -120,7 +119,10 @@ describe("IncidentQueryCache", () => {
   });
 
   function resolvedEntry() {
-    return { promise: Promise.resolve({ orderedRowNumbers: emptyOrdered(), total: 0 }), resolved: true };
+    return {
+      promise: Promise.resolve({ orderedRowNumbers: emptyOrdered(), total: 0 }),
+      resolved: true
+    };
   }
 
   function emptyOrdered() {
@@ -188,6 +190,32 @@ describe("buildIncidentSubset", () => {
       }
       expect(rows).toEqual([1, 3]);
       expect(result.total).toBe(2);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("sorts timestamp by epoch when stream order is reversed", async () => {
+    const ls = [
+      line(0, { timestamp: "2026-05-25T04:00:00.000Z" }),
+      line(1, { timestamp: "2026-05-25T01:00:00.000Z" }),
+      line(2, { timestamp: "2026-05-25T02:00:00.000Z" })
+    ];
+    const { index, directory } = await makeIndex(ls);
+    try {
+      const result = await buildIncidentSubset(
+        matchSet([0, 1, 2]),
+        index,
+        "",
+        "timestamp",
+        "asc",
+        new AbortController().signal
+      );
+      const rows: number[] = [];
+      for (let i = 0; i < result.orderedRowNumbers.length; i++) {
+        rows.push(result.orderedRowNumbers.rowAt(i));
+      }
+      expect(rows).toEqual([1, 2, 0]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -234,5 +234,4 @@ export function handleIncidentScreenInput({
     setMessage("No rows to export");
     return;
   }
-
 }

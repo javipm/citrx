@@ -29,7 +29,12 @@ function buildReport(overrides: Partial<AnalyzeReport> = {}): AnalyzeReport {
       parsedLines: 10,
       filteredLines: 0,
       invalidLines: 0,
-      totalBytes: 4096
+      totalBytes: 4096,
+      droppedAggregationKeys: 0,
+      droppedPathStats: 0,
+      droppedPathIps: 0,
+      droppedQueryVariants: 0,
+      droppedRpsSeconds: 0
     },
     topIps: [{ value: "203.0.113.10", count: 5 }],
     topPaths: [{ value: "/login", count: 3 }],
@@ -75,7 +80,9 @@ function buildReport(overrides: Partial<AnalyzeReport> = {}): AnalyzeReport {
         title: "SQL injection attempt",
         description: "Detected a SQL injection payload in the request target.",
         evidence: [{ key: "payload", value: "' OR 1=1--" }],
-        samples: ['203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /?id=1 OR 1=1-- HTTP/1.1" 200 100'],
+        samples: [
+          '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /?id=1 OR 1=1-- HTTP/1.1" 200 100'
+        ],
         successful: true
       }
     ],
@@ -170,14 +177,39 @@ describe("renderMarkdownReport", () => {
     expect(markdown).not.toContain("`sample-4`");
   });
 
-  it("does not escape markdown/HTML content beyond pipe/newline handling (contract check)", () => {
+  it("neutralizes HTML and backticks in Markdown cells", () => {
     const report = buildReport({
-      topUserAgents: [{ value: "<script>alert(1)</script> & co", count: 1 }]
+      topUserAgents: [{ value: "<script>alert(1)</script> & co `x`", count: 1 }]
     });
 
     const markdown = renderMarkdownReport(report);
-    // Markdown renderer only escapes "|" and "\n"; raw HTML-ish text passes through as-is.
-    expect(markdown).toContain("<script>alert(1)</script> & co");
+    expect(markdown).not.toContain("<script>alert(1)</script>");
+    expect(markdown).not.toContain("`x`");
+    expect(markdown).toContain("&lt;script&gt;alert(1)&lt;/script&gt; &amp; co 'x'");
+  });
+
+  it("escapes a backslash-pipe sequence so the table does not split", () => {
+    const markdown = renderMarkdownReport(
+      buildReport({
+        topPaths: [{ value: "foo\\|bar", count: 1 }]
+      })
+    );
+
+    expect(markdown).toContain("| 1 | " + String.raw`foo\\\|bar` + " |");
+  });
+
+  it("neutralizes javascript links and remote images in Markdown cells", () => {
+    const markdown = renderMarkdownReport(
+      buildReport({
+        topPaths: [{ value: "[x](javascript:alert(1))", count: 1 }],
+        topUserAgents: [{ value: "![img](https://evil.test/x.png)", count: 1 }]
+      })
+    );
+
+    expect(markdown).not.toContain("[x](javascript:alert(1))");
+    expect(markdown).not.toContain("![img](https://evil.test/x.png)");
+    expect(markdown).toContain("\\[x\\](javascript:alert(1))");
+    expect(markdown).toContain("!\\[img\\](https://evil.test/x.png)");
   });
 
   it("truncates long user agent values for display only (aggregation stays untruncated upstream)", () => {

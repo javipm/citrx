@@ -22,7 +22,9 @@ export function useFilterSortState() {
     lines: number;
     format: ExportFormat;
   }>();
-  const [message, setMessage] = useState("h: help  |  Tab: switch type  |  Enter: drill  |  /: filter  |  q: quit");
+  const [message, setMessage] = useState(
+    "h: help  |  Tab: switch type  |  Enter: drill  |  /: filter  |  q: quit"
+  );
   const [exportLoading, setExportLoading] = useState(false);
   const [indexLoading, setIndexLoading] = useState(false);
 

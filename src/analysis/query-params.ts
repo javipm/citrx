@@ -1,4 +1,4 @@
-import { isSensitiveParamName } from "../utils/redact.js";
+import { decodeRepeated, isSensitiveParamName } from "../utils/redact.js";
 
 export interface QueryParamEntry {
   name: string;
@@ -123,12 +123,12 @@ function parseQueryPart(part: string): QueryParamEntry {
   const separator = part.indexOf("=");
 
   if (separator === -1) {
-    return { name: safeDecode(part), value: "" };
+    return { name: decodeRepeated(part), value: "" };
   }
 
   return {
-    name: safeDecode(part.slice(0, separator)),
-    value: safeDecode(part.slice(separator + 1))
+    name: decodeRepeated(part.slice(0, separator)),
+    value: decodeRepeated(part.slice(separator + 1))
   };
 }
 
@@ -146,12 +146,4 @@ function paramValueLabel(name: string, value: string): string | undefined {
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
-}
-
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value.replace(/\+/g, " "));
-  } catch {
-    return value;
-  }
 }

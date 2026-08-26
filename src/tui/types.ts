@@ -43,13 +43,7 @@ export type ExportFormat = "csv" | "json" | "tsv";
 
 /** Logical context the help overlay is describing, derived from screen + active overlays. */
 export type HelpContext =
-  | "summary"
-  | "incident"
-  | "tops"
-  | "detail"
-  | "exportMenu"
-  | "sortMenu"
-  | "prompt";
+  "summary" | "incident" | "tops" | "detail" | "exportMenu" | "sortMenu" | "prompt";
 
 /** Tabs available within the help overlay. */
 export type HelpTab = "keys" | "filters";
@@ -128,7 +122,7 @@ export interface AccessTableColumns {
 
 /** An in-flight cancellable operation registered in the global abort slot. */
 export interface ActiveAbortEntry {
-  kind: "export" | "tops" | "select-all" | "incident-query";
+  kind: "export" | "tops" | "select-all" | "incident-query" | "filter-sort";
   controller: AbortController;
   label: string;
 }
@@ -150,5 +144,5 @@ export const FILTER_PRESETS = [
   "ua:*bot*",
   "status:2xx AND path:/admin",
   "status:4xx",
-  "path:/api",
+  "path:/api"
 ] as const;

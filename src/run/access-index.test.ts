@@ -70,6 +70,23 @@ describe("access log temp index", () => {
         lines: [expect.objectContaining({ path: "/b", row: 1 })]
       });
 
+      await expect(
+        readAccessLogIndexPage(writer.index, {
+          filter: passThroughFilter,
+          sortKey: "timestamp",
+          sortDirection: "asc",
+          start: 0,
+          limit: 3
+        })
+      ).resolves.toMatchObject({
+        total: 3,
+        lines: [
+          expect.objectContaining({ lineNumber: 1 }),
+          expect.objectContaining({ lineNumber: 2 }),
+          expect.objectContaining({ lineNumber: 3 })
+        ]
+      });
+
       const cache = new AccessLogIndexQueryCache();
       const cases = [
         ["ip", "asc", ["203.0.113.10", "203.0.113.10", "203.0.113.20"]],
@@ -100,6 +117,64 @@ describe("access log temp index", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it("sorts timestamp by epoch, not stream order or lex order", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-index-time-"));
+    const writer = await createAccessLogIndexWriter(directory);
+
+    try {
+      writer.write(
+        accessLine(1, "203.0.113.10", "GET", "/late", 200, 100, "25/May/2026:04:00:00 +0000")
+      );
+      writer.write(
+        accessLine(2, "203.0.113.10", "GET", "/tz", 200, 100, "25/May/2026:03:00:00 +0200")
+      );
+      writer.write(
+        accessLine(3, "203.0.113.10", "GET", "/mid", 200, 100, "25/May/2026:02:00:00 +0000")
+      );
+      writer.close();
+
+      const page = await readAccessLogIndexPage(writer.index, {
+        filter: passThroughFilter,
+        sortKey: "timestamp",
+        sortDirection: "asc",
+        start: 0,
+        limit: 3
+      });
+
+      expect(page.lines.map((line) => line.path)).toEqual(["/tz", "/mid", "/late"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts a query build without returning a partial result", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-index-abort-"));
+    const writer = await createAccessLogIndexWriter(directory);
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        writer.write(accessLine(i + 1, "203.0.113.10", "GET", `/${i}`, 200, 10));
+      }
+      writer.close();
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        readAccessLogIndexPage(
+          writer.index,
+          {
+            filter: passThroughFilter,
+            sortKey: "ip",
+            sortDirection: "asc",
+            start: 0,
+            limit: 3
+          },
+          controller.signal
+        )
+      ).rejects.toMatchObject({ name: "AbortError" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 function accessLine(
@@ -108,15 +183,16 @@ function accessLine(
   method: string,
   path: string,
   status: number,
-  bytes: number
+  bytes: number,
+  timestamp = `25/May/2026:03:12:0${lineNumber} +0200`
 ): IncidentLogLine {
   return {
     row: lineNumber - 1,
     source: "/tmp/access.log",
     lineNumber,
-    raw: `${ip} - - [25/May/2026:03:12:0${lineNumber} +0200] "${method} ${path} HTTP/1.1" ${status} ${bytes} "-" "UA"`,
+    raw: `${ip} - - [${timestamp}] "${method} ${path} HTTP/1.1" ${status} ${bytes} "-" "UA"`,
     ip,
-    timestamp: `25/May/2026:03:12:0${lineNumber} +0200`,
+    timestamp,
     method,
     path,
     target: path,

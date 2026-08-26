@@ -40,6 +40,20 @@ export interface PathStats {
   bytes: number;
   ipCounts: Map<string, number>;
   queryVariants: Set<string>;
+  /**
+   * Distinguished unique IPs: stored keys plus dropped keys still fingerprintable.
+   * Never higher than true cardinality; never substituted with `count`.
+   */
+  uniqueIpCount?: number;
+  /** True when at least one distinct IP could not be stored or fingerprinted. */
+  uniqueIpsIsLowerBound?: boolean;
+  /**
+   * Distinguished query variants: stored keys plus dropped keys still fingerprintable.
+   * Never higher than true cardinality; never substituted with `count`.
+   */
+  queryVariantCount?: number;
+  /** True when at least one distinct query variant could not be stored or fingerprinted. */
+  queryVariantsIsLowerBound?: boolean;
   postCount: number;
   /** Epoch seconds of first/last entry for this path (null if not tracked). */
   firstSeen: number | null;
@@ -480,6 +494,37 @@ function isLowSignalAggregatePath(path: string): boolean {
   return STATIC_ASSET_RE.test(path) || CRAWLER_INFRA_RE.test(path);
 }
 
+/** Distinct IPs observed for this path, including fingerprintable dropped keys. */
+function observedUniqueIps(stats: PathStats): number {
+  const stored = stats.ipCounts.size;
+  const counted = stats.uniqueIpCount;
+  const distinguished = typeof counted === "number" ? Math.max(counted, stored) : stored;
+  return Math.min(stats.count, distinguished);
+}
+
+/** Distinct query variants observed for this path, including fingerprintable dropped keys. */
+function observedQueryVariants(stats: PathStats): number {
+  const stored = stats.queryVariants.size;
+  const counted = stats.queryVariantCount;
+  const distinguished = typeof counted === "number" ? Math.max(counted, stored) : stored;
+  return Math.min(stats.count, distinguished);
+}
+
+function uniqueIpsAreLowerBound(stats: PathStats): boolean {
+  return (
+    stats.uniqueIpsIsLowerBound === true ||
+    (typeof stats.uniqueIpCount === "number" && stats.uniqueIpCount > stats.ipCounts.size)
+  );
+}
+
+function queryVariantsAreLowerBound(stats: PathStats): boolean {
+  return (
+    stats.queryVariantsIsLowerBound === true ||
+    (typeof stats.queryVariantCount === "number" &&
+      stats.queryVariantCount > stats.queryVariants.size)
+  );
+}
+
 export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Incident[] {
   const incidents: Incident[] = [];
 
@@ -535,13 +580,20 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
       const evidence: Incident["evidence"] = [
         { key: "path", value: stats.path },
         { key: "requests", value: stats.count },
-        { key: "uniqueIps", value: stats.ipCounts.size },
+        { key: "uniqueIps", value: observedUniqueIps(stats) },
         { key: "repeatedIps", value: crawlSignal.repeatedIps },
         { key: "repeatedRequestShare", value: crawlSignal.repeatedRequestShare },
-        { key: "queryVariants", value: stats.queryVariants.size },
+        { key: "queryVariants", value: observedQueryVariants(stats) },
         { key: "queryVariantRatio", value: crawlSignal.queryVariantRatio },
         { key: "bytes", value: stats.bytes }
       ];
+
+      if (uniqueIpsAreLowerBound(stats)) {
+        evidence.push({ key: "uniqueIpsLowerBound", value: true });
+      }
+      if (queryVariantsAreLowerBound(stats)) {
+        evidence.push({ key: "queryVariantsLowerBound", value: true });
+      }
 
       if (stats.firstSeen !== null) {
         evidence.push({ key: "firstSeen", value: epochToIso(stats.firstSeen) });
@@ -576,10 +628,18 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
       });
     } else if (
       !isLowSignalEntryPath(stats.path) &&
-      stats.queryVariants.size >= QUERY_EXPLOSION_MIN_VARIANTS &&
+      observedQueryVariants(stats) >= QUERY_EXPLOSION_MIN_VARIANTS &&
       stats.count >= QUERY_EXPLOSION_MIN_REQUESTS &&
-      roundRatio(stats.queryVariants.size / stats.count) >= QUERY_EXPLOSION_MIN_VARIANT_RATIO
+      roundRatio(observedQueryVariants(stats) / stats.count) >= QUERY_EXPLOSION_MIN_VARIANT_RATIO
     ) {
+      const explosionEvidence: Incident["evidence"] = [
+        { key: "path", value: stats.path },
+        { key: "requests", value: stats.count },
+        { key: "queryVariants", value: observedQueryVariants(stats) }
+      ];
+      if (queryVariantsAreLowerBound(stats)) {
+        explosionEvidence.push({ key: "queryVariantsLowerBound", value: true });
+      }
       incidents.push({
         id: `query_explosion:${stats.path}`,
         category: "abusive_crawling",
@@ -588,11 +648,7 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
         score: 40,
         title: "Query explosion",
         description: "One path was requested with many query variants.",
-        evidence: [
-          { key: "path", value: stats.path },
-          { key: "requests", value: stats.count },
-          { key: "queryVariants", value: stats.queryVariants.size }
-        ],
+        evidence: explosionEvidence,
         samples: []
       });
     }
@@ -641,11 +697,13 @@ function highVolumeCrawlSignal(stats: PathStats): {
     }
   }
 
+  const uniqueIps = observedUniqueIps(stats);
+  const queryVariants = observedQueryVariants(stats);
   const repeatedRequestShare = roundRatio(repeatedRequests / stats.count);
-  const queryVariantRatio = roundRatio(stats.queryVariants.size / stats.count);
+  const queryVariantRatio = stats.count > 0 ? roundRatio(queryVariants / stats.count) : 0;
   const hasQueryChurn =
-    stats.ipCounts.size >= CRAWL_MIN_UNIQUE_IPS &&
-    stats.queryVariants.size >= CRAWL_MIN_QUERY_VARIANTS &&
+    uniqueIps >= CRAWL_MIN_UNIQUE_IPS &&
+    queryVariants >= CRAWL_MIN_QUERY_VARIANTS &&
     queryVariantRatio >= CRAWL_MIN_QUERY_VARIANT_RATIO;
   const hasRepeatPressure =
     repeatedIps >= CRAWL_MIN_REPEATED_IPS &&
@@ -725,7 +783,7 @@ function materialPathSaturationSignal(
 
   // Distributed query churn: many unique non-tracking query variants from spread IPs.
   const hasMaterialQueryChurn =
-    stats.queryVariants.size >= CRAWL_SATURATION_MIN_QUERY_VARIANTS &&
+    observedQueryVariants(stats) >= CRAWL_SATURATION_MIN_QUERY_VARIANTS &&
     crawlSignal.queryVariantRatio >= CRAWL_SATURATION_MIN_QUERY_VARIANT_RATIO;
 
   // Concentrated repeat pressure: small set of IPs accounts for the majority of load.
@@ -752,7 +810,7 @@ function hasBlockedQueryPressureSaturation(
   return (
     stats.count >= CRAWL_SATURATION_BLOCKED_QUERY_MIN_REQUESTS &&
     servedCount >= CRAWL_SATURATION_BLOCKED_QUERY_MIN_SERVED &&
-    stats.queryVariants.size >= CRAWL_SATURATION_MIN_QUERY_VARIANTS &&
+    observedQueryVariants(stats) >= CRAWL_SATURATION_MIN_QUERY_VARIANTS &&
     crawlSignal.queryVariantRatio >= CRAWL_SATURATION_HIGH_SIGNAL_QUERY_RATIO &&
     maxRequestsPerMinute >= CRAWL_SATURATION_BLOCKED_QUERY_MIN_PEAK_REQUESTS_PER_MINUTE &&
     stats.status4xx > servedCount * CRAWL_SATURATION_MAX_BLOCKED_RATIO &&
@@ -767,7 +825,7 @@ function isLowSignalEntryPath(path: string): boolean {
 
 function isIndexEntrypointWithoutAppSignal(stats: PathStats): boolean {
   const normalized = stats.path.toLowerCase().replace(/\/+$/, "");
-  return normalized === "/index.php" && stats.queryVariants.size === 0 && stats.status5xx === 0;
+  return normalized === "/index.php" && observedQueryVariants(stats) === 0 && stats.status5xx === 0;
 }
 
 function hasSustainedQuerySaturation(
@@ -782,14 +840,14 @@ function hasSustainedQuerySaturation(
 ): boolean {
   if (
     servedCount < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_REQUESTS ||
-    stats.queryVariants.size < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_VARIANTS ||
+    observedQueryVariants(stats) < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_VARIANTS ||
     crawlSignal.queryVariantRatio < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_RATIO ||
     blockedDominates(stats, servedCount)
   ) {
     return false;
   }
 
-  if (stats.ipCounts.size >= CRAWL_SATURATION_SUSTAINED_QUERY_MIN_DISTRIBUTED_IPS) {
+  if (observedUniqueIps(stats) >= CRAWL_SATURATION_SUSTAINED_QUERY_MIN_DISTRIBUTED_IPS) {
     return true;
   }
 

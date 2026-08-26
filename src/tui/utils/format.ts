@@ -1,3 +1,5 @@
+import { sanitizeText } from "../../utils/sanitize.js";
+
 export function compactDateTime(timestamp: string): string {
   // Apache: "15/Jan/2024:14:30:00 +0000" → "15/Jan 14:30:00"
   const apache = timestamp.match(/^(\d{2}\/\w{3})\/\d{4}:(\d{2}:\d{2}:\d{2})/);
@@ -33,7 +35,7 @@ export function fitText(value: string, width: number): string {
     return "";
   }
 
-  const text = value.replace(/\s+/g, " ").trim();
+  const text = sanitizeText(value, "tui").replace(/\s+/g, " ").trim();
 
   if (text.length <= width) {
     return text;

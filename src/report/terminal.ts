@@ -1,7 +1,9 @@
 import pc from "picocolors";
 
 import type { AnalyzeReport, Incident, TopItem } from "../analysis/types.js";
+import { sanitizeText } from "../utils/sanitize.js";
 import { truncateForDisplay } from "../utils/text.js";
+import { formatTruncation } from "./truncation.js";
 
 /** Max rendered length for a user agent value in top-value tables. */
 const UA_DISPLAY_MAX_LENGTH = 60;
@@ -38,6 +40,10 @@ export function renderTerminalReport(
   }
   lines.push(`Invalid: ${report.summary.invalidLines}`);
   lines.push(`Bytes served: ${report.summary.totalBytes}`);
+  const truncation = formatTruncation(report.summary);
+  if (truncation) {
+    lines.push(truncation);
+  }
   if (report.timeStats.firstSeen && report.timeStats.lastSeen) {
     lines.push(`Time range: ${report.timeStats.firstSeen} to ${report.timeStats.lastSeen}`);
     lines.push(
@@ -87,7 +93,7 @@ function aiBotSection(report: AnalyzeReport, colors: ReturnType<typeof pc.create
 
   for (const bot of report.aiBotStats.slice(0, 10)) {
     lines.push(
-      `  ${bot.requests.toString().padStart(6, " ")}  ${bot.botName} ips=${bot.ipCount} paths=${bot.pathCount} robots=${bot.requestedRobotsTxt ? "yes" : "no"}`
+      `  ${bot.requests.toString().padStart(6, " ")}  ${display(bot.botName)} ips=${bot.ipCount} paths=${bot.pathCount} robots=${bot.requestedRobotsTxt ? "yes" : "no"}`
     );
   }
 
@@ -120,7 +126,7 @@ function section(
 
   for (const item of items) {
     const value = maxValueLength ? truncateForDisplay(item.value, maxValueLength) : item.value;
-    lines.push(`  ${item.count.toString().padStart(6, " ")}  ${value}`);
+    lines.push(`  ${item.count.toString().padStart(6, " ")}  ${display(value)}`);
   }
 
   return lines.join("\n");
@@ -154,7 +160,7 @@ function incidentPanel(
     const successTag = incident.successful ? colors.red(" 2XX_HIT") : "";
 
     lines.push(
-      `  ${severity(incident.severity, colors)} ${incident.score.toString().padStart(3, " ")}  ${incident.title}${suffix}${successTag}`
+      `  ${severity(incident.severity, colors)} ${incident.score.toString().padStart(3, " ")}  ${display(incident.title)}${suffix}${successTag}`
     );
 
     const ip = incident.evidence.find((item) => item.key === "ip")?.value;
@@ -163,23 +169,23 @@ function incidentPanel(
     const prefix = incident.evidence.find((item) => item.key === "prefix")?.value;
 
     if (ip) {
-      lines.push(`       ip: ${ip}`);
+      lines.push(`       ip: ${display(ip)}`);
     }
     if (path) {
-      lines.push(`       ${path}`);
+      lines.push(`       ${display(path)}`);
     }
     if (topPaths) {
       const paths = String(topPaths).split(" | ").slice(0, 3);
       for (const p of paths) {
-        lines.push(`       ${p}`);
+        lines.push(`       ${display(p)}`);
       }
     }
     if (prefix) {
-      lines.push(`       subnet: ${prefix}`);
+      lines.push(`       subnet: ${display(prefix)}`);
     }
 
     for (const sample of incident.samples.slice(0, 2)) {
-      lines.push(`       sample: ${sample}`);
+      lines.push(`       sample: ${display(sample)}`);
     }
   }
 
@@ -200,6 +206,10 @@ function incidentPanel(
  * @param colors - A picocolors instance.
  * @returns A padded, colored severity string.
  */
+function display(value: string | number | boolean): string {
+  return sanitizeText(String(value), "terminal");
+}
+
 function severity(value: Incident["severity"], colors: ReturnType<typeof pc.createColors>): string {
   switch (value) {
     case "critical":

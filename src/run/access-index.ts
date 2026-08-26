@@ -8,9 +8,10 @@ import { setImmediate } from "node:timers/promises";
 import type { IncidentLogLine } from "../analysis/types.js";
 import {
   type LineCompareKey,
-  compareLine as compareLineFromUtil,
   compareSortableValue as compareSortableValueFromUtil,
-  compareRow as compareRowFromUtil
+  compareRow as compareRowFromUtil,
+  compareTimestampValues,
+  timestampSortValue
 } from "../utils/line-compare.js";
 
 export type { LineCompareKey };
@@ -37,6 +38,39 @@ export interface OrderedRowNumbers {
  * out-of-range indices so callers catch bugs rather than silently reading
  * undefined.
  */
+/** Virtual 0..length-1 or reverse sequence without allocating the array. */
+export function sequentialOrderedRowNumbers(
+  length: number,
+  direction: "asc" | "desc" = "asc"
+): OrderedRowNumbers {
+  return {
+    get length() {
+      return length;
+    },
+    rowAt(i: number): number {
+      if (i < 0 || i >= length) {
+        throw new RangeError(`sequentialOrderedRowNumbers: index ${i} out of range [0, ${length})`);
+      }
+      return direction === "asc" ? i : length - 1 - i;
+    }
+  };
+}
+
+/** Virtual 0..length-1 sequence without allocating the array. */
+export function rangeOrderedRowNumbers(length: number): OrderedRowNumbers {
+  return {
+    get length() {
+      return length;
+    },
+    rowAt(i: number): number {
+      if (i < 0 || i >= length) {
+        throw new RangeError(`rangeOrderedRowNumbers: index ${i} out of range [0, ${length})`);
+      }
+      return i;
+    }
+  };
+}
+
 export function arrayOrderedRowNumbers(arr: readonly number[]): OrderedRowNumbers {
   return {
     get length() {
@@ -71,6 +105,10 @@ export interface AccessLogIndex {
   offsetsPath: string;
   /** Total number of rows written to the index. */
   totalRows: number;
+  /** True when valid timestamps were non-decreasing in stream order. */
+  timestampsMonotonic: boolean;
+  /** Rows whose timestamp could not be parsed. */
+  invalidTimestampCount: number;
 }
 
 /**
@@ -86,6 +124,8 @@ export interface AccessLogIndexWriter {
    * @returns The zero-based row number assigned to the written line.
    */
   write(line: IncidentLogLine): number;
+  /** Flush buffered rows so the index can be read before `close()`. */
+  flush(): void;
   /**
    * Flush any buffered data and close the underlying file descriptors.
    * Subsequent calls are no-ops.
@@ -139,42 +179,119 @@ export interface AccessLogIndexQuery {
  * is requested multiple times (e.g. across paginated requests for the same view).
  * Failed promises are evicted so the next caller triggers a fresh build.
  */
-export class AccessLogIndexQueryCache {
-  private readonly entries = new Map<string, Promise<AccessLogIndexQuery>>();
+const QUERY_CACHE_MAX_KEYS = 32;
+const QUERY_CACHE_MAX_ROWS = 2_000_000;
 
-  /**
-   * Returns `true` if a cached (or in-flight) query exists for `key`.
-   * @param key - The cache key to check.
-   */
+interface QueryCacheEntry {
+  promise: Promise<AccessLogIndexQuery>;
+  controller?: AbortController;
+  resolved: boolean;
+  rowCount: number;
+}
+
+export class AccessLogIndexQueryCache {
+  private readonly entries = new Map<string, QueryCacheEntry>();
+  private readonly order: string[] = [];
+  private totalRows = 0;
+
   has(key: string): boolean {
     return this.entries.has(key);
   }
 
-  /**
-   * Returns the cached query for `key`, or builds and caches a new one.
-   * @param index - The index to scan if no cached result exists.
-   * @param key - Unique string identifying the filter+sort combination.
-   * @param options - Filter and sort parameters forwarded to `buildAccessLogIndexQuery`.
-   * @returns A promise resolving to the filtered and sorted query result.
-   */
   getOrBuild(
     index: AccessLogIndex,
     key: string,
-    options: Pick<AccessLogIndexPageOptions, "filter" | "sortKey" | "sortDirection">
+    options: Pick<AccessLogIndexPageOptions, "filter" | "sortKey" | "sortDirection">,
+    signal?: AbortSignal
   ): Promise<AccessLogIndexQuery> {
     const cached = this.entries.get(key);
 
     if (cached) {
-      return cached;
+      const idx = this.order.indexOf(key);
+      if (idx !== -1) {
+        this.order.splice(idx, 1);
+        this.order.push(key);
+      }
+      return abortablePromise(cached.promise, signal);
     }
 
-    const next = buildAccessLogIndexQuery(index, options).catch((error) => {
-      this.entries.delete(key);
-      throw error;
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      controller.abort();
+    }
+
+    const next = buildAccessLogIndexQuery(index, options, controller.signal)
+      .then((query) => {
+        const entry = this.entries.get(key);
+        if (entry) {
+          entry.resolved = true;
+          entry.rowCount = query.rows.length;
+          this.totalRows += query.rows.length;
+          this.evictIfNeeded();
+        }
+        return query;
+      })
+      .catch((error) => {
+        this.delete(key);
+        throw error;
+      })
+      .finally(() => {
+        signal?.removeEventListener("abort", onAbort);
+      });
+
+    this.entries.set(key, {
+      promise: next,
+      controller,
+      resolved: false,
+      rowCount: 0
     });
-    this.entries.set(key, next);
+    this.order.push(key);
+    this.evictIfNeeded();
     return next;
   }
+
+  abort(key: string): void {
+    this.entries.get(key)?.controller?.abort();
+  }
+
+  delete(key: string): void {
+    const entry = this.entries.get(key);
+    if (entry?.resolved) {
+      this.totalRows = Math.max(0, this.totalRows - entry.rowCount);
+    }
+    this.entries.delete(key);
+    const idx = this.order.indexOf(key);
+    if (idx !== -1) {
+      this.order.splice(idx, 1);
+    }
+  }
+
+  private evictIfNeeded(): void {
+    while (
+      (this.order.length > QUERY_CACHE_MAX_KEYS || this.totalRows > QUERY_CACHE_MAX_ROWS) &&
+      this.order.length > 0
+    ) {
+      const resolvedKey = this.order.find((key) => this.entries.get(key)?.resolved);
+      if (!resolvedKey) {
+        break;
+      }
+      this.delete(resolvedKey);
+    }
+  }
+}
+
+export function canUseMonotonicTimestampFastPath(
+  index: AccessLogIndex,
+  options: Pick<AccessLogIndexPageOptions, "filter" | "sortKey">
+): boolean {
+  return (
+    options.sortKey === "timestamp" &&
+    options.filter === passThroughFilter &&
+    index.timestampsMonotonic &&
+    index.invalidTimestampCount === 0
+  );
 }
 
 /**
@@ -193,7 +310,9 @@ export async function createAccessLogIndexWriter(directory: string): Promise<Acc
     directory: indexDirectory,
     rowsPath: path.join(indexDirectory, "rows.jsonl"),
     offsetsPath: path.join(indexDirectory, "offsets.u64"),
-    totalRows: 0
+    totalRows: 0,
+    timestampsMonotonic: true,
+    invalidTimestampCount: 0
   });
 }
 
@@ -207,27 +326,20 @@ export async function createAccessLogIndexWriter(directory: string): Promise<Acc
  */
 export async function readAccessLogIndexPage(
   index: AccessLogIndex,
-  options: AccessLogIndexPageOptions
+  options: AccessLogIndexPageOptions,
+  signal?: AbortSignal
 ): Promise<AccessLogIndexPage> {
-  if (options.sortKey === "timestamp") {
-    return options.filter === passThroughFilter
-      ? readSequentialPage(index, options.start, options.limit, options.sortDirection)
-      : await readFilteredSequentialPage(index, options);
+  if (canUseMonotonicTimestampFastPath(index, options)) {
+    return readSequentialPage(index, options.start, options.limit, options.sortDirection);
   }
 
-  const lines: IncidentLogLine[] = [];
-
-  for await (const line of readAccessLogIndexLines(index)) {
-    if (options.filter(line)) {
-      lines.push(line);
-    }
-  }
-
-  const sortedLines = await sortLines(lines, options.sortKey, options.sortDirection);
-
+  const query = await buildAccessLogIndexQuery(index, options, signal);
   return {
-    total: sortedLines.length,
-    lines: sortedLines.slice(options.start, options.start + options.limit)
+    total: query.total,
+    lines: readAccessLogIndexRows(
+      index,
+      query.rows.slice(options.start, options.start + options.limit)
+    )
   };
 }
 
@@ -245,13 +357,14 @@ export async function readAccessLogIndexCachedPage(
   index: AccessLogIndex,
   cache: AccessLogIndexQueryCache,
   key: string,
-  options: AccessLogIndexPageOptions
+  options: AccessLogIndexPageOptions,
+  signal?: AbortSignal
 ): Promise<AccessLogIndexPage> {
-  if (options.filter === passThroughFilter && options.sortKey === "timestamp") {
+  if (canUseMonotonicTimestampFastPath(index, options)) {
     return readSequentialPage(index, options.start, options.limit, options.sortDirection);
   }
 
-  const query = await cache.getOrBuild(index, key, options);
+  const query = await cache.getOrBuild(index, key, options, signal);
   return {
     total: query.total,
     lines: readAccessLogIndexRows(
@@ -390,12 +503,15 @@ export async function* iterateAccessLogIndexChunks(
  */
 export async function buildAccessLogIndexQuery(
   index: AccessLogIndex,
-  options: Pick<AccessLogIndexPageOptions, "filter" | "sortKey" | "sortDirection">
+  options: Pick<AccessLogIndexPageOptions, "filter" | "sortKey" | "sortDirection">,
+  signal?: AbortSignal
 ): Promise<AccessLogIndexQuery> {
-  if (options.filter === passThroughFilter && options.sortKey === "timestamp") {
+  if (
+    canUseMonotonicTimestampFastPath(index, { filter: options.filter, sortKey: options.sortKey })
+  ) {
     return {
       total: index.totalRows,
-      rows: sequentialRows(index.totalRows, options.sortDirection)
+      rows: materializeSequentialRows(index.totalRows, options.sortDirection)
     };
   }
 
@@ -404,6 +520,10 @@ export async function buildAccessLogIndexQuery(
 
   try {
     for (let row = 0; row < index.totalRows; row += 1) {
+      if (signal?.aborted) {
+        throw new DOMException("buildAccessLogIndexQuery aborted", "AbortError");
+      }
+
       const line = readAccessLogIndexRowFromOpenFiles(index, row, fileHandles);
 
       if (options.filter(line)) {
@@ -421,20 +541,33 @@ export async function buildAccessLogIndexQuery(
     closeIndexFiles(fileHandles);
   }
 
-  if (options.sortKey === "timestamp") {
-    if (options.sortDirection === "desc") {
-      await setImmediate();
-      rows.reverse();
-      await setImmediate();
-    }
-  } else {
-    rows = await sortQueryRows(rows, options.sortDirection);
+  if (signal?.aborted) {
+    throw new DOMException("buildAccessLogIndexQuery aborted", "AbortError");
   }
+
+  rows = await sortQueryRows(rows, options.sortKey, options.sortDirection, signal);
 
   return {
     total: rows.length,
     rows: rows.map((item) => item.row)
   };
+}
+
+async function sortQueryRows(
+  rows: Array<{ row: number; value: string | number }>,
+  sortKey: AccessLogIndexPageOptions["sortKey"],
+  sortDirection: "asc" | "desc",
+  signal?: AbortSignal
+): Promise<Array<{ row: number; value: string | number }>> {
+  const compare =
+    sortKey === "timestamp"
+      ? (a: { row: number; value: string | number }, b: { row: number; value: string | number }) =>
+          compareTimestampValues(Number(a.value), Number(b.value), sortDirection) ||
+          compareRowFromUtil(a.row, b.row)
+      : (a: { row: number; value: string | number }, b: { row: number; value: string | number }) =>
+          compareSortableValue(a.value, b.value, sortDirection) || compareRowFromUtil(a.row, b.row);
+
+  return sortInChunks(rows, compare, { signal });
 }
 
 function readSequentialPage(
@@ -452,75 +585,55 @@ function readSequentialPage(
     for (let offset = 0; offset < safeLimit; offset += 1) {
       const rowNumber =
         direction === "asc" ? safeStart + offset : index.totalRows - 1 - safeStart - offset;
-
       if (rowNumber < 0 || rowNumber >= index.totalRows) {
         break;
       }
-
       lines.push(readAccessLogIndexRowFromOpenFiles(index, rowNumber, fileHandles));
     }
   } finally {
     closeIndexFiles(fileHandles);
   }
 
-  return {
-    total: index.totalRows,
-    lines
-  };
+  return { total: index.totalRows, lines };
 }
 
-async function readFilteredSequentialPage(
-  index: AccessLogIndex,
-  options: AccessLogIndexPageOptions
-): Promise<AccessLogIndexPage> {
-  const lines: IncidentLogLine[] = [];
-  const safeStart = Math.max(0, options.start);
-  const safeLimit = Math.max(0, options.limit);
-  const fileHandles = openIndexFiles(index);
-  let total = 0;
-
-  try {
-    for (let offset = 0; offset < index.totalRows; offset += 1) {
-      const rowNumber = options.sortDirection === "asc" ? offset : index.totalRows - 1 - offset;
-      const line = readAccessLogIndexRowFromOpenFiles(index, rowNumber, fileHandles);
-
-      if (!options.filter(line)) {
-        continue;
-      }
-
-      if (total >= safeStart && lines.length < safeLimit) {
-        lines.push(line);
-      }
-
-      total += 1;
-
-      if (offset > 0 && offset % INDEX_SCAN_YIELD_INTERVAL === 0) {
-        await setImmediate();
-      }
+function materializeSequentialRows(totalRows: number, direction: "asc" | "desc"): number[] {
+  const rows: number[] = [];
+  if (direction === "asc") {
+    for (let row = 0; row < totalRows; row += 1) {
+      rows.push(row);
     }
-  } finally {
-    closeIndexFiles(fileHandles);
+    return rows;
   }
-
-  return {
-    total,
-    lines
-  };
+  for (let row = totalRows - 1; row >= 0; row -= 1) {
+    rows.push(row);
+  }
+  return rows;
 }
 
-async function sortLines(
-  lines: IncidentLogLine[],
-  sortKey: AccessLogIndexPageOptions["sortKey"],
-  sortDirection: "asc" | "desc"
-): Promise<IncidentLogLine[]> {
-  return sortInChunks(lines, (a, b) => compareLine(a, b, sortKey, sortDirection));
-}
-
-async function sortQueryRows(
-  rows: Array<{ row: number; value: string | number }>,
-  sortDirection: "asc" | "desc"
-): Promise<Array<{ row: number; value: string | number }>> {
-  return sortInChunks(rows, (a, b) => compareSortableValue(a.value, b.value, sortDirection));
+export async function abortablePromise<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return promise;
+  }
+  if (signal.aborted) {
+    throw new DOMException("aborted", "AbortError");
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(new DOMException("aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
 }
 
 export async function sortInChunks<T>(
@@ -629,32 +742,6 @@ function readOffset(fd: number, rowNumber: number): number {
   return Number(buffer.readBigUInt64LE(0));
 }
 
-function compareLine(
-  a: IncidentLogLine,
-  b: IncidentLogLine,
-  sortKey: AccessLogIndexPageOptions["sortKey"],
-  direction: "asc" | "desc"
-): number {
-  return compareLineFromUtil(a, b, sortKey, direction);
-}
-
-function sequentialRows(totalRows: number, direction: "asc" | "desc"): number[] {
-  const rows: number[] = [];
-
-  if (direction === "asc") {
-    for (let row = 0; row < totalRows; row += 1) {
-      rows.push(row);
-    }
-    return rows;
-  }
-
-  for (let row = totalRows - 1; row >= 0; row -= 1) {
-    rows.push(row);
-  }
-
-  return rows;
-}
-
 function sortableValue(
   line: IncidentLogLine,
   sortKey: AccessLogIndexPageOptions["sortKey"]
@@ -665,6 +752,10 @@ function sortableValue(
 
   if (sortKey === "status") {
     return line.status;
+  }
+
+  if (sortKey === "timestamp") {
+    return timestampSortValue(line.timestamp);
   }
 
   return String(line[sortKey]);
@@ -687,6 +778,7 @@ class SyncAccessLogIndexWriter implements AccessLogIndexWriter {
   private bufferedBytes = 0;
   private byteOffset = 0;
   private closed = false;
+  private lastEpoch: number | null = null;
 
   constructor(index: AccessLogIndex) {
     this.index = index;
@@ -697,6 +789,16 @@ class SyncAccessLogIndexWriter implements AccessLogIndexWriter {
   write(line: IncidentLogLine): number {
     if (this.closed) {
       throw new Error("Cannot write to closed access-log index.");
+    }
+
+    const epoch = timestampSortValue(line.timestamp);
+    if (!Number.isFinite(epoch)) {
+      this.index.invalidTimestampCount += 1;
+    } else {
+      if (this.lastEpoch !== null && epoch < this.lastEpoch) {
+        this.index.timestampsMonotonic = false;
+      }
+      this.lastEpoch = epoch;
     }
 
     const rowNumber = this.index.totalRows;
@@ -716,6 +818,18 @@ class SyncAccessLogIndexWriter implements AccessLogIndexWriter {
     return rowNumber;
   }
 
+  flush(): void {
+    if (this.closed || this.bufferedBytes === 0) {
+      return;
+    }
+
+    writeSync(this.offsetsFd, Buffer.concat(this.offsetsBuffer));
+    writeSync(this.rowsFd, Buffer.concat(this.rowsBuffer));
+    this.offsetsBuffer.length = 0;
+    this.rowsBuffer.length = 0;
+    this.bufferedBytes = 0;
+  }
+
   close(): void {
     if (this.closed) {
       return;
@@ -725,17 +839,5 @@ class SyncAccessLogIndexWriter implements AccessLogIndexWriter {
     closeSync(this.rowsFd);
     closeSync(this.offsetsFd);
     this.closed = true;
-  }
-
-  private flush(): void {
-    if (this.bufferedBytes === 0) {
-      return;
-    }
-
-    writeSync(this.offsetsFd, Buffer.concat(this.offsetsBuffer));
-    writeSync(this.rowsFd, Buffer.concat(this.rowsBuffer));
-    this.offsetsBuffer.length = 0;
-    this.rowsBuffer.length = 0;
-    this.bufferedBytes = 0;
   }
 }

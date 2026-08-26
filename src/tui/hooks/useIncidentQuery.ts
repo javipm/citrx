@@ -1,19 +1,25 @@
 // On-demand incident query: default fast path via virtual accessor, build path
 // via background scan+sort. Mirrors useAccessLogQuery but scoped to one incident.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { IncidentMatchSet } from "../../analysis/types.js";
 import {
-  type OrderedRowNumbers,
   type AccessLogIndex,
+  type OrderedRowNumbers,
   arrayOrderedRowNumbers,
   iterateAccessLogIndexChunks,
   sortInChunks
 } from "../../run/access-index.js";
-import { compareSortableValue, compareRow } from "../../utils/line-compare.js";
+import {
+  compareSortableValue,
+  compareRow,
+  compareTimestampValues,
+  timestampSortValue
+} from "../../utils/line-compare.js";
 import { createAccessLogLineFilter } from "../filter.js";
-import type { SortKey, SortDirection } from "../types.js";
+import type { ActiveAbortEntry, SortKey, SortDirection } from "../types.js";
 
 const INCIDENT_QUERY_CACHE_MAX = 32;
+const INCIDENT_QUERY_CACHE_MAX_ROWS = 2_000_000;
 const INCIDENT_PROGRESS_THROTTLE_MS = 100;
 
 export function incidentQueryKey(
@@ -31,11 +37,13 @@ interface CacheEntry {
   promise: Promise<QueryResult>;
   controller?: AbortController;
   resolved: boolean;
+  rowCount?: number;
 }
 
 export class IncidentQueryCache {
   private readonly entries = new Map<string, CacheEntry>();
   private readonly order: string[] = [];
+  private totalRows = 0;
 
   get(key: string): CacheEntry | undefined {
     const entry = this.entries.get(key);
@@ -56,57 +64,55 @@ export class IncidentQueryCache {
       this.order.push(key);
       return;
     }
-    // Evict oldest resolved entry when over cap
-    while (this.order.length >= INCIDENT_QUERY_CACHE_MAX) {
-      const oldest = this.order[0];
-      if (!oldest) break;
-      const old = this.entries.get(oldest);
-      if (old && !old.resolved) break; // pinned (in-flight)
-      this.order.shift();
-      this.entries.delete(oldest);
-    }
+    this.evictIfNeeded();
+    entry.rowCount ??= 0;
     this.entries.set(key, entry);
     this.order.push(key);
   }
 
   delete(key: string): void {
+    const existing = this.entries.get(key);
+    if (existing?.resolved) {
+      this.totalRows = Math.max(0, this.totalRows - (existing.rowCount ?? 0));
+    }
     this.entries.delete(key);
     const idx = this.order.indexOf(key);
     if (idx !== -1) this.order.splice(idx, 1);
   }
 
-  clearByIncidentId(incidentId: string): void {
-    const prefix = `${incidentId}:`;
-    for (const [key, entry] of this.entries) {
-      if (key.startsWith(prefix)) {
-        entry.controller?.abort();
-        this.entries.delete(key);
-      }
+  markResolved(key: string, rowCount: number): void {
+    const entry = this.entries.get(key);
+    if (!entry || entry.resolved) {
+      return;
     }
-    const toRemove = this.order.filter((k) => k.startsWith(prefix));
-    for (const k of toRemove) {
-      const idx = this.order.indexOf(k);
-      if (idx !== -1) this.order.splice(idx, 1);
+    entry.resolved = true;
+    entry.rowCount = rowCount;
+    this.totalRows += rowCount;
+    this.evictIfNeeded();
+  }
+
+  private evictIfNeeded(): void {
+    while (
+      (this.order.length >= INCIDENT_QUERY_CACHE_MAX ||
+        this.totalRows > INCIDENT_QUERY_CACHE_MAX_ROWS) &&
+      this.order.length > 0
+    ) {
+      const resolvedKey = this.order.find((key) => this.entries.get(key)?.resolved);
+      if (!resolvedKey) {
+        break;
+      }
+      this.delete(resolvedKey);
     }
   }
-}
 
-function virtualOrderedRowNumbers(
-  rowNumbers: readonly number[],
-  sortDir: SortDirection
-): OrderedRowNumbers {
-  return {
-    get length() {
-      return rowNumbers.length;
-    },
-    rowAt(i: number): number {
-      if (i < 0 || i >= rowNumbers.length) {
-        throw new RangeError(`index ${i} out of range [0, ${rowNumbers.length})`);
-      }
-      if (sortDir === "asc") return rowNumbers[i]!;
-      return rowNumbers[rowNumbers.length - 1 - i]!;
+  clearByIncidentId(incidentId: string): void {
+    const prefix = `${incidentId}:`;
+    const keys = [...this.entries.keys()].filter((key) => key.startsWith(prefix));
+    for (const key of keys) {
+      this.entries.get(key)?.controller?.abort();
+      this.delete(key);
     }
-  };
+  }
 }
 
 function sortableValueForKey(
@@ -122,6 +128,7 @@ function sortableValueForKey(
 ): string | number {
   if (sortKey === "bytes") return line.bytes ?? 0;
   if (sortKey === "status") return line.status;
+  if (sortKey === "timestamp") return timestampSortValue(line.timestamp);
   return String((line as Record<string, unknown>)[sortKey]);
 }
 
@@ -141,36 +148,6 @@ export async function buildIncidentSubset(
   let done = 0;
   let lastProgress = 0;
 
-  // Filter-only with timestamp sort: collect matching rows then optionally reverse
-  if (!filter && sortKey === "timestamp") {
-    // No build needed — default fast path handles this
-    throw new Error("default fast path should be used");
-  }
-
-  if (sortKey === "timestamp") {
-    // Filter only, no sort change — collect matching row numbers in stream order
-    const rows: number[] = [];
-    for await (const chunk of iterateAccessLogIndexChunks(accessIndex, source, {
-      signal
-    })) {
-      for (const line of chunk) {
-        if (!filterFn || filterFn(line)) {
-          rows.push(line.row);
-        }
-      }
-      done += chunk.length;
-      const now = Date.now();
-      if (onProgress && now - lastProgress >= INCIDENT_PROGRESS_THROTTLE_MS) {
-        onProgress(done, total);
-        lastProgress = now;
-      }
-    }
-    onProgress?.(done, total);
-    if (sortDir === "desc") rows.reverse();
-    return { orderedRowNumbers: arrayOrderedRowNumbers(rows), total: rows.length };
-  }
-
-  // Non-timestamp sort: collect { row, value } tuples then sort
   const tuples: { row: number; value: string | number }[] = [];
   for await (const chunk of iterateAccessLogIndexChunks(accessIndex, source, { signal })) {
     for (const line of chunk) {
@@ -192,7 +169,10 @@ export async function buildIncidentSubset(
 
   const sorted = await sortInChunks(
     tuples,
-    (a, b) => compareSortableValue(a.value, b.value, sortDir) || compareRow(a.row, b.row),
+    (a, b) =>
+      (sortKey === "timestamp"
+        ? compareTimestampValues(Number(a.value), Number(b.value), sortDir)
+        : compareSortableValue(a.value, b.value, sortDir)) || compareRow(a.row, b.row),
     { signal }
   );
   onProgress?.(total, total);
@@ -212,6 +192,7 @@ interface IncidentQueryOptions {
   sortDirection: SortDirection;
   setIndexLoading: (v: boolean) => void;
   setMessage: (v: string) => void;
+  setActiveAbort?: Dispatch<SetStateAction<ActiveAbortEntry | undefined>>;
 }
 
 export function useIncidentQuery({
@@ -222,74 +203,64 @@ export function useIncidentQuery({
   sortKey,
   sortDirection,
   setIndexLoading,
-  setMessage
+  setMessage,
+  setActiveAbort
 }: IncidentQueryOptions) {
-  // Default fast path (no filter + timestamp sort): virtual accessor, no build
-  const defaultResult = useMemo<QueryResult | null>(() => {
-    if (!matchSet) return null;
-    return {
-      orderedRowNumbers: virtualOrderedRowNumbers(matchSet.rowNumbers, sortDirection),
-      total: matchSet.rowNumbers.length
-    };
-  }, [matchSet, sortDirection]);
-
-  // Seed the cache with the default fast-path entry on matchSet/sortDirection change
-  useEffect(() => {
-    if (!matchSet || !defaultResult) return;
-    const defaultKey = incidentQueryKey(matchSet.incidentId, "", "timestamp", sortDirection);
-    if (!incidentQueryCache.get(defaultKey)) {
-      incidentQueryCache.set(defaultKey, {
-        promise: Promise.resolve(defaultResult),
-        resolved: true
-      });
-    }
-  }, [matchSet, sortDirection, defaultResult, incidentQueryCache]);
-
-  const lastResolvedRef = useRef<QueryResult | null>(null);
-  if (lastResolvedRef.current === null && defaultResult !== null) {
-    lastResolvedRef.current = defaultResult;
-  }
-
-  const [result, setResult] = useState<QueryResult | null>(defaultResult);
+  const lastResolvedRef = useRef<{ incidentId: string; result: QueryResult } | null>(null);
+  const [result, setResult] = useState<QueryResult | null>(null);
   const [building, setBuilding] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-
-  const isDefaultPath =
-    !filter && sortKey === "timestamp" && matchSet !== undefined && matchSet !== null;
 
   useEffect(() => {
     if (!matchSet) {
       setResult(null);
       setBuilding(false);
+      lastResolvedRef.current = null;
       return;
     }
 
-    if (isDefaultPath) {
-      setResult(defaultResult);
-      setBuilding(false);
-      setIndexLoading(false);
-      return;
-    }
-
-    const key = incidentQueryKey(matchSet.incidentId, filter, sortKey, sortDirection);
+    let cancelled = false;
+    const incidentId = matchSet.incidentId;
+    const key = incidentQueryKey(incidentId, filter, sortKey, sortDirection);
     const cached = incidentQueryCache.get(key);
 
+    const applyResult = (r: QueryResult) => {
+      if (cancelled) {
+        return;
+      }
+      lastResolvedRef.current = { incidentId, result: r };
+      setResult(r);
+      setBuilding(false);
+      setIndexLoading(false);
+    };
+
     if (cached) {
-      void cached.promise.then((r) => {
-        lastResolvedRef.current = r;
-        setResult(r);
+      void cached.promise.then(applyResult).catch((err: unknown) => {
+        if (cancelled) {
+          return;
+        }
         setBuilding(false);
         setIndexLoading(false);
+        const isAbort = err instanceof DOMException && err.name === "AbortError";
+        if (!isAbort) {
+          setMessage(err instanceof Error ? err.message : String(err));
+        }
       });
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
-    // Start a new build
     const controller = new AbortController();
     abortRef.current = controller;
     setBuilding(true);
     setIndexLoading(true);
     setMessage(filter ? "Building incident filter cache…" : "Building incident sort cache…");
+    setActiveAbort?.({
+      kind: "incident-query",
+      controller,
+      label: "Building incident query… Esc to cancel"
+    });
 
     let lastProgressMs = 0;
     const onProgress = (done: number, total: number) => {
@@ -317,44 +288,48 @@ export function useIncidentQuery({
 
     buildPromise
       .then((r) => {
-        entry.resolved = true;
-        lastResolvedRef.current = r;
-        setResult(r);
-        setBuilding(false);
-        setIndexLoading(false);
+        if (cancelled || controller.signal.aborted) {
+          return;
+        }
+        incidentQueryCache.markResolved(key, r.total);
+        applyResult(r);
+        setActiveAbort?.((prev) => (prev?.controller === controller ? undefined : prev));
         setMessage("Incident filter cache ready");
       })
       .catch((err: unknown) => {
+        if (cancelled) {
+          return;
+        }
         incidentQueryCache.delete(key);
         setBuilding(false);
         setIndexLoading(false);
+        setActiveAbort?.((prev) => (prev?.controller === controller ? undefined : prev));
         const isAbort = err instanceof DOMException && err.name === "AbortError";
         if (!isAbort) {
           setMessage(err instanceof Error ? err.message : String(err));
-        } else {
-          setMessage("Showing previous result (filter cache cancelled)");
-          // Keep showing the last resolved result
-          if (lastResolvedRef.current) {
-            setResult(lastResolvedRef.current);
-          }
+          return;
+        }
+        setMessage("Query cancelled");
+        if (lastResolvedRef.current?.incidentId === incidentId) {
+          setResult(lastResolvedRef.current.result);
         }
       });
 
     return () => {
+      cancelled = true;
       controller.abort();
       abortRef.current = null;
+      setActiveAbort?.((prev) => (prev?.controller === controller ? undefined : prev));
     };
-  }, [matchSet, filter, sortKey, sortDirection, isDefaultPath]);
+  }, [matchSet, filter, sortKey, sortDirection, accessIndex, incidentQueryCache]);
 
   const abort = () => {
     abortRef.current?.abort();
   };
 
-  const finalResult = result ?? defaultResult;
-
   return {
-    orderedRowNumbers: finalResult?.orderedRowNumbers ?? null,
-    total: finalResult?.total ?? matchSet?.rowNumbers.length ?? 0,
+    orderedRowNumbers: result?.orderedRowNumbers ?? null,
+    total: result?.total ?? matchSet?.rowNumbers.length ?? 0,
     building,
     abort
   };

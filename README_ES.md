@@ -7,7 +7,7 @@
 Procesa logs enormes en streaming, detecta ataques y abuso con reglas locales
 deterministas y explóralo todo en una TUI interactiva.
 
-[![npm](https://img.shields.io/npm/v/@javipm/citrx?color=cb3837&logo=npm)](https://www.npmjs.com/package/@javipm/citrx)
+[![npm](https://img.shields.io/npm/v/citrx?color=cb3837&logo=npm)](https://www.npmjs.com/package/citrx)
 [![node](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![types](https://img.shields.io/badge/types-TypeScript-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -21,10 +21,10 @@ deterministas y explóralo todo en una TUI interactiva.
 
 ```bash
 # Un fichero, una carpeta, comprimido o plano — citrx lo detecta solo
-npx @javipm/citrx@latest /var/log/nginx/access.log
-npx @javipm/citrx@latest /var/log/nginx/          # una carpeta entera de logs
-npx @javipm/citrx@latest access.log.gz logs.zip   # .gz .br .zip .tar.gz .tgz
-cat access.log | npx @javipm/citrx@latest -        # stdin
+npx citrx@latest /var/log/nginx/access.log
+npx citrx@latest /var/log/nginx/          # una carpeta entera de logs
+npx citrx@latest access.log.gz logs.zip   # .gz .br .zip .tar.gz .tgz
+cat access.log | npx citrx@latest -        # stdin
 ```
 
 Ese comando procesa la entrada en streaming, la valida, ejecuta ~30 reglas de
@@ -100,24 +100,24 @@ El flujo es deliberadamente offline-first:
 1. Análisis local determinista       →  sin red, memoria acotada
 2. Explorar incidentes + peticiones   →  TUI interactiva
 3. Filtrar, ordenar, inspeccionar     →  pequeño lenguaje de consulta
-4. Exportar evidencia enfocada         →  CSV, JSON, TSV, Markdown o HTML
+4. Exportar evidencia (TUI: CSV/JSON/TSV; CLI: JSON/Markdown/HTML/terminal)
 ```
 
 ---
 
 ## ✨ Características
 
-| | |
-| --- | --- |
-| 🌊 **Streaming** | Parsing línea a línea con memoria acotada. Logs de varios GB no se cargan enteros en RAM. |
-| 🧭 **Autodetección de formato** | Muestrea cada entrada, elige `apache_common` / `apache_combined` / `nginx_combined` y falla pronto si no es un log de acceso. |
-| 🧩 **Formatos personalizados** | Config JSON declarativa con un regex + campos nombrados, validada con `zod`. |
-| 🛡️ **~30 reglas de detección** | SQLi/XSS/LFI/SSRF/inyección de comandos, recon, bots falsos, escáneres, ráfagas DDoS, crawlers de IA, hotspots de POST, tormentas de errores. |
-| 🖥️ **TUI completa** | Pestañas de incidentes, tabla de logs indexada, carga de filas bajo demanda, top values, detalle de petición, exportaciones. |
-| 🔎 **Lenguaje de consulta** | `AND`/`OR`/`NOT`, paréntesis, operadores de campo, familias de estado, comodines, filtros por parámetro. |
-| 📤 **Informes** | Terminal, JSON, Markdown y HTML offline autocontenido. |
-| 📦 **Entradas comprimidas** | `.gz`, `.br`, `.zip`, `.tar.gz`, `.tgz`, carpetas y stdin. |
-| 🔒 **Local-first** | Sin telemetría, secretos redactados, índice temporal borrado al salir. |
+|                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🌊 **Streaming**                | Parsing línea a línea con memoria acotada. Logs de varios GB no se cargan enteros en RAM. Los mapas top guardan 20k claves; path stats 8k rutas, 64 IPs/ruta, 256 query variants/ruta, más presupuestos globales (claves **distintas** extra se descartan, no se estiman). Los contadores de descarte son cota inferior (`>=8192`) cuando el set de huellas está lleno. El histograma RPS guarda 100k segundos ocupados más un set acotado de segundos omitidos distintos. La truncación se muestra en terminal/Markdown/HTML/TUI. |
+| 🧭 **Autodetección de formato** | Muestrea cada entrada, elige `apache_common` o combined (`apache_combined`; Nginx combined usa el mismo regex) y falla pronto si no es un log de acceso.                                                                                                                                                                                                                                                                                                                                                                           |
+| 🧩 **Formatos personalizados**  | Config JSON declarativa con un regex + campos nombrados, validada con `zod`.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 🛡️ **~30 reglas de detección**  | SQLi/XSS/LFI/SSRF/inyección de comandos, recon, bots falsos, escáneres, ráfagas DDoS, crawlers de IA, hotspots de POST, tormentas de errores.                                                                                                                                                                                                                                                                                                                                                                                      |
+| 🖥️ **TUI completa**             | Pestañas de incidentes, tabla de logs indexada, carga de filas bajo demanda, top values, detalle de petición, exportaciones.                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 🔎 **Lenguaje de consulta**     | `AND`/`OR`/`NOT`, paréntesis, operadores de campo, familias de estado, comodines, filtros por parámetro.                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 📤 **Informes**                 | Terminal, JSON, Markdown y HTML offline autocontenido.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 📦 **Entradas comprimidas**     | `.gz`, `.br`, `.zip`, `.tar.gz`, `.tgz`, carpetas y stdin.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 🔒 **Local-first**              | Sin telemetría, secretos redactados, índice temporal borrado al salir.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ---
 
@@ -127,16 +127,16 @@ El flujo es deliberadamente offline-first:
 
 ```bash
 # npm
-npx @javipm/citrx@latest /var/log/nginx/access.log
+npx citrx@latest /var/log/nginx/access.log
 
 # pnpm
-pnpx @javipm/citrx@latest /var/log/nginx/access.log
+pnpx citrx@latest /var/log/nginx/access.log
 
 # yarn
-yarn dlx @javipm/citrx@latest /var/log/nginx/access.log
+yarn dlx citrx@latest /var/log/nginx/access.log
 
 # bun
-bunx @javipm/citrx@latest /var/log/nginx/access.log
+bunx citrx@latest /var/log/nginx/access.log
 ```
 
 > Usa la etiqueta `@latest`: `npx` reutiliza una copia cacheada cuando indicas
@@ -147,7 +147,7 @@ bunx @javipm/citrx@latest /var/log/nginx/access.log
 ### Instalación global
 
 ```bash
-npm i -g @javipm/citrx
+npm i -g citrx
 citrx /var/log/nginx/access.log
 ```
 
@@ -180,10 +180,10 @@ citrx access.log --format apache_combined
 
 Los **códigos de salida** hacen que `citrx` se integre bien en CI:
 
-| Código | Significado |
-| ------ | ----------- |
-| `0`    | Éxito, sin incidentes high/critical |
-| `1`    | Error de ejecución / configuración |
+| Código | Significado                               |
+| ------ | ----------------------------------------- |
+| `0`    | Éxito, sin incidentes high/critical       |
+| `1`    | Error de ejecución / configuración        |
 | `2`    | Se encontraron incidentes high o critical |
 
 ---
@@ -230,7 +230,7 @@ Security incidents (attacks)
 ```
 
 > `2XX_HIT` significa que el payload o sondeo recibió al menos una respuesta
-> `2xx` — una respuesta *posiblemente* válida que conviene inspeccionar, no una
+> `2xx` — una respuesta _posiblemente_ válida que conviene inspeccionar, no una
 > prueba de compromiso.
 
 ---
@@ -247,7 +247,8 @@ Options:
   --out <path>            Write report output to a file.
   --no-interactive        Print the terminal report instead of opening the TUI.
   --format <format>       auto, apache_common, apache_combined,
-                          nginx_combined, or custom:<name>.   (default: auto)
+                          nginx_combined (mismo regex combined),
+                          or custom:<name>.                   (default: auto)
   --format-config <path>  JSON file with custom access-log formats.
   --top <n>               Limit top lists.                    (default: 20)
   --since <date>          Include entries at or after this date.
@@ -268,6 +269,10 @@ Entorno:
 Si stdout/stdin son TTY y no se pide ningún formato de informe, `citrx` abre la
 TUI por defecto. `--no-interactive` imprime el informe de terminal.
 
+`--since` / `--until` descartan líneas con timestamp no parseable. Sin filtro de
+fechas esas líneas se analizan. El orden por timestamp en la TUI es cronológico
+(epoch, con zona horaria) y desempata por número de fila, no por orden de stream.
+
 ---
 
 ## 📥 Entradas y formatos
@@ -283,10 +288,12 @@ Los archivos ZIP/TAR se escanean en busca de logs candidatos (`access.log`,
 
 ### Formatos integrados
 
-`apache_common` · `apache_combined` · `nginx_combined`
+- `apache_common` — NCSA Common Log Format
+- `apache_combined` / `nginx_combined` — NCSA Combined Log Format (el mismo regex)
 
-Por defecto `--format auto`: `citrx` muestrea cada entrada, elige el mejor parser
-y falla pronto cuando la muestra no parece un log de acceso Apache/Nginx.
+La autodetección informa `apache_combined` para líneas combined. Apache y Nginx
+combined no se pueden distinguir por la forma de la línea. `--format nginx_combined`
+sigue siendo un alias explícito del mismo parser.
 
 ### Formatos personalizados
 
@@ -299,9 +306,14 @@ Una config JSON declarativa, un regex con grupos nombrados, validada por `zod`:
       "name": "pipe",
       "pattern": "^(?<ip>\\S+)\\|(?<timestamp>[^|]+)\\|(?<method>\\S+)\\|(?<target>\\S+)\\|(?<protocol>HTTP/[^|]+)\\|(?<status>\\d{3})\\|(?<bytes>\\S+)\\|(?<userAgent>.*)$",
       "fields": {
-        "ip": "ip", "timestamp": "timestamp", "method": "method",
-        "target": "target", "protocol": "protocol", "status": "status",
-        "bytes": "bytes", "userAgent": "userAgent"
+        "ip": "ip",
+        "timestamp": "timestamp",
+        "method": "method",
+        "target": "target",
+        "protocol": "protocol",
+        "status": "status",
+        "bytes": "bytes",
+        "userAgent": "userAgent"
       }
     }
   ]
@@ -315,6 +327,15 @@ citrx access.log --format custom:pipe --format-config ./formats.json
 Campos obligatorios: `ip`, `timestamp`, `method`, `target`, `protocol`, `status`.
 Opcionales: `bytes`, `referer`, `userAgent`, `host`, `requestTime`,
 `upstreamTime`, `forwardedFor`.
+
+El patrón debe usar grupos nombrados (`(?<ip>...)`), ir anclado con `^` y `$`,
+y mapear cada valor de `fields.*` a un grupo nombrado. No se aceptan índices
+numéricos de captura. Un regex con cuantificadores anidados o ambiguo falla
+con un mensaje accionable.
+
+`host`, `requestTime`, `upstreamTime` y `forwardedFor` se parsean en la entrada
+interna cuando están mapeados. Aún no los usan las reglas de detección, las
+columnas de la TUI ni las tablas de informe.
 
 ---
 
@@ -350,24 +371,31 @@ vista de depuración.
 El área de incidentes tiene tres pestañas (ciclo con `Tab`: access log →
 SATURATION → SECURITY → OTHER → access log):
 
-| Pestaña | Contenido |
-| --- | --- |
+| Pestaña                         | Contenido                                                                           |
+| ------------------------------- | ----------------------------------------------------------------------------------- |
 | 🌊 **SATURATION** (por defecto) | Ráfagas de tráfico, DDoS, crawlers de IA, bots abusivos — abuso de tráfico/recursos |
-| 🛡️ **SECURITY** | Payloads SQLi/XSS/LFI, recon, bots falsos, UAs de escáner — intentos de compromiso |
-| 🗂️ **OTHER** | Incidentes de baja señal / ruido filtrados de los paneles principales |
+| 🛡️ **SECURITY**                 | Payloads SQLi/XSS/LFI, recon, bots falsos, UAs de escáner — intentos de compromiso  |
+| 🗂️ **OTHER**                    | Incidentes de baja señal / ruido filtrados de los paneles principales               |
 
 ```text
 Tab              cambiar foco entre el log y los paneles de incidentes
 ↑/↓              mover fila         PgUp/PgDn   paginar filas
 Enter / d        abrir incidente o detalle de petición
-f o /            filtrar filas del log
+f o /            filtrar filas del log (Tab cicla ejemplos)
 s o S            menú de orden      t           top values global
 Space            seleccionar fila   A           seleccionar filas visibles
-e                menú de exportación (CSV, JSON, TSV)
+e                menú de exportación (solo CSV, JSON, TSV)
 r                reiniciar filtro, orden y selección de filas
 h                overlay de ayuda contextual (teclas + sintaxis de filtros)
+Esc              cancelar la operación larga activa y luego navegar
 q                preguntar antes de salir
 ```
+
+Columnas de orden: `timestamp` (por defecto, descendente), `ip`, `status`,
+`method`, `path`, `bytes`. A igualdad, desempate siempre por número de fila
+ascendente (orden de stream). Los timestamps inválidos van al final en ambos
+sentidos. La selección está limitada a 5 000 filas. Las filas de incidente se
+cargan en buckets de 200.
 
 ### Pantalla de incidente
 
@@ -379,10 +407,15 @@ plano en la barra de estado — pulsa `Esc` para cancelar y revertir.
 ```text
 ↑/↓ · PgUp/PgDn  navegar            Enter / d   abrir detalle de petición
 t                top values del incidente (sobre el conjunto completo de filas)
-f · s/S          filtrar · ordenar  Space · A   seleccionar fila · página visible
+f · s/S          filtrar · ordenar  Space · A   seleccionar fila · todas / página
 e                exportar           r           reiniciar filtro + selección
+Esc              cancelar la operación activa y luego volver
 b                volver al resumen
 ```
+
+`A` selecciona todas las filas coincidentes si el total es ≤ 5 000; por encima
+solo la página visible. Space también está limitado a 5 000. Filtro/orden/top/
+exportación muestran progreso y `Esc` las cancela.
 
 ### Top values · detalle de petición · exportación
 
@@ -390,13 +423,14 @@ b                volver al resumen
   valores de parámetro. Respeta el filtro activo. `Enter` aplica un filtro desde un valor.
 - **Detalle de petición** (`Enter`/`d`): fuente, timestamp, IP, método, estado,
   bytes, ruta, target, user-agent y línea cruda con ajuste de texto.
-- **Exportación** (`e`): CSV / JSON / TSV. El resumen exporta las filas
-  seleccionadas o el resultado filtrado completo; el incidente exporta en
-  streaming todas las filas filtradas a un fichero temporal y lo renombra de
-  forma atómica al terminar. `Esc` aborta una exportación en curso.
+- **Exportación** (`e`): CSV / JSON / TSV (no Markdown/HTML). El resumen sin
+  selección exporta el resultado filtrado completo; una selección exporta solo
+  esas filas. El incidente escribe en streaming por chunks a un temporal único
+  y sustituye el destino de forma atómica al terminar. `Esc` aborta una
+  exportación en curso.
 
 > Las operaciones largas de filtrado/orden/top/exportación siempre muestran un
-> estado de carga — la app nunca *parece* congelada — y `Esc` cancela
+> estado de carga — la app nunca _parece_ congelada — y `Esc` cancela
 > consistentemente la operación activa antes de navegar.
 
 ---
@@ -442,16 +476,18 @@ palabras en algún punto de la línea buscable.
 
 ## 📊 Informes
 
-| Formato | Flag | Notas |
-| --- | --- | --- |
-| Terminal | `--no-interactive` (o sin TTY) | Resumen + incidentes con color |
-| JSON | `--json` | Legible por máquina, modelo de informe tipado |
-| Markdown | `--markdown` | Ideal para tickets / PRs |
-| HTML | `--html` | **Autocontenido, offline, sin recursos externos** |
+| Formato  | Flag                           | Notas                                             |
+| -------- | ------------------------------ | ------------------------------------------------- |
+| Terminal | `--no-interactive` (o sin TTY) | Resumen + incidentes con color                    |
+| JSON     | `--json`                       | Legible por máquina, modelo de informe tipado     |
+| Markdown | `--markdown`                   | Ideal para tickets / PRs                          |
+| HTML     | `--html`                       | **Autocontenido, offline, sin recursos externos** |
 
-Usa `--out <path>` para escribir a disco. Los informes HTML incrustan CSS/JS,
-escapan todos los datos, traen tablas ordenables/filtrables y son aptos para
-impresión/PDF.
+Usa `--out <path>` para escribir a disco. Los informes HTML son un único fichero
+offline: CSS y JS inline, sin recursos de red, datos escapados, filtro de
+tablas en el cliente, cabeceras clicables para ordenar, resumen ejecutivo,
+timeline, incidentes, paths, IPs, user agents, y payloads/acciones sugeridas
+cuando existen. El CSS de impresión oculta la barra de filtro.
 
 ---
 
@@ -459,24 +495,24 @@ impresión/PDF.
 
 Cada incidente lleva un `kind` que determina su panel en la TUI:
 
-| Kind | Panel | Ejemplos |
-| --- | --- | --- |
-| `compromise` | 🛡️ SECURITY | Payloads SQLi/XSS/LFI, recon, bots falsos, herramientas de escaneo |
-| `saturation` | 🌊 SATURATION | Ráfagas DDoS, crawlers de IA, crawlers abusivos, hotspots de POST |
-| `noise` | 🗂️ OTHER | Patrones de baja señal que difícilmente necesitan acción inmediata |
+| Kind         | Panel         | Ejemplos                                                           |
+| ------------ | ------------- | ------------------------------------------------------------------ |
+| `compromise` | 🛡️ SECURITY   | Payloads SQLi/XSS/LFI, recon, bots falsos, herramientas de escaneo |
+| `saturation` | 🌊 SATURATION | Ráfagas DDoS, crawlers de IA, crawlers abusivos, hotspots de POST  |
+| `noise`      | 🗂️ OTHER      | Patrones de baja señal que difícilmente necesitan acción inmediata |
 
 <details>
 <summary><strong>Reglas de payload y recon</strong></summary>
 
-| Prefijo ID | Categoría | Kind | Significado |
-| --- | --- | --- | --- |
-| `sqli:` | `sql_injection` | compromise | `union select`, sleep/benchmark, SQL codificado |
-| `xss:` | `xss` | compromise | indicadores de ejecución de script/navegador |
-| `lfi_rfi:` | `path_traversal` | compromise | traversal, LFI/RFI, `php://filter`, rutas sensibles |
-| `ssrf:` | `ssrf` | compromise | localhost, IPs/hosts de metadata, params tipo callback |
-| `command_injection:` | `command_injection` | compromise | metacaracteres de shell + indicadores de comando |
-| `recon_sensitive_file:` | `recon` | compromise | sondeos de `.env`, `.git`, backups, dumps |
-| `rare_method:` | `http_anomaly` | noise | métodos poco comunes (`CONNECT`, `TRACE`, `OPTIONS`) |
+| Prefijo ID              | Categoría           | Kind       | Significado                                            |
+| ----------------------- | ------------------- | ---------- | ------------------------------------------------------ |
+| `sqli:`                 | `sql_injection`     | compromise | `union select`, sleep/benchmark, SQL codificado        |
+| `xss:`                  | `xss`               | compromise | indicadores de ejecución de script/navegador           |
+| `lfi_rfi:`              | `path_traversal`    | compromise | traversal, LFI/RFI, `php://filter`, rutas sensibles    |
+| `ssrf:`                 | `ssrf`              | compromise | localhost, IPs/hosts de metadata, params tipo callback |
+| `command_injection:`    | `command_injection` | compromise | metacaracteres de shell + indicadores de comando       |
+| `recon_sensitive_file:` | `recon`             | compromise | sondeos de `.env`, `.git`, backups, dumps              |
+| `rare_method:`          | `http_anomaly`      | noise      | métodos poco comunes (`CONNECT`, `TRACE`, `OPTIONS`)   |
 
 Los incidentes de payload se agrupan **por IP atacante** (un incidente por IP).
 Puntuación por resultado de respuesta:
@@ -493,32 +529,32 @@ Puntuación por resultado de respuesta:
 <details>
 <summary><strong>Reglas de ruta agregada, rate / DDoS y tormentas de error</strong></summary>
 
-| Prefijo ID | Categoría | Kind | Significado |
-| --- | --- | --- | --- |
-| `abusive_crawl:` | `abusive_crawling` | saturation/noise | presión servida o crawling distribuido en ruta no-entrypoint |
-| `query_explosion:` | `abusive_crawling` | noise | una ruta con muchas variantes de query |
-| `post_hotspot:` | `post_hotspot` | noise | endpoint con un número inusual de POSTs |
-| `ddos_rps_burst_single_ip:` | `ddos` | saturation | una IP supera RPS por segundo durante segundos consecutivos |
-| `ddos_global_rps_spike` | `ddos` | saturation | RPS global sobre la línea base durante segundos consecutivos |
-| `http_head_flood:` | `ddos` | saturation | una IP con alto ratio + pico de peticiones HEAD |
-| `ddos_distributed_subnet:` | `ddos` | saturation | IPv4 `/24` o IPv6 `/48` sobre umbrales de RPS + IPs únicas |
-| `http_4xx_storm:` | `http_anomaly` | noise | una IP, muchas 4xx en buckets de minuto adyacentes |
-| `http_5xx_storm:` | `http_anomaly` | saturation | una IP, muchas 5xx en buckets de minuto adyacentes |
+| Prefijo ID                  | Categoría          | Kind             | Significado                                                  |
+| --------------------------- | ------------------ | ---------------- | ------------------------------------------------------------ |
+| `abusive_crawl:`            | `abusive_crawling` | saturation/noise | presión servida o crawling distribuido en ruta no-entrypoint |
+| `query_explosion:`          | `abusive_crawling` | noise            | una ruta con muchas variantes de query                       |
+| `post_hotspot:`             | `post_hotspot`     | noise            | endpoint con un número inusual de POSTs                      |
+| `ddos_rps_burst_single_ip:` | `ddos`             | saturation       | una IP supera RPS por segundo durante segundos consecutivos  |
+| `ddos_global_rps_spike`     | `ddos`             | saturation       | RPS global sobre la línea base durante segundos consecutivos |
+| `http_head_flood:`          | `ddos`             | saturation       | una IP con alto ratio + pico de peticiones HEAD              |
+| `ddos_distributed_subnet:`  | `ddos`             | saturation       | IPv4 `/24` o IPv6 `/48` sobre umbrales de RPS + IPs únicas   |
+| `http_4xx_storm:`           | `http_anomaly`     | noise            | una IP, muchas 4xx en buckets de minuto adyacentes           |
+| `http_5xx_storm:`           | `http_anomaly`     | saturation       | una IP, muchas 5xx en buckets de minuto adyacentes           |
 
 </details>
 
 <details>
 <summary><strong>Reglas de bots y escáneres</strong></summary>
 
-| Prefijo ID | Categoría | Kind | Significado |
-| --- | --- | --- | --- |
-| `ai_scraper_known:` | `ai_scraper` | saturation/noise | UA conocido de crawler/asistente de IA, agrupado por bot |
-| `scanner_ua_known:` | `scanner` | compromise | UA conocido de escáner/herramienta ofensiva |
-| `scanner_signature_paths:` | `scanner` | compromise | una IP toca muchas rutas de fingerprint |
-| `single_ip_path_explosion:` | `abusive_crawling` | saturation | una IP > 10 rutas únicas/minuto sostenido |
-| `ua_rotation_same_ip:` | `http_anomaly` | noise | una IP, muchos UAs **y** pico RPS ≥ 5 |
-| `fake_bot_googlebot:` | `fake_bot` | compromise | dice ser Googlebot pero la IP está fuera de rangos publicados |
-| `fake_bot_bingbot:` | `fake_bot` | compromise | dice ser bingbot pero la IP está fuera de rangos de Bing |
+| Prefijo ID                  | Categoría          | Kind             | Significado                                                   |
+| --------------------------- | ------------------ | ---------------- | ------------------------------------------------------------- |
+| `ai_scraper_known:`         | `ai_scraper`       | saturation/noise | UA conocido de crawler/asistente de IA, agrupado por bot      |
+| `scanner_ua_known:`         | `scanner`          | compromise       | UA conocido de escáner/herramienta ofensiva                   |
+| `scanner_signature_paths:`  | `scanner`          | compromise       | una IP toca muchas rutas de fingerprint                       |
+| `single_ip_path_explosion:` | `abusive_crawling` | saturation       | una IP > 10 rutas únicas/minuto sostenido                     |
+| `ua_rotation_same_ip:`      | `http_anomaly`     | noise            | una IP, muchos UAs **y** pico RPS ≥ 5                         |
+| `fake_bot_googlebot:`       | `fake_bot`         | compromise       | dice ser Googlebot pero la IP está fuera de rangos publicados |
+| `fake_bot_bingbot:`         | `fake_bot`         | compromise       | dice ser bingbot pero la IP está fuera de rangos de Bing      |
 
 Notas: `single_ip_path_explosion` exige **pathsPerMinute ≥ 10** (cargas de
 página con muchos assets no lo disparan). `abusive_crawl` entra en SATURATION
@@ -542,12 +578,12 @@ pnpm run update-bot-ranges
 Cada incidente tiene `kind`, `severity`, `score` (0–100), `evidence` tipada,
 `samples` redactadas y `successful?`.
 
-| Score | Severidad |
-| --- | --- |
-| 0–24 | `info` |
-| 25–49 | `low` |
-| 50–74 | `medium` |
-| 75–89 | `high` |
+| Score  | Severidad  |
+| ------ | ---------- |
+| 0–24   | `info`     |
+| 25–49  | `low`      |
+| 50–74  | `medium`   |
+| 75–89  | `high`     |
 | 90–100 | `critical` |
 
 Multiplicadores de post-procesado:
@@ -582,6 +618,8 @@ de cliente** — mantenlos fuera de commits públicos.
 ```bash
 pnpm install
 pnpm run typecheck
+pnpm lint
+pnpm run format:check
 pnpm test
 pnpm run build
 

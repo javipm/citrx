@@ -13,6 +13,14 @@ export interface AccessLogEntry {
   bytes: number | null;
   referer: string | null;
   userAgent: string | null;
+  /** Parsed from custom formats when mapped; unused by detection/TUI/reports. */
+  host: string | null;
+  /** Seconds, parsed from custom formats when mapped; unused by detection/TUI/reports. */
+  requestTime: number | null;
+  /** Seconds, parsed from custom formats when mapped; unused by detection/TUI/reports. */
+  upstreamTime: number | null;
+  /** Parsed from custom formats when mapped; unused by detection/TUI/reports. */
+  forwardedFor: string | null;
 }
 
 export interface AccessLogParser {

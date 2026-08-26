@@ -219,14 +219,32 @@ describe("openTextInputStreams", () => {
   it("throws when a .zip archive only contains non-candidate entries", async () => {
     await withTempDir(async (directory) => {
       const file = join(directory, "no-candidates.zip");
-      await writeFile(
-        file,
-        createStoredZip("__MACOSX/._ignored", Buffer.from("irrelevant"))
-      );
+      await writeFile(file, createStoredZip("__MACOSX/._ignored", Buffer.from("irrelevant")));
 
       await expect(readAllLines(file)).rejects.toThrow(
         /does not contain candidate access-log files/
       );
+    });
+  });
+
+  it("rejects corrupt gzip data without uncaughtException", async () => {
+    await withTempDir(async (directory) => {
+      const file = join(directory, "broken.log.gz");
+      await writeFile(file, Buffer.from("this is not gzip"));
+
+      const uncaught: unknown[] = [];
+      const onUncaught = (error: unknown) => {
+        uncaught.push(error);
+      };
+      process.on("uncaughtException", onUncaught);
+
+      try {
+        await expect(readAllLines(file)).rejects.toThrow();
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(uncaught).toEqual([]);
+      } finally {
+        process.off("uncaughtException", onUncaught);
+      }
     });
   });
 

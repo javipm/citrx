@@ -47,6 +47,11 @@ export interface CliRuntime {
    * When omitted, the default `openRunTui` implementation is used.
    */
   openInteractive?: InteractiveLauncher;
+  /**
+   * Success-path exit code set by the root action (`0` or `2`).
+   * Commander usage/version events still throw {@link CommanderError}.
+   */
+  exitCode?: number;
 }
 
 /**
@@ -75,7 +80,7 @@ export function createProgram(runtime: CliRuntime): Command {
     .option("--no-interactive", "Print the terminal report instead of opening the TUI.")
     .option(
       "--format <format>",
-      "Access-log format: auto, apache_common, apache_combined, nginx_combined, or custom:<name>.",
+      "Access-log format: auto, apache_common, apache_combined, nginx_combined (same combined regex as apache_combined), or custom:<name>.",
       "auto"
     )
     .option("--format-config <path>", "JSON file with custom access-log formats.")
@@ -94,7 +99,7 @@ export function createProgram(runtime: CliRuntime): Command {
     .exitOverride();
 
   program.action(async (options: Record<string, unknown>, command: Command) => {
-    await runRootAnalysis(command.args, options, runtime);
+    runtime.exitCode = await runRootAnalysis(command.args, options, runtime);
   });
 
   return program;
@@ -104,7 +109,7 @@ async function runRootAnalysis(
   initialPaths: string[],
   options: Record<string, unknown>,
   runtime: CliRuntime
-): Promise<void> {
+): Promise<number> {
   let paths = initialPaths;
   const top = parseTopOption(options.top);
   const outputFormat = parseOutputFormat(options);
@@ -135,7 +140,7 @@ async function runRootAnalysis(
 
   const format = parseFormatOption(options.format);
   const sources = await progress.withStep("Discovering inputs", () =>
-    buildInputSources(paths, runtime)
+    buildInputSources(paths, runtime, options)
   );
   const workspace = await createRunWorkspace();
   const accessLogWriter = await createAccessLogIndexWriter(workspace.directory);
@@ -177,7 +182,7 @@ async function runRootAnalysis(
         await setImmediate();
       });
       await openInteractiveRun(run, runtime);
-      return;
+      return exitCodeForReport(report);
     }
 
     if (typeof options.out === "string") {
@@ -185,11 +190,12 @@ async function runRootAnalysis(
         renderReport(report, outputFormat, options, runtime)
       );
       await writeFile(options.out, output, "utf8");
-      return;
+      return exitCodeForReport(report);
     }
 
     const output = renderReport(report, outputFormat, options, runtime);
     runtime.stdout.write(output);
+    return exitCodeForReport(report);
   } finally {
     accessLogWriter.close();
     await removeRunWorkspace(workspace.directory);
@@ -217,16 +223,34 @@ function isColorEnabled(options: Record<string, unknown>, runtime: CliRuntime): 
   return options.color !== false && runtime.env.NO_COLOR === undefined;
 }
 
+function exitCodeForReport(report: { incidents: Array<{ severity: string }> }): number {
+  return report.incidents.some(
+    (incident) => incident.severity === "high" || incident.severity === "critical"
+  )
+    ? 2
+    : 0;
+}
+
 async function buildInputSources(
   paths: string[],
-  runtime: CliRuntime
+  runtime: CliRuntime,
+  options: Record<string, unknown>
 ): Promise<AnalyzeInputSource[]> {
   const filePaths = paths.filter((inputPath) => inputPath !== "-");
   const sources: AnalyzeInputSource[] = [];
+  const include = typeof options.include === "string" ? options.include : undefined;
+  const exclude = typeof options.exclude === "string" ? options.exclude : undefined;
+
+  const usingStdin = paths.includes("-") && !runtime.stdinIsTTY;
 
   if (filePaths.length > 0) {
+    const discovered = await discoverInputFiles(filePaths, { include, exclude });
+    if (discovered.length === 0 && !usingStdin) {
+      throw new Error(emptyDiscoveryError(filePaths, include, exclude));
+    }
+
     sources.push(
-      ...(await discoverInputFiles(filePaths)).map((filePath) => ({
+      ...discovered.map((filePath) => ({
         kind: "file" as const,
         path: filePath
       }))
@@ -248,6 +272,22 @@ async function buildInputSources(
   return sources;
 }
 
+function emptyDiscoveryError(
+  filePaths: string[],
+  include: string | undefined,
+  exclude: string | undefined
+): string {
+  if (include?.trim() || exclude?.trim()) {
+    return "No input files matched --include/--exclude.";
+  }
+
+  if (filePaths.length === 1) {
+    return `No input files found in ${filePaths[0]}.`;
+  }
+
+  return "No input files found.";
+}
+
 function parseFormatOption(value: unknown): FormatChoice {
   const format = String(value ?? "auto");
 
@@ -256,7 +296,7 @@ function parseFormatOption(value: unknown): FormatChoice {
   }
 
   throw new Error(
-    "--format must be auto, apache_common, apache_combined, nginx_combined, or custom:<name>."
+    "--format must be auto, apache_common, apache_combined, nginx_combined (alias of the same combined regex), or custom:<name>."
   );
 }
 
@@ -376,10 +416,12 @@ function renderReport(
  * @param argv - Argument vector, typically `process.argv`.
  * @param runtime - Optional partial runtime overrides; unset fields default to
  *   their `process.*` equivalents.
- * @returns Exit code: `0` on success, `1` on unhandled error, or the
+ * @returns Exit code: `0` on success without high/critical incidents, `1` on
+ *   unhandled error, `2` when high/critical incidents were found, or the
  *   Commander-supplied exit code on a usage/version event.
  */
 export async function runCli(argv: string[], runtime: Partial<CliRuntime> = {}): Promise<number> {
+  const debug = argv.includes("--debug");
   const cliRuntime: CliRuntime = {
     stdout: runtime.stdout ?? process.stdout,
     stderr: runtime.stderr ?? process.stderr,
@@ -391,7 +433,7 @@ export async function runCli(argv: string[], runtime: Partial<CliRuntime> = {}):
 
   try {
     await createProgram(cliRuntime).parseAsync(argv);
-    return 0;
+    return cliRuntime.exitCode ?? 0;
   } catch (error) {
     if (error instanceof CommanderError) {
       return error.exitCode;
@@ -399,6 +441,9 @@ export async function runCli(argv: string[], runtime: Partial<CliRuntime> = {}):
 
     const message = error instanceof Error ? error.message : String(error);
     cliRuntime.stderr.write(`${APP_NAME}: ${message}\n`);
+    if (debug && error instanceof Error && error.stack) {
+      cliRuntime.stderr.write(`${error.stack}\n`);
+    }
     return 1;
   }
 }

@@ -8,8 +8,8 @@ import {
   iterateAccessLogIndexChunks
 } from "../../run/access-index.js";
 import { requestDetailLines } from "../utils/text.js";
+import { BucketLoadCoordinator, INCIDENT_BUCKET_SIZE } from "./bucket-load.js";
 
-const INCIDENT_BUCKET_SIZE = 200;
 const INCIDENT_PAGE_CACHE_MAX = 50;
 
 export function binarySearchIncludes(arr: readonly number[], val: number): boolean {
@@ -68,11 +68,10 @@ export function useVisibleLines({
   incidentRowNumbers
 }: VisibleLinesOptions) {
   // ── Bucket cache (incident path) ─────────────────────────────────────────
-  const bucketCacheRef = useRef<Map<number, IncidentLogLine[]>>(new Map());
-  const inFlightRef = useRef<Map<number, Promise<IncidentLogLine[]>>>(new Map());
-  const cacheOrderRef = useRef<number[]>([]); // LRU order (front=oldest)
+  const loaderRef = useRef(new BucketLoadCoordinator<IncidentLogLine[]>());
+  const cacheOrderRef = useRef<number[]>([]);
   const prevOrderedRef = useRef<OrderedRowNumbers | null>(null);
-  const cancelledRef = useRef(false);
+  const [pageError, setPageError] = useState<string | null>(null);
   const lastGoodViewportRef = useRef<{
     pageLines: IncidentLogLine[];
     pageStart: number;
@@ -82,8 +81,7 @@ export function useVisibleLines({
   // Reset bucket cache when orderedRowNumbers reference changes (new build or new incident)
   if (prevOrderedRef.current !== orderedRowNumbers) {
     prevOrderedRef.current = orderedRowNumbers;
-    bucketCacheRef.current = new Map();
-    inFlightRef.current = new Map();
+    loaderRef.current.resetOrigin();
     cacheOrderRef.current = [];
     lastGoodViewportRef.current = null;
   }
@@ -116,12 +114,12 @@ export function useVisibleLines({
   useEffect(() => {
     if (!orderedRowNumbers || requiredBucketsKey === "") return;
 
-    cancelledRef.current = false;
+    const loader = loaderRef.current;
+    const generation = loader.generation;
+    setPageError(null);
     const neededBuckets = requiredBucketsKey.split(",").map(Number);
 
     for (const b of neededBuckets) {
-      if (bucketCacheRef.current.has(b) || inFlightRef.current.has(b)) continue;
-
       const start = b * INCIDENT_BUCKET_SIZE;
       const end = Math.min(start + INCIDENT_BUCKET_SIZE, orderedRowNumbers.length);
       const sliceRows: number[] = [];
@@ -129,7 +127,7 @@ export function useVisibleLines({
         sliceRows.push(orderedRowNumbers.rowAt(i));
       }
 
-      const promise = (async (): Promise<IncidentLogLine[]> => {
+      const promise = loader.start(b, async () => {
         const lines: IncidentLogLine[] = [];
         for await (const chunk of iterateAccessLogIndexChunks(
           accessIndex,
@@ -138,35 +136,40 @@ export function useVisibleLines({
           lines.push(...chunk);
         }
         return lines;
-      })();
-
-      inFlightRef.current.set(b, promise);
+      });
+      if (!promise) {
+        continue;
+      }
 
       promise
         .then((lines) => {
-          if (cancelledRef.current) return;
-          inFlightRef.current.delete(b);
-
-          // LRU eviction: skip pinned (in-flight) entries
+          const result = loader.settle(generation, b, promise, lines);
+          if (result !== "applied") {
+            return;
+          }
           while (cacheOrderRef.current.length >= INCIDENT_PAGE_CACHE_MAX) {
             const oldest = cacheOrderRef.current[0];
             if (oldest === undefined) break;
-            if (inFlightRef.current.has(oldest)) break; // pinned
+            if (loader.inFlight.has(oldest)) {
+              const resolvedOldest = cacheOrderRef.current.find((id) => !loader.inFlight.has(id));
+              if (resolvedOldest === undefined) break;
+              cacheOrderRef.current.splice(cacheOrderRef.current.indexOf(resolvedOldest), 1);
+              loader.cache.delete(resolvedOldest);
+              continue;
+            }
             cacheOrderRef.current.shift();
-            bucketCacheRef.current.delete(oldest);
+            loader.cache.delete(oldest);
           }
-          bucketCacheRef.current.set(b, lines);
           cacheOrderRef.current.push(b);
           setPageVersion((v) => v + 1);
         })
-        .catch(() => {
-          if (!cancelledRef.current) inFlightRef.current.delete(b);
+        .catch((error: unknown) => {
+          const result = loader.settle(generation, b, promise, undefined, error);
+          if (result === "error") {
+            setPageError(error instanceof Error ? error.message : String(error));
+          }
         });
     }
-
-    return () => {
-      cancelledRef.current = true;
-    };
   }, [requiredBucketsKey, orderedRowNumbers, accessIndex]);
 
   // ── Viewport derivation ────────────────────────────────────────────────────
@@ -181,12 +184,12 @@ export function useVisibleLines({
       ? requiredBucketsKey.split(",").map(Number)
       : [];
     const allLoaded =
-      neededBuckets.length > 0 && neededBuckets.every((b) => bucketCacheRef.current.has(b));
+      neededBuckets.length > 0 && neededBuckets.every((b) => loaderRef.current.cache.has(b));
 
     if (allLoaded) {
       const allLines: IncidentLogLine[] = [];
       for (const b of neededBuckets) {
-        allLines.push(...(bucketCacheRef.current.get(b) ?? []));
+        allLines.push(...(loaderRef.current.cache.get(b) ?? []));
       }
       const startInFirst = pageStart - firstBucket * INCIDENT_BUCKET_SIZE;
       const slice = allLines.slice(startInFirst, startInFirst + pageSize);
@@ -229,6 +232,7 @@ export function useVisibleLines({
   return {
     pageLines,
     pageLoading,
+    pageError,
     pageStart,
     selectedLines,
     selectedLineKeys,

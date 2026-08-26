@@ -7,6 +7,7 @@ import { SCANNER_UA_PATTERNS } from "../rules/data/scanner-uas.js";
 import type { AiBotStats, Incident, IncidentKind, IpBehaviorStats, TimeStats } from "./types.js";
 import { expandIPv6, ipInPreparedRanges, prepareRanges } from "./ip-ranges.js";
 import { accessLogTimestampToEpochSeconds } from "./timestamp.js";
+import { MAX_GLOBAL_RPS_SECONDS, MAX_OVERFLOW_RPS_SECONDS } from "./capped-counter.js";
 
 export const MAX_TRACKED_IPS = 100_000;
 const STALE_IP_SECONDS = 900;
@@ -60,6 +61,8 @@ const FAKE_BOT_MIN_REQUESTS = 10;
 interface BehaviorTrackerOptions {
   maxTrackedIps?: number;
   maxTrackedSubnets?: number;
+  maxGlobalRpsSeconds?: number;
+  maxOverflowRpsSeconds?: number;
 }
 
 interface IpBehaviorState {
@@ -139,6 +142,7 @@ interface BotState {
   firstSeen: number;
   lastSeen: number;
   pathMinuteBuckets: Map<number, Set<string>>;
+  latestPathMinute: number;
   maxPathsPerMinute: number;
   highPathMinuteCount: number;
   status2xx: number;
@@ -170,9 +174,36 @@ export interface BehaviorAnalysis {
   incidents: Incident[];
 }
 
+/**
+ * p95 of per-second RPS over [firstSeen, lastSeen], counting missing seconds as
+ * zeros without allocating or iterating the empty range.
+ */
+export function sparseRpsP95(
+  occupied: Map<number, number>,
+  firstSeen: number,
+  lastSeen: number
+): number {
+  const duration = lastSeen - firstSeen + 1;
+  if (duration <= 0) {
+    return 0;
+  }
+
+  const values = [...occupied.values()].sort((a, b) => a - b);
+  const zeros = Math.max(0, duration - occupied.size);
+  const p95Index = Math.floor((duration - 1) * 0.95);
+
+  if (p95Index < zeros) {
+    return 0;
+  }
+
+  return values[p95Index - zeros] ?? 0;
+}
+
 export class BehaviorTracker {
   private readonly maxTrackedIps: number;
   private readonly maxTrackedSubnets: number;
+  private readonly maxGlobalRpsSeconds: number;
+  private readonly maxOverflowRpsSeconds: number;
   private readonly ips = new Map<string, IpBehaviorState>();
   private readonly subnets = new Map<string, SubnetState>();
   private readonly googlebotRanges = prepareRanges(GOOGLEBOT_RANGES);
@@ -189,10 +220,14 @@ export class BehaviorTracker {
   private outOfOrderTimestamps = 0;
   private droppedIpCount = 0;
   private droppedSubnetCount = 0;
+  private readonly overflowRpsBySecond = new Map<number, number>();
+  droppedRpsSeconds = 0;
 
   constructor(options: BehaviorTrackerOptions = {}) {
     this.maxTrackedIps = options.maxTrackedIps ?? MAX_TRACKED_IPS;
     this.maxTrackedSubnets = options.maxTrackedSubnets ?? MAX_TRACKED_SUBNETS;
+    this.maxGlobalRpsSeconds = options.maxGlobalRpsSeconds ?? MAX_GLOBAL_RPS_SECONDS;
+    this.maxOverflowRpsSeconds = options.maxOverflowRpsSeconds ?? MAX_OVERFLOW_RPS_SECONDS;
   }
 
   observe(
@@ -266,9 +301,36 @@ export class BehaviorTracker {
   }
 
   private observeGlobalRps(epochSecond: number): void {
-    const count = (this.globalRpsBySecond.get(epochSecond) ?? 0) + 1;
-    this.globalRpsBySecond.set(epochSecond, count);
+    const stored = this.globalRpsBySecond.get(epochSecond);
+    if (stored !== undefined) {
+      const count = stored + 1;
+      this.globalRpsBySecond.set(epochSecond, count);
+      this.notePeakRps(count, epochSecond);
+      return;
+    }
 
+    if (this.globalRpsBySecond.size < this.maxGlobalRpsSeconds) {
+      this.globalRpsBySecond.set(epochSecond, 1);
+      this.notePeakRps(1, epochSecond);
+      return;
+    }
+
+    const overflowStored = this.overflowRpsBySecond.get(epochSecond);
+    if (overflowStored !== undefined) {
+      const count = overflowStored + 1;
+      this.overflowRpsBySecond.set(epochSecond, count);
+      this.notePeakRps(count, epochSecond);
+      return;
+    }
+
+    if (this.overflowRpsBySecond.size < this.maxOverflowRpsSeconds) {
+      this.overflowRpsBySecond.set(epochSecond, 1);
+      this.droppedRpsSeconds = this.overflowRpsBySecond.size;
+      this.notePeakRps(1, epochSecond);
+    }
+  }
+
+  private notePeakRps(count: number, epochSecond: number): void {
     if (count > this.peakGlobalRps) {
       this.peakGlobalRps = count;
       this.peakGlobalRpsAt = epochSecond;
@@ -596,6 +658,7 @@ export class BehaviorTracker {
     entry: AccessLogEntry,
     epochSecond: number
   ): void {
+    const minute = Math.floor(epochSecond / 60);
     const bot = this.botRollup.get(botName) ?? {
       botName,
       requests: 0,
@@ -605,6 +668,7 @@ export class BehaviorTracker {
       firstSeen: epochSecond,
       lastSeen: epochSecond,
       pathMinuteBuckets: new Map<number, Set<string>>(),
+      latestPathMinute: minute,
       maxPathsPerMinute: 0,
       highPathMinuteCount: 0,
       status2xx: 0,
@@ -629,7 +693,6 @@ export class BehaviorTracker {
       bot.paths.add(entry.path);
     }
 
-    const minute = Math.floor(epochSecond / 60);
     this.observeBotStatus(bot, entry.status, minute);
     const paths = bot.pathMinuteBuckets.get(minute) ?? new Set<string>();
     const previousSize = paths.size;
@@ -641,8 +704,9 @@ export class BehaviorTracker {
       bot.highPathMinuteCount += 1;
     }
 
+    bot.latestPathMinute = Math.max(bot.latestPathMinute, minute);
     for (const bucket of bot.pathMinuteBuckets.keys()) {
-      if (bucket < minute - 1) {
+      if (bucket < bot.latestPathMinute - 1) {
         bot.pathMinuteBuckets.delete(bucket);
       }
     }
@@ -918,14 +982,7 @@ export class BehaviorTracker {
       return 0;
     }
 
-    const values: number[] = [];
-
-    for (let second = this.firstSeen; second <= this.lastSeen; second += 1) {
-      values.push(this.globalRpsBySecond.get(second) ?? 0);
-    }
-
-    values.sort((a, b) => a - b);
-    return values[Math.floor((values.length - 1) * 0.95)] ?? 0;
+    return sparseRpsP95(this.globalRpsBySecond, this.firstSeen, this.lastSeen);
   }
 
   private buildSingleIpBurstIncidents(): Incident[] {
@@ -966,6 +1023,7 @@ export class BehaviorTracker {
   private buildGlobalSpikeIncidents(globalRpsP95: number): Incident[] {
     const threshold = Math.max(GLOBAL_SPIKE_ABSOLUTE_RPS, globalRpsP95 * GLOBAL_SPIKE_MULTIPLIER);
     let runStart: number | null = null;
+    let runEnd: number | null = null;
     let runLength = 0;
     let bestStart: number | null = null;
     let bestEnd: number | null = null;
@@ -975,20 +1033,29 @@ export class BehaviorTracker {
       return [];
     }
 
-    for (let second = this.firstSeen; second <= this.lastSeen; second += 1) {
+    const occupied = [...this.globalRpsBySecond.keys()].sort((a, b) => a - b);
+
+    for (const second of occupied) {
       const rps = this.globalRpsBySecond.get(second) ?? 0;
 
       if (rps >= threshold) {
-        runStart ??= second;
-        runLength += 1;
+        if (runEnd !== null && second === runEnd + 1) {
+          runLength += 1;
+          runEnd = second;
+        } else {
+          runStart = second;
+          runEnd = second;
+          runLength = 1;
+        }
 
         if (runLength > bestLength) {
           bestStart = runStart;
-          bestEnd = second;
+          bestEnd = runEnd;
           bestLength = runLength;
         }
       } else {
         runStart = null;
+        runEnd = null;
         runLength = 0;
       }
     }

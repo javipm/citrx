@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import { extname } from "node:path";
 import { PassThrough, type Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { createBrotliDecompress, createGunzip } from "node:zlib";
 
 import * as tar from "tar-stream";
@@ -56,14 +57,33 @@ export async function* openTextInputStreams(file: string): AsyncGenerator<TextIn
  */
 function decompressByName(name: string, stream: Readable): Readable {
   if (name.endsWith(".gz")) {
-    return stream.pipe(createGunzip());
+    return followErrors(stream, createGunzip());
   }
 
   if (name.endsWith(".br")) {
-    return stream.pipe(createBrotliDecompress());
+    return followErrors(stream, createBrotliDecompress());
   }
 
-  return stream;
+  return followErrors(stream);
+}
+
+/**
+ * Forward source/transform errors onto a PassThrough so callers can `for await`
+ * them instead of hitting `uncaughtException` when createReadStream/gunzip fail.
+ */
+function followErrors(source: Readable, transform?: NodeJS.ReadWriteStream): Readable {
+  const output = new PassThrough();
+  const fail = (error: unknown) => {
+    const wrapped = error instanceof Error ? error : new Error(String(error));
+    if (!output.destroyed) {
+      output.destroy(wrapped);
+    }
+  };
+
+  const run = transform ? pipeline(source, transform, output) : pipeline(source, output);
+
+  void run.catch(fail);
+  return output;
 }
 
 /**
@@ -145,7 +165,7 @@ async function* openTarTextInputStreams(file: string): AsyncGenerator<TextInputS
 
   extract.on("finish", () => queue.end());
   extract.on("error", queue.fail);
-  createReadStream(file).pipe(createGunzip()).pipe(extract);
+  void pipeline(createReadStream(file), createGunzip(), extract).catch(queue.fail);
 
   for await (const item of queue) {
     yield item;

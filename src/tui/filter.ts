@@ -472,12 +472,7 @@ function evaluateTerm(
   }
 
   if (term.field === "param") {
-    const result = matchParam(
-      line.target,
-      term.value,
-      term.operator !== "!=",
-      wildcardRegexCache
-    );
+    const result = matchParam(line.target, term.value, term.operator !== "!=", wildcardRegexCache);
     return term.operator === "!=" ? !result : result;
   }
 
@@ -599,7 +594,9 @@ function matchPattern(
   decodePlus = false
 ): boolean {
   const actual = actualValue.toLowerCase();
-  const expected = (decodePlus ? safeDecode(expectedValue) : percentDecode(expectedValue)).toLowerCase();
+  const expected = (
+    decodePlus ? safeDecode(expectedValue) : percentDecode(expectedValue)
+  ).toLowerCase();
 
   if (hasWildcard(expected)) {
     return wildcardRegex(expected, wildcardRegexCache).test(actual);

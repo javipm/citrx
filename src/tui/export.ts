@@ -1,8 +1,14 @@
+import { randomBytes } from "node:crypto";
+import { createWriteStream } from "node:fs";
+import { rename, unlink } from "node:fs/promises";
+import path from "node:path";
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import { Writable } from "node:stream";
+import { finished } from "node:stream/promises";
 import type { Incident, IncidentLogLine } from "../analysis/types.js";
 import { iterateAccessLogIndexChunks, type OrderedRowNumbers } from "../run/access-index.js";
 import type { CitrxRun } from "../run/types.js";
+import { sanitizeText } from "../utils/sanitize.js";
 import type { ExportFormat } from "./types.js";
 
 const DELIMITED_COLUMNS: Array<{
@@ -33,20 +39,27 @@ export function serializeExport(
   }
 
   const separator = format === "csv" ? "," : "\t";
+  const sink = format === "csv" ? "csv" : "tsv";
   const rows = [
-    DELIMITED_COLUMNS.map((column) => escapeDelimitedCell(column.key, separator)).join(separator),
+    DELIMITED_COLUMNS.map((column) => escapeDelimitedCell(column.key, separator, sink)).join(
+      separator
+    ),
     ...lines.map((line) =>
-      DELIMITED_COLUMNS.map((column) => escapeDelimitedCell(column.value(line), separator)).join(
-        separator
-      )
+      DELIMITED_COLUMNS.map((column) =>
+        escapeDelimitedCell(column.value(line), separator, sink)
+      ).join(separator)
     )
   ];
 
   return `${rows.join("\n")}\n`;
 }
 
-function escapeDelimitedCell(value: string | number | null, separator: string): string {
-  const text = value === null ? "" : String(value);
+function escapeDelimitedCell(
+  value: string | number | null,
+  separator: string,
+  sink: "csv" | "tsv"
+): string {
+  const text = value === null ? "" : sanitizeText(String(value), sink);
 
   if (
     text.includes('"') ||
@@ -130,8 +143,10 @@ export async function streamSerializeExport(
     await writeWithBackpressure(writer, signal, "]}");
   } else {
     const separator = format === "csv" ? "," : "\t";
+    const sink = format === "csv" ? "csv" : "tsv";
     const headerRow =
-      DELIMITED_COLUMNS.map((c) => escapeDelimitedCell(c.key, separator)).join(separator) + "\n";
+      DELIMITED_COLUMNS.map((c) => escapeDelimitedCell(c.key, separator, sink)).join(separator) +
+      "\n";
     await writeWithBackpressure(writer, signal, headerRow);
     for await (const chunk of iterateAccessLogIndexChunks(
       source.run.accessIndex,
@@ -141,7 +156,7 @@ export async function streamSerializeExport(
       let rows = "";
       for (const line of chunk) {
         rows +=
-          DELIMITED_COLUMNS.map((c) => escapeDelimitedCell(c.value(line), separator)).join(
+          DELIMITED_COLUMNS.map((c) => escapeDelimitedCell(c.value(line), separator, sink)).join(
             separator
           ) + "\n";
       }
@@ -156,4 +171,70 @@ export async function streamSerializeExport(
     }
   }
   onProgress?.(total, total);
+}
+
+export function uniqueExportTmpPath(finalPath: string): string {
+  const id = randomBytes(8).toString("hex");
+  return path.join(
+    path.dirname(finalPath),
+    `.${path.basename(finalPath)}.tmp-${process.pid}-${id}`
+  );
+}
+
+export async function replaceFileAtomically(
+  tmpPath: string,
+  finalPath: string,
+  io: { rename: typeof rename; unlink: typeof unlink } = { rename, unlink }
+): Promise<void> {
+  try {
+    await io.rename(tmpPath, finalPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EEXIST" && code !== "EPERM" && code !== "EACCES") {
+      throw error;
+    }
+
+    const backup = `${finalPath}.bak-${process.pid}-${randomBytes(4).toString("hex")}`;
+    await io.rename(finalPath, backup);
+    try {
+      await io.rename(tmpPath, finalPath);
+    } catch (inner) {
+      await io.rename(backup, finalPath).catch(() => undefined);
+      throw inner;
+    }
+    await io.unlink(backup).catch(() => undefined);
+  }
+}
+
+export async function streamExportToFile(
+  incident: Incident | undefined,
+  source: { run: CitrxRun; orderedRowNumbers: OrderedRowNumbers },
+  format: ExportFormat,
+  finalPath: string,
+  options: {
+    signal?: AbortSignal;
+    onProgress?: (done: number, total: number) => void;
+  } = {}
+): Promise<void> {
+  const tmpPath = uniqueExportTmpPath(finalPath);
+  const stream = createWriteStream(tmpPath);
+  const streamFailed = new Promise<never>((_, reject) => {
+    stream.once("error", reject);
+  });
+  try {
+    await Promise.race([
+      (async () => {
+        await streamSerializeExport(incident, source, format, stream, options);
+        stream.end();
+        await finished(stream);
+      })(),
+      streamFailed
+    ]);
+    await replaceFileAtomically(tmpPath, finalPath);
+  } catch (error) {
+    stream.destroy();
+    await finished(stream).catch(() => undefined);
+    await unlink(tmpPath).catch(() => undefined);
+    throw error;
+  }
 }

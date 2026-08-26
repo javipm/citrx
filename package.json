@@ -1,11 +1,11 @@
 {
-  "name": "@javipm/citrx",
+  "name": "citrx",
   "version": "0.5.2",
   "description": "CLI for local-first Apache/Nginx access log analysis.",
   "type": "module",
   "packageManager": "pnpm@11.1.0",
   "bin": {
-    "citrx": "dist/cli.js"
+    "citrx": "./dist/cli.js"
   },
   "files": [
     "dist",
@@ -29,7 +29,8 @@
     "version": "pnpm run sync-version && git add src/version.ts package.json",
     "publish:release": "tsx scripts/publish.ts",
     "update-bot-ranges": "tsx scripts/update-bot-ranges.ts",
-    "prepack": "pnpm run build"
+    "prepack": "pnpm run build",
+    "package:smoke": "bash scripts/package-smoke.sh"
   },
   "keywords": [
     "apache",
@@ -62,21 +63,16 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.4",
+    "@eslint/js": "^9.39.5",
     "@types/node": "^26.1.0",
     "@types/react": "^19.2.17",
     "@types/tar-stream": "^3.1.4",
     "@types/yauzl": "^3.4.0",
-    "eslint": "^9.39.4",
-    "prettier": "^3.9.4",
-    "tsx": "^4.23.0",
+    "eslint": "^9.39.5",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.12",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.63.0",
-    "vitest": "^4.1.10"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
+    "typescript-eslint": "^8.68.0",
+    "vitest": "^4.1.11"
   }
 }

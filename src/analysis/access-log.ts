@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { setImmediate } from "node:timers/promises";
 
@@ -9,7 +12,7 @@ import {
   validateParserOnSample
 } from "../parser/access-log.js";
 import type { AccessLogEntry, AccessLogParser, FormatChoice } from "../parser/access-log.js";
-import type { AccessLogIndexWriter } from "../run/access-index.js";
+import { createAccessLogIndexWriter, type AccessLogIndexWriter } from "../run/access-index.js";
 import { AI_BOT_PATTERNS } from "../rules/data/ai-bots.js";
 import { FINGERPRINT_PATHS } from "../rules/data/scanner-fingerprint-paths.js";
 import { SCANNER_UA_PATTERNS } from "../rules/data/scanner-uas.js";
@@ -36,6 +39,18 @@ import type {
 import { BehaviorTracker, extractSubnetPrefix } from "./behavior.js";
 import { requestParamLabels, userAgentLabel } from "./query-params.js";
 import { accessLogTimestampToEpochSeconds } from "./timestamp.js";
+import {
+  MAX_AGGREGATION_KEYS,
+  MAX_GLOBAL_PATH_IP_ENTRIES,
+  MAX_GLOBAL_PATH_VARIANT_ENTRIES,
+  MAX_PATH_STATS,
+  MAX_PATH_UNIQUE_IPS,
+  MAX_QUERY_VARIANTS,
+  addCappedSet,
+  incrementCapped,
+  rememberDroppedKey
+} from "./capped-counter.js";
+import { iterateAccessLogIndexChunks, rangeOrderedRowNumbers } from "../run/access-index.js";
 
 interface AnalyzeOptions {
   top: number;
@@ -81,21 +96,24 @@ interface Counters {
   pathStats: Map<string, PathStats>;
   ruleIncidents: Map<string, Incident>;
   ruleMatches: Map<string, MutableIncidentMatches>;
-  pathMatches: Map<string, MutableIncidentMatches>;
   lineNumbers: Map<string, number>;
   accessLogWriter?: AccessLogIndexWriter;
   behavior: BehaviorTracker;
+  droppedAggregationKeySet: Set<string>;
+  droppedPathSet: Set<string>;
+  droppedPathIpSet: Set<string>;
+  droppedQueryVariantSet: Set<string>;
+  pathIpEntries: number;
+  pathVariantEntries: number;
 }
 
 interface MutableIncidentMatches {
   incidentId: string;
   totalMatches: number;
   /**
-   * Row numbers in numerically ascending (stream) order. For "alias" kind this
-   * array is shared by reference with pathMatches — treat as read-only after
-   * assignment. For "stream" kind it is built via addIncidentLine in stream
-   * order — also read-only. For "grouped" kind it is a fresh array sorted by
-   * normalizeIncidentRowNumbers before finalization.
+   * Row numbers in numerically ascending (stream) order. Rule matches are
+   * built during the parse stream; aggregate and behavior match sets are
+   * filled from a single index scan after incidents are known.
    */
   rowNumbers: number[];
   lines: IncidentLogLine[];
@@ -126,6 +144,30 @@ export async function analyzeAccessLogSources(
     throw new Error("No input sources found.");
   }
 
+  let ownedIndexDir: string | undefined;
+  let writer = options.accessLogWriter;
+  if (!writer) {
+    ownedIndexDir = await mkdtemp(join(tmpdir(), "citrx-match-index-"));
+    writer = await createAccessLogIndexWriter(ownedIndexDir);
+  }
+
+  try {
+    return await analyzeAccessLogSourcesWithWriter(sources, {
+      ...options,
+      accessLogWriter: writer
+    });
+  } finally {
+    if (ownedIndexDir) {
+      writer.close();
+      await rm(ownedIndexDir, { recursive: true, force: true });
+    }
+  }
+}
+
+async function analyzeAccessLogSourcesWithWriter(
+  sources: AnalyzeInputSource[],
+  options: AnalyzeOptions
+): Promise<AnalyzeReport> {
   const customParsers = await loadCustomParsers(options.formatConfig);
   const counters: Counters = {
     files: 0,
@@ -144,10 +186,15 @@ export async function analyzeAccessLogSources(
     pathStats: new Map(),
     ruleIncidents: new Map(),
     ruleMatches: new Map(),
-    pathMatches: new Map(),
     lineNumbers: new Map(),
     accessLogWriter: options.accessLogWriter,
-    behavior: new BehaviorTracker()
+    behavior: new BehaviorTracker(),
+    droppedAggregationKeySet: new Set(),
+    droppedPathSet: new Set(),
+    droppedPathIpSet: new Set(),
+    droppedQueryVariantSet: new Set(),
+    pathIpEntries: 0,
+    pathVariantEntries: 0
   };
   const inputFormats: AnalyzeReport["inputFormats"] = [];
 
@@ -210,7 +257,12 @@ export async function analyzeAccessLogSources(
       parsedLines: counters.parsedLines,
       filteredLines: counters.filteredLines,
       invalidLines: counters.invalidLines,
-      totalBytes: counters.totalBytes
+      totalBytes: counters.totalBytes,
+      droppedAggregationKeys: counters.droppedAggregationKeySet.size,
+      droppedPathStats: counters.droppedPathSet.size,
+      droppedPathIps: counters.droppedPathIpSet.size,
+      droppedQueryVariants: counters.droppedQueryVariantSet.size,
+      droppedRpsSeconds: counters.behavior.droppedRpsSeconds
     },
     topIps,
     topPaths,
@@ -277,8 +329,8 @@ function detectOrValidate(
   if (format !== "auto" && !explicitParser) {
     throw new Error(
       `Unknown access-log format: ${format}. ` +
-        "Use one of auto, apache_common, apache_combined, nginx_combined, " +
-        "or provide --format-config for custom:<name>."
+        "Use one of auto, apache_common, apache_combined, nginx_combined " +
+        "(same combined regex as apache_combined), or provide --format-config for custom:<name>."
     );
   }
 
@@ -436,20 +488,19 @@ function analyzeLine(
 
   storedLine.row = counters.accessLogWriter?.write(storedLine) ?? counters.parsedLines - 1;
   counters.behavior.observe(entry, epochSecond);
-  increment(counters.ips, entry.ip);
-  increment(counters.paths, entry.path);
+  countOrDrop(counters, counters.ips, entry.ip);
+  countOrDrop(counters, counters.paths, entry.path);
   increment(counters.methods, entry.method);
   increment(counters.statuses, String(entry.status));
-  increment(counters.userAgents, userAgentLabel(entry.userAgent));
+  countOrDrop(counters, counters.userAgents, userAgentLabel(entry.userAgent));
   const params = requestParamLabels(entry.target);
   for (const param of params.names) {
-    increment(counters.params, param);
+    countOrDrop(counters, counters.params, param);
   }
   for (const paramValue of params.values) {
-    increment(counters.paramValues, paramValue);
+    countOrDrop(counters, counters.paramValues, paramValue);
   }
-  updatePathStats(counters.pathStats, entry, epochSecond, targetUrl);
-  addIncidentLine(counters.pathMatches, entry.path, storedLine);
+  updatePathStats(counters.pathStats, counters, entry, epochSecond, targetUrl);
 
   for (const hit of detectRequestHits(entry)) {
     const incidentId = mergeRuleHit(counters.ruleIncidents, hit, entry);
@@ -460,13 +511,19 @@ function analyzeLine(
 function fallbackParser(): AccessLogParser {
   return {
     id: "apache_combined",
-    label: "Apache combined",
+    label: "Combined (Apache/Nginx)",
     parse: () => null
   };
 }
 
 function increment(map: Map<string, number>, key: string): void {
   map.set(key, (map.get(key) ?? 0) + 1);
+}
+
+function countOrDrop(counters: Counters, map: Map<string, number>, key: string): void {
+  if (!incrementCapped(map, key, MAX_AGGREGATION_KEYS)) {
+    rememberDroppedKey(counters.droppedAggregationKeySet, key);
+  }
 }
 
 async function topItems(
@@ -562,36 +619,62 @@ async function incidentMatches(
     processed = await yieldAfterFinalizationItems(processed + 1, counters, options);
   }
 
+  const pathIncidents = new Map<string, Incident[]>();
   for (const incident of aggregateIncidents) {
     const path = String(incident.evidence.find((item) => item.key === "path")?.value ?? "");
-    const pathMatches = counters.pathMatches.get(path);
-
-    if (pathMatches) {
-      const entry: MutableIncidentMatches = {
-        incidentId: incident.id,
-        totalMatches: pathMatches.totalMatches,
-        rowNumbers: pathMatches.rowNumbers,
-        lines: pathMatches.lines
-      };
-      normalizeIncidentRowNumbers(entry, "alias");
-      matches.set(incident.id, entry);
-    }
-
-    processed = await yieldAfterFinalizationItems(processed + 1, counters, options);
+    const list = pathIncidents.get(path) ?? [];
+    list.push(incident);
+    pathIncidents.set(path, list);
+    matches.set(incident.id, emptyMatchSet(incident.id));
   }
 
+  const behaviorPreds: Array<{
+    incident: Incident;
+    predicate: (line: IncidentLogLine) => boolean;
+  }> = [];
   for (const incident of behaviorIncidents) {
-    const matchSet = await behaviorIncidentMatches(incident, counters, options);
-
-    if (matchSet.totalMatches > 0) {
-      normalizeIncidentRowNumbers(matchSet, "grouped");
-      matches.set(incident.id, matchSet);
+    const predicate = behaviorIncidentPredicate(incident);
+    if (!predicate) {
+      continue;
     }
+    behaviorPreds.push({ incident, predicate });
+    matches.set(incident.id, emptyMatchSet(incident.id));
+  }
 
-    processed = await yieldAfterFinalizationItems(processed + 1, counters, options);
+  if (pathIncidents.size > 0 || behaviorPreds.length > 0) {
+    const writer = counters.accessLogWriter;
+    if (!writer || writer.index.totalRows === 0) {
+      throw new Error(
+        "Access log index is required to build exact incident match sets. Pass accessLogWriter or use the CLI TUI path."
+      );
+    }
+    writer.flush();
+    let scanned = 0;
+    for await (const chunk of iterateAccessLogIndexChunks(
+      writer.index,
+      rangeOrderedRowNumbers(writer.index.totalRows)
+    )) {
+      for (const line of chunk) {
+        const forPath = pathIncidents.get(line.path);
+        if (forPath) {
+          for (const incident of forPath) {
+            appendMatchLine(matches.get(incident.id)!, line);
+          }
+        }
+        for (const { incident, predicate } of behaviorPreds) {
+          if (predicate(line)) {
+            appendMatchLine(matches.get(incident.id)!, line);
+          }
+        }
+      }
+      scanned = await yieldAfterFinalizationItems(scanned + chunk.length, counters, options);
+    }
   }
 
   return [...matches.values()]
+    .filter(
+      (matchSet) => matchSet.totalMatches > 0 || counters.ruleMatches.has(matchSet.incidentId)
+    )
     .sort((a, b) => a.incidentId.localeCompare(b.incidentId))
     .map((matchSet) => ({
       incidentId: matchSet.incidentId,
@@ -601,38 +684,14 @@ async function incidentMatches(
     }));
 }
 
-async function behaviorIncidentMatches(
-  incident: Incident,
-  counters: Counters,
-  options: AnalyzeOptions
-): Promise<MutableIncidentMatches> {
-  const matchSet: MutableIncidentMatches = {
-    incidentId: incident.id,
-    totalMatches: 0,
-    rowNumbers: [],
-    lines: []
-  };
-  const predicate = behaviorIncidentPredicate(incident);
+function emptyMatchSet(incidentId: string): MutableIncidentMatches {
+  return { incidentId, totalMatches: 0, rowNumbers: [], lines: [] };
+}
 
-  if (!predicate) {
-    return matchSet;
-  }
-
-  let processed = 0;
-
-  for (const pathMatchSet of counters.pathMatches.values()) {
-    for (const line of pathMatchSet.lines) {
-      if (predicate(line)) {
-        matchSet.totalMatches += 1;
-        matchSet.rowNumbers.push(line.row);
-        pushSampleLine(matchSet.lines, line);
-      }
-    }
-
-    processed = await yieldAfterFinalizationItems(processed + 1, counters, options);
-  }
-
-  return matchSet;
+function appendMatchLine(matchSet: MutableIncidentMatches, line: IncidentLogLine): void {
+  matchSet.totalMatches += 1;
+  matchSet.rowNumbers.push(line.row);
+  pushSampleLine(matchSet.lines, line);
 }
 
 async function yieldAfterFinalizationItems(
@@ -764,19 +823,29 @@ function redactRawLine(line: string): string {
 
 function updatePathStats(
   statsByPath: Map<string, PathStats>,
+  counters: Counters,
   entry: AccessLogEntry,
   epoch: number | null,
   targetUrl?: URL | null
-): void {
+): boolean {
   let stats = statsByPath.get(entry.path);
 
   if (!stats) {
+    if (statsByPath.size >= MAX_PATH_STATS) {
+      rememberDroppedKey(counters.droppedPathSet, entry.path);
+      return false;
+    }
+
     stats = {
       path: entry.path,
       count: 0,
       bytes: 0,
       ipCounts: new Map(),
       queryVariants: new Set(),
+      uniqueIpCount: 0,
+      queryVariantCount: 0,
+      uniqueIpsIsLowerBound: false,
+      queryVariantsIsLowerBound: false,
       postCount: 0,
       firstSeen: null,
       lastSeen: null,
@@ -796,11 +865,11 @@ function updatePathStats(
 
   stats.count += 1;
   stats.bytes += entry.bytes ?? 0;
-  stats.ipCounts.set(entry.ip, (stats.ipCounts.get(entry.ip) ?? 0) + 1);
+  observePathIp(stats, counters, entry.ip);
 
   const signature = querySignature(entry.target, targetUrl);
   if (signature) {
-    stats.queryVariants.add(signature);
+    observePathQueryVariant(stats, counters, signature);
   }
 
   if (entry.method === "POST") {
@@ -831,6 +900,59 @@ function updatePathStats(
     if (!stats.samples.includes(sample)) {
       stats.samples.push(sample);
     }
+  }
+
+  return true;
+}
+
+function observePathIp(stats: PathStats, counters: Counters, ip: string): void {
+  if (stats.ipCounts.has(ip)) {
+    incrementCapped(stats.ipCounts, ip, MAX_PATH_UNIQUE_IPS);
+    return;
+  }
+
+  const atCap =
+    stats.ipCounts.size >= MAX_PATH_UNIQUE_IPS ||
+    counters.pathIpEntries >= MAX_GLOBAL_PATH_IP_ENTRIES;
+
+  if (!atCap && incrementCapped(stats.ipCounts, ip, MAX_PATH_UNIQUE_IPS)) {
+    counters.pathIpEntries += 1;
+    stats.uniqueIpCount = (stats.uniqueIpCount ?? 0) + 1;
+    return;
+  }
+
+  stats.uniqueIpsIsLowerBound = true;
+  const droppedKey = `${stats.path}\0${ip}`;
+  if (counters.droppedPathIpSet.has(droppedKey)) {
+    return;
+  }
+  if (rememberDroppedKey(counters.droppedPathIpSet, droppedKey)) {
+    stats.uniqueIpCount = (stats.uniqueIpCount ?? 0) + 1;
+  }
+}
+
+function observePathQueryVariant(stats: PathStats, counters: Counters, signature: string): void {
+  if (stats.queryVariants.has(signature)) {
+    return;
+  }
+
+  const atCap =
+    stats.queryVariants.size >= MAX_QUERY_VARIANTS ||
+    counters.pathVariantEntries >= MAX_GLOBAL_PATH_VARIANT_ENTRIES;
+
+  if (!atCap && addCappedSet(stats.queryVariants, signature, MAX_QUERY_VARIANTS)) {
+    counters.pathVariantEntries += 1;
+    stats.queryVariantCount = (stats.queryVariantCount ?? 0) + 1;
+    return;
+  }
+
+  stats.queryVariantsIsLowerBound = true;
+  const droppedKey = `${stats.path}\0${signature}`;
+  if (counters.droppedQueryVariantSet.has(droppedKey)) {
+    return;
+  }
+  if (rememberDroppedKey(counters.droppedQueryVariantSet, droppedKey)) {
+    stats.queryVariantCount = (stats.queryVariantCount ?? 0) + 1;
   }
 }
 
@@ -901,7 +1023,7 @@ function isInsideDateRange(epochSecond: number | null, options: AnalyzeOptions):
   }
 
   if (epochSecond === null) {
-    return true;
+    return false;
   }
 
   const date = new Date(epochSecond * 1000);

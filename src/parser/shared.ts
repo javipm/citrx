@@ -24,6 +24,10 @@ interface BuildEntryInput {
   bytes?: string;
   referer?: string;
   userAgent?: string;
+  host?: string;
+  requestTime?: string;
+  upstreamTime?: string;
+  forwardedFor?: string;
 }
 
 export function buildAccessLogEntry(input: BuildEntryInput): AccessLogEntry | null {
@@ -65,7 +69,11 @@ export function buildAccessLogEntry(input: BuildEntryInput): AccessLogEntry | nu
     status,
     bytes,
     referer: normalizeOptional(input.referer),
-    userAgent: normalizeOptional(input.userAgent)
+    userAgent: normalizeOptional(input.userAgent),
+    host: normalizeOptional(input.host),
+    requestTime: parseOptionalFloat(input.requestTime),
+    upstreamTime: parseOptionalFloat(input.upstreamTime),
+    forwardedFor: normalizeOptional(input.forwardedFor)
   };
 }
 
@@ -80,4 +88,13 @@ export function normalizePath(target: string): string {
 
 function normalizeOptional(value: string | undefined): string | null {
   return value && value !== "-" ? value : null;
+}
+
+function parseOptionalFloat(value: string | undefined): number | null {
+  if (!value || value === "-") {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }

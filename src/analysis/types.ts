@@ -170,6 +170,22 @@ export interface AnalyzeSummary {
   invalidLines: number;
   /** Total bytes read from all input files. */
   totalBytes: number;
+  /**
+   * Distinct omitted top-map keys tracked so far (lower bound at the fingerprint cap).
+   * Top lists are exact among stored keys only.
+   */
+  droppedAggregationKeys: number;
+  /**
+   * Distinct omitted paths tracked so far (lower bound at the fingerprint cap).
+   * Aggregate path incidents are not raised for those paths.
+   */
+  droppedPathStats: number;
+  /** Distinct omitted per-path IP keys (lower bound at the fingerprint cap). */
+  droppedPathIps: number;
+  /** Distinct omitted query variants (lower bound at the fingerprint cap). */
+  droppedQueryVariants: number;
+  /** Distinct occupied seconds omitted from the primary RPS histogram (lower bound). */
+  droppedRpsSeconds: number;
 }
 
 /** Auto-detected format information for a single input file. */

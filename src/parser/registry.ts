@@ -30,7 +30,12 @@ export function detectParser(
   lines: string[],
   customParsers: AccessLogParser[]
 ): FormatDetectionResult | null {
-  const parsers = [...customParsers, ...builtInParsers];
+  // apache_combined and nginx_combined share one regex; auto-detect keeps a
+  // single combined candidate so we do not pretend to distinguish them.
+  const parsers = [
+    ...customParsers,
+    ...builtInParsers.filter((parser) => parser.id !== "nginx_combined")
+  ];
   const results = parsers
     .map((parser) => scoreParser(parser, lines))
     .filter((result) => result.sampledLines >= MIN_SAMPLE_LINES)

@@ -4,6 +4,7 @@ import type { AnalyzeReport, Incident, IncidentLogLine } from "../../analysis/ty
 import type { SortKey, SortDirection } from "../types.js";
 import { severityColor } from "../utils/colors.js";
 import { fitText } from "../utils/format.js";
+import { sanitizeText } from "../../utils/sanitize.js";
 import { LineTable } from "../components/table.js";
 
 const TIME_KEYS = new Set([
@@ -38,8 +39,10 @@ function extractTimeWindow(evidence: Incident["evidence"]): string | null {
   return null;
 }
 
-function chunkEvidence(evidence: Incident["evidence"], lineWidth: number): string[] {
-  const pairs = evidence.filter((e) => !TIME_KEYS.has(e.key)).map((e) => `${e.key}=${e.value}`);
+export function chunkEvidence(evidence: Incident["evidence"], lineWidth: number): string[] {
+  const pairs = evidence
+    .filter((e) => !TIME_KEYS.has(e.key))
+    .map((e) => `${sanitizeText(String(e.key), "tui")}=${sanitizeText(String(e.value), "tui")}`);
 
   const lines: string[] = [];
   let current = "";
@@ -123,7 +126,11 @@ export function IncidentScreen({
           )
         : null,
       ...evidenceLines.map((line, i) =>
-        React.createElement(Text, { key: `ev-${i}`, color: "gray", wrap: "truncate" }, line)
+        React.createElement(
+          Text,
+          { key: `ev-${i}`, color: "gray", wrap: "truncate" },
+          fitText(line, headerWidth)
+        )
       ),
       React.createElement(
         Text,

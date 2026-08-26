@@ -41,7 +41,7 @@ describe("access log parsers", () => {
     });
   });
 
-  it("auto-detects a built-in format", () => {
+  it("auto-detects combined logs as apache_combined, not nginx_combined", () => {
     const detection = detectParser(
       [
         '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET / HTTP/1.1" 200 123 "-" "Mozilla/5.0"',
@@ -51,6 +51,7 @@ describe("access log parsers", () => {
     );
 
     expect(detection?.parser.id).toBe("apache_combined");
+    expect(detection?.parser.label).toBe("Combined (Apache/Nginx)");
     expect(detection?.parseRatio).toBe(1);
   });
 

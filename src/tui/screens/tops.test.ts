@@ -1,7 +1,19 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { AnalyzeReport, IncidentLogLine } from "../../analysis/types.js";
-import { incidentInsights, nextTopPanel, reportInsights, selectedTopValue, topItemFilter } from "./tops.js";
+import { createAccessLogIndexWriter } from "../../run/access-index.js";
+import {
+  applyOwnedTopsSettle,
+  incidentInsights,
+  incidentInsightsFromRows,
+  nextTopPanel,
+  reportInsights,
+  selectedTopValue,
+  topItemFilter
+} from "./tops.js";
 import { createAccessLogLineFilter } from "../filter.js";
 
 function line(status: number, overrides: Partial<IncidentLogLine> = {}): IncidentLogLine {
@@ -72,7 +84,8 @@ describe("top values screen helpers", () => {
     });
 
     it("matches a long path", () => {
-      const longPath = "/wp-content/uploads/2024/01/some-very-long-file-name-that-exceeds-forty-two-characters.jpg";
+      const longPath =
+        "/wp-content/uploads/2024/01/some-very-long-file-name-that-exceeds-forty-two-characters.jpg";
       const target = line(200, { path: longPath, target: longPath });
       const other = line(200, { path: "/", target: "/" });
       const insights = incidentInsights([target, target, other]);
@@ -88,7 +101,8 @@ describe("top values screen helpers", () => {
     });
 
     it("matches a long query param value", () => {
-      const longValue = "select-1-from-information_schema_tables-union-select-2-3-4-5-extra-padding-past-forty-two";
+      const longValue =
+        "select-1-from-information_schema_tables-union-select-2-3-4-5-extra-padding-past-forty-two";
       const target = line(200, {
         target: `/search?q=${longValue}`,
         path: "/search"
@@ -105,5 +119,57 @@ describe("top values screen helpers", () => {
       expect(matches(target)).toBe(true);
       expect(matches(other)).toBe(false);
     });
+  });
+
+  it("does not apply a stale incident-tops completion after cleanup", () => {
+    const stale = new AbortController();
+    const current = new AbortController();
+    const abortRef = { current: current as AbortController | null };
+    let insights: string | undefined = "keep-new";
+    let loading = true;
+
+    expect(
+      applyOwnedTopsSettle({ cancelled: true, abortRef, controller: stale }, () => {
+        insights = "stale";
+        loading = false;
+        abortRef.current = null;
+      })
+    ).toBe(false);
+    expect(abortRef.current).toBe(current);
+    expect(insights).toBe("keep-new");
+    expect(loading).toBe(true);
+  });
+
+  it("applies incident-tops completion only while the effect still owns the load", () => {
+    const controller = new AbortController();
+    const abortRef = { current: controller as AbortController | null };
+    let loading = true;
+
+    expect(
+      applyOwnedTopsSettle({ cancelled: false, abortRef, controller }, () => {
+        loading = false;
+      })
+    ).toBe(true);
+    expect(abortRef.current).toBeNull();
+    expect(loading).toBe(false);
+  });
+
+  it("throws AbortError instead of returning partial top values", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-tops-abort-"));
+    const writer = await createAccessLogIndexWriter(directory);
+    try {
+      writer.write(line(200, { row: 0, path: "/a" }));
+      writer.write(line(200, { row: 1, path: "/b" }));
+      writer.close();
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        incidentInsightsFromRows({ accessIndex: writer.index } as never, [0, 1], "", {
+          signal: controller.signal
+        })
+      ).rejects.toMatchObject({ name: "AbortError" });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

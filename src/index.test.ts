@@ -213,7 +213,7 @@ describe("citrx CLI", () => {
       stdinIsTTY: true
     });
 
-    expect(code).toBe(0);
+    expect(code).toBe(2);
     const report = JSON.parse(stdout.output()) as {
       accessLog: {
         totalLines: number;
@@ -699,5 +699,151 @@ describe("citrx CLI", () => {
       ]
     });
     expect(stderr.output()).toBe("");
+  });
+
+  it("keeps --format nginx_combined as an explicit alias", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-"));
+    const logFile = join(directory, "access.log");
+    await writeFile(
+      logFile,
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET / HTTP/1.1" 200 12 "-" "Mozilla/5.0"\n'
+    );
+    const stdout = memoryStream();
+
+    const code = await runCli(["node", "citrx", logFile, "--format", "nginx_combined", "--json"], {
+      stdout: stdout.stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.output())).toMatchObject({
+      inputFormats: [expect.objectContaining({ format: "nginx_combined" })]
+    });
+  });
+
+  it("analyzes stdin when include/exclude match no files", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-empty-glob-"));
+    const stdout = memoryStream();
+    const input = Readable.from([
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /stdin HTTP/1.1" 200 123 "-" "Mozilla/5.0"\n'
+    ]);
+
+    const code = await runCli(
+      ["node", "citrx", directory, "-", "--json", "--include", "*.missing"],
+      {
+        stdout: stdout.stream,
+        stderr: memoryStream().stream,
+        stdin: input,
+        stdinIsTTY: false
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.output())).toMatchObject({
+      inputs: ["-"],
+      topPaths: [{ value: "/stdin", count: 1 }]
+    });
+  });
+
+  it("reports a folder with no files when include/exclude are not set", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-empty-dir-"));
+    const stderr = memoryStream();
+
+    const code = await runCli(["node", "citrx", directory, "--json"], {
+      stdout: memoryStream().stream,
+      stderr: stderr.stream,
+      stdinIsTTY: true
+    });
+
+    expect(code).toBe(1);
+    expect(stderr.output()).toContain(`No input files found in ${directory}`);
+    expect(stderr.output()).not.toContain("--include/--exclude");
+  });
+
+  it("applies --include and --exclude to discovered files", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-glob-"));
+    await writeFile(
+      join(directory, "keep.log"),
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /keep HTTP/1.1" 200 10 "-" "Mozilla/5.0"\n'
+    );
+    await writeFile(
+      join(directory, "drop.log"),
+      '203.0.113.11 - - [25/May/2026:03:12:50 +0200] "GET /drop HTTP/1.1" 200 20 "-" "Mozilla/5.0"\n'
+    );
+    await writeFile(
+      join(directory, "notes.txt"),
+      '203.0.113.12 - - [25/May/2026:03:12:51 +0200] "GET /txt HTTP/1.1" 200 30 "-" "Mozilla/5.0"\n'
+    );
+    const stdout = memoryStream();
+
+    const code = await runCli(
+      ["node", "citrx", directory, "--json", "--include", "*.log", "--exclude", "drop.log"],
+      {
+        stdout: stdout.stream,
+        stderr: memoryStream().stream,
+        stdinIsTTY: true
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.output())).toMatchObject({
+      summary: {
+        files: 1,
+        totalLines: 1,
+        parsedLines: 1,
+        totalBytes: 10
+      },
+      topPaths: [{ value: "/keep", count: 1 }]
+    });
+  });
+
+  it("returns exit code 2 for high/critical incidents in TUI and HTML", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-exit2-"));
+    const logFile = join(directory, "attack.log");
+    const htmlFile = join(directory, "report.html");
+    await writeFile(
+      logFile,
+      '203.0.113.10 - - [25/May/2026:03:12:49 +0200] "GET /search?q=1%20UNION%20SELECT%20password HTTP/1.1" 200 123 "-" "Mozilla/5.0"\n'
+    );
+
+    const tuiCode = await runCli(["node", "citrx", logFile], {
+      stdout: memoryStream().stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true,
+      openInteractive: async () => undefined
+    });
+    expect(tuiCode).toBe(2);
+
+    const htmlCode = await runCli(["node", "citrx", logFile, "--html", "--out", htmlFile], {
+      stdout: memoryStream().stream,
+      stderr: memoryStream().stream,
+      stdinIsTTY: true
+    });
+    expect(htmlCode).toBe(2);
+  });
+
+  it("prints a stack trace only when --debug is set", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "citrx-debug-"));
+    const missing = join(directory, "missing.log");
+
+    const stderr = memoryStream();
+    const code = await runCli(["node", "citrx", missing], {
+      stdout: memoryStream().stream,
+      stderr: stderr.stream,
+      stdinIsTTY: true
+    });
+    expect(code).toBe(1);
+    expect(stderr.output()).toMatch(/ENOENT|no such file/i);
+    expect(stderr.output()).not.toMatch(/\n\s+at /);
+
+    const debugStderr = memoryStream();
+    const debugCode = await runCli(["node", "citrx", missing, "--debug"], {
+      stdout: memoryStream().stream,
+      stderr: debugStderr.stream,
+      stdinIsTTY: true
+    });
+    expect(debugCode).toBe(1);
+    expect(debugStderr.output()).toMatch(/\n\s+at /);
   });
 });

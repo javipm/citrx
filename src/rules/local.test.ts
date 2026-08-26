@@ -25,6 +25,10 @@ function entry(target: string, overrides: Partial<AccessLogEntry> = {}): AccessL
     bytes: 123,
     referer: null,
     userAgent: "Mozilla/5.0",
+    host: null,
+    requestTime: null,
+    upstreamTime: null,
+    forwardedFor: null,
     ...overrides
   };
 }
@@ -828,29 +832,96 @@ describe("local rules", () => {
       })
     ]);
   });
+
+  it("detects /running saturation from distinguished cardinality when maps are capped", () => {
+    const storedIps = new Map<string, number>();
+    for (let index = 0; index < 64; index += 1) {
+      storedIps.set(`10.0.0.${index}`, 1);
+    }
+
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/running",
+        count: 1_100,
+        bytes: 132_000,
+        ipCounts: storedIps,
+        queryVariants: new Set(Array.from({ length: 256 }, (_, index) => `?q=${index}`)),
+        uniqueIpCount: 1_100,
+        uniqueIpsIsLowerBound: true,
+        queryVariantCount: 1_100,
+        queryVariantsIsLowerBound: true,
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 1_100,
+        status3xx: 0,
+        status4xx: 0,
+        status5xx: 0,
+        maxServedPerMinute: 200,
+        samples: ["/running?q=1"]
+      }
+    ]);
+
+    expect(incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "abusive_crawl:/running",
+          kind: "saturation",
+          evidence: expect.arrayContaining([
+            { key: "uniqueIps", value: 1_100 },
+            { key: "queryVariants", value: 1_100 },
+            { key: "uniqueIpsLowerBound", value: true },
+            { key: "queryVariantsLowerBound", value: true }
+          ])
+        })
+      ])
+    );
+  });
+
+  it("does not treat request total as unique IP or query-variant cardinality", () => {
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/running",
+        count: 10_000,
+        bytes: 1_000_000,
+        ipCounts: ipCounts(5, 10_000),
+        queryVariants: new Set(["?q=stable"]),
+        uniqueIpCount: 5,
+        queryVariantCount: 1,
+        postCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        status2xx: 10_000,
+        status3xx: 0,
+        status4xx: 0,
+        status5xx: 0,
+        maxServedPerMinute: 400,
+        samples: []
+      }
+    ]);
+
+    expect(incidents.find((incident) => incident.id === "abusive_crawl:/running")).toBeUndefined();
+    expect(
+      incidents.find((incident) => incident.id === "query_explosion:/running")
+    ).toBeUndefined();
+  });
 });
 
 describe("payload signatures — Phase 1 (D1-D5)", () => {
   it("D1: strips null bytes before matching (bypass attempt via %00)", () => {
     const hits = detectRequestHits(entry("/etc/passwd%00.jpg?x=%2e%2e%2fetc%2fpasswd%00"));
-    expect(hits).toEqual(
-      expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
-    );
+    expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })]));
   });
 
   describe("D2: SQLi comment/exfiltration signatures", () => {
     it("detects quote-anchored -- comment terminator", () => {
       const hits = detectRequestHits(entry("/login?user=admin'--%20"));
-      expect(hits).toEqual(
-        expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })])
-      );
+      expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })]));
     });
 
     it("detects numeric-anchored -- comment terminator", () => {
       const hits = detectRequestHits(entry("/item?id=1-- "));
-      expect(hits).toEqual(
-        expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })])
-      );
+      expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })]));
     });
 
     it("does NOT flag a legitimate slug containing bare --", () => {
@@ -864,17 +935,15 @@ describe("payload signatures — Phase 1 (D1-D5)", () => {
     });
 
     it("detects UNION(SELECT with no space", () => {
-      const hits = detectRequestHits(entry("/search?q=1%20UNION(SELECT%20password%20FROM%20users)"));
-      expect(hits).toEqual(
-        expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })])
+      const hits = detectRequestHits(
+        entry("/search?q=1%20UNION(SELECT%20password%20FROM%20users)")
       );
+      expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })]));
     });
 
     it("detects exfiltration functions only when called with parens", () => {
       const hits = detectRequestHits(entry("/search?q=1%20AND%20substring(password,1,1)=%27a%27"));
-      expect(hits).toEqual(
-        expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })])
-      );
+      expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "sqli" })]));
     });
 
     it("does NOT flag bare mentions of function names without parens", () => {
@@ -886,30 +955,24 @@ describe("payload signatures — Phase 1 (D1-D5)", () => {
   describe("D3: XSS execution sinks and expanded event handlers", () => {
     it("detects eval( sink", () => {
       const hits = detectRequestHits(entry("/page?x=%22);eval(atob('YWxlcnQoMSk='))//"));
-      expect(hits).toEqual(
-        expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })])
-      );
+      expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })]));
     });
 
     it("detects innerHTML sink", () => {
-      const hits = detectRequestHits(entry("/page?x=<img src=x onerror=this.parentNode.innerHTML=1>"));
-      expect(hits).toEqual(
-        expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })])
+      const hits = detectRequestHits(
+        entry("/page?x=<img src=x onerror=this.parentNode.innerHTML=1>")
       );
+      expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })]));
     });
 
     it("detects onwheel handler", () => {
       const hits = detectRequestHits(entry("/page?x=<div onwheel=alert(1)>"));
-      expect(hits).toEqual(
-        expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })])
-      );
+      expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })]));
     });
 
     it("detects onpointerover handler", () => {
       const hits = detectRequestHits(entry("/page?x=<div onpointerover=alert(1)>"));
-      expect(hits).toEqual(
-        expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })])
-      );
+      expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "xss" })]));
     });
 
     it("does NOT flag ?onsale=1 as XSS (X1 anti-FP)", () => {
@@ -925,7 +988,9 @@ describe("payload signatures — Phase 1 (D1-D5)", () => {
 
   describe("D4: LFI/traversal expanded signatures", () => {
     it("detects double-encoded traversal %252e%252e", () => {
-      const hits = detectRequestHits(entry("/download?file=%252e%252e%252f%252e%252e%252fetc%252fpasswd"));
+      const hits = detectRequestHits(
+        entry("/download?file=%252e%252e%252f%252e%252e%252fetc%252fpasswd")
+      );
       expect(hits).toEqual(
         expect.arrayContaining([expect.objectContaining({ ruleId: "lfi_rfi" })])
       );
@@ -1059,9 +1124,10 @@ describe("payload signatures — Phase 1 (D1-D5)", () => {
 
     for (const { ruleId, target } of representativePayloads) {
       const hits = detectRequestHits(entry(target));
-      expect(hits.some((h) => h.ruleId === ruleId), `expected ${ruleId} to fire for ${target}`).toBe(
-        true
-      );
+      expect(
+        hits.some((h) => h.ruleId === ruleId),
+        `expected ${ruleId} to fire for ${target}`
+      ).toBe(true);
     }
   });
 });
@@ -1080,9 +1146,7 @@ describe("D7: SSRF anti-FP — requires internal/loopback/metadata destination",
   });
 
   it("detects ?url=http://169.254.169.254/latest/meta-data (cloud metadata SSRF)", () => {
-    const hits = detectRequestHits(
-      entry("/fetch?url=http://169.254.169.254/latest/meta-data")
-    );
+    const hits = detectRequestHits(entry("/fetch?url=http://169.254.169.254/latest/meta-data"));
     expect(hits).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "ssrf" })]));
   });
 

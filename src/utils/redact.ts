@@ -10,19 +10,42 @@
 export const SENSITIVE_KEY_PATTERN =
   /token|_token|sid|session|password|passwd|key|secret|jwt|auth|authorization|credential/i;
 
-export function isSensitiveParamName(name: string): boolean {
-  return SENSITIVE_KEY_PATTERN.test(name);
+const DECODE_PASSES = 3;
+const PAIR_PATTERN = /([^=?&\s"]+)=([^&\s"]*)/g;
+
+export function decodeRepeated(value: string): string {
+  let current = value.replace(/\+/g, " ");
+
+  for (let pass = 0; pass < DECODE_PASSES; pass += 1) {
+    try {
+      const next = decodeURIComponent(current);
+      if (next === current) {
+        break;
+      }
+      current = next;
+    } catch {
+      break;
+    }
+  }
+
+  return current;
 }
 
-const SENSITIVE_PAIR_PATTERN = new RegExp(
-  `(${SENSITIVE_KEY_PATTERN.source})=([^&\\s"]+)`,
-  "gi"
-);
+export function isSensitiveParamName(name: string): boolean {
+  return SENSITIVE_KEY_PATTERN.test(decodeRepeated(name));
+}
 
 /**
  * Replaces `key=value` pairs whose key looks sensitive with `key=[REDACTED]`.
- * Value matching stops at `&`, whitespace, or `"` (does not consume quotes).
+ * Keys are matched after repeated percent-decoding so `%74oken` and `%2574oken`
+ * still redact. Value matching stops at `&`, whitespace, or `"`.
  */
 export function redactSecretPairs(text: string): string {
-  return text.replace(SENSITIVE_PAIR_PATTERN, "$1=[REDACTED]");
+  return text.replace(PAIR_PATTERN, (match, key: string) => {
+    if (isSensitiveParamName(key)) {
+      return `${key}=[REDACTED]`;
+    }
+
+    return match;
+  });
 }

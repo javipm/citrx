@@ -1,17 +1,17 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, Text, render, useApp, useInput, useWindowSize } from "ink";
 
-import { createWriteStream } from "node:fs";
-import { writeFile, unlink, rename } from "node:fs/promises";
-import { finished } from "node:stream/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { Incident, IncidentLogLine } from "../analysis/types.js";
 import {
   AccessLogIndexQueryCache,
+  arrayOrderedRowNumbers,
+  canUseMonotonicTimestampFastPath,
+  iterateAccessLogIndexChunks,
   passThroughFilter,
-  readAccessLogIndexCachedPage,
-  iterateAccessLogIndexChunks
+  sequentialOrderedRowNumbers
 } from "../run/access-index.js";
 import type { CitrxRun } from "../run/types.js";
 
@@ -20,9 +20,10 @@ export type { TuiRuntime } from "./types.js";
 import type { TuiRuntime, ActiveAbortEntry } from "./types.js";
 
 // Utils
+import { clearAbortIfCurrent } from "./utils/active-abort.js";
 import { fitText, sanitizeFilePart } from "./utils/format.js";
 import { sortLabel, lineKey } from "./utils/table.js";
-import { serializeExport, streamSerializeExport } from "./export.js";
+import { serializeExport, streamExportToFile } from "./export.js";
 import {
   addLinesToSelectionWithCap,
   INCIDENT_MANUAL_SELECT_LIMIT,
@@ -107,37 +108,33 @@ async function exportContext(
   return file;
 }
 
-async function exportAccessLogContext({
-  run,
-  accessQueryCache,
-  filter,
-  sortKey,
-  sortDirection,
-  total,
-  format
-}: {
-  run: CitrxRun;
-  accessQueryCache: AccessLogIndexQueryCache;
-  filter: string;
-  sortKey: "timestamp" | "ip" | "status" | "method" | "path" | "bytes";
-  sortDirection: "asc" | "desc";
-  total: number;
-  format: ExportFormat;
-}): Promise<{ file: string; lines: number }> {
-  const page = await readAccessLogIndexCachedPage(
+async function orderedRowsForSummaryExport(
+  run: CitrxRun,
+  accessQueryCache: AccessLogIndexQueryCache,
+  filter: string,
+  sortKey: "timestamp" | "ip" | "status" | "method" | "path" | "bytes",
+  sortDirection: "asc" | "desc",
+  signal: AbortSignal
+): Promise<{ orderedRowNumbers: ReturnType<typeof sequentialOrderedRowNumbers>; total: number }> {
+  const filterFn = filter ? createAccessLogLineFilter(filter) : passThroughFilter;
+  if (canUseMonotonicTimestampFastPath(run.accessIndex, { filter: filterFn, sortKey })) {
+    return {
+      orderedRowNumbers: sequentialOrderedRowNumbers(run.accessIndex.totalRows, sortDirection),
+      total: run.accessIndex.totalRows
+    };
+  }
+
+  const query = await accessQueryCache.getOrBuild(
     run.accessIndex,
-    accessQueryCache,
     accessQueryKey(filter, sortKey, sortDirection),
     {
-      filter: filter ? createAccessLogLineFilter(filter) : passThroughFilter,
+      filter: filterFn,
       sortKey,
-      sortDirection,
-      start: 0,
-      limit: total
-    }
+      sortDirection
+    },
+    signal
   );
-  const file = await exportContext(run.id, undefined, page.lines, format);
-  return { file, lines: page.lines.length };
+  return { orderedRowNumbers: arrayOrderedRowNumbers(query.rows), total: query.total };
 }
 
 /**
@@ -239,7 +236,8 @@ function CitrxExplorer({ run }: { run: CitrxRun }) {
     sortKey,
     sortDirection,
     setIndexLoading,
-    setMessage
+    setMessage,
+    setActiveAbort
   });
 
   const { pageSize, summaryPageSize, detailRows, detailWidth } = usePageLayout({
@@ -264,12 +262,14 @@ function CitrxExplorer({ run }: { run: CitrxRun }) {
     summaryPageSize,
     summaryLineIndex,
     setMessage,
-    setSummaryLineIndex
+    setSummaryLineIndex,
+    setActiveAbort
   });
 
   const {
     pageLines,
     pageLoading,
+    pageError,
     pageStart,
     selectedLines,
     selectedLineKeys: derivedSelectedLineKeys,
@@ -293,6 +293,12 @@ function CitrxExplorer({ run }: { run: CitrxRun }) {
 
   // Use the derived set from useVisibleLines (same reference as selectedLineKeys from state)
   void derivedSelectedLineKeys;
+
+  useEffect(() => {
+    if (pageError) {
+      setMessage(`Load failed: ${pageError}`);
+    }
+  }, [pageError]);
 
   const requestExit = () => {
     setQuitConfirm(true);
@@ -350,16 +356,16 @@ function CitrxExplorer({ run }: { run: CitrxRun }) {
           setMessage(err instanceof Error ? err.message : String(err));
         }
       } finally {
-        setSelection(() => next);
-        setActiveAbort(undefined);
-        if (!controller.signal.aborted) {
+        clearAbortIfCurrent(setActiveAbort, controller);
+        if (controller.signal.aborted) {
+          setMessage("Selection cancelled");
+        } else {
+          setSelection(() => next);
           setMessage(
             capHit
               ? `Selection cap reached (${INCIDENT_MANUAL_SELECT_LIMIT}). Filter to narrow.`
               : `Selected ${next.size.toLocaleString()} rows`
           );
-        } else {
-          setMessage("Selection cancelled");
         }
       }
     })();
@@ -391,26 +397,45 @@ function CitrxExplorer({ run }: { run: CitrxRun }) {
         return;
       }
 
+      const controller = new AbortController();
+      setActiveAbort({ kind: "export", controller, label: "Exporting… Esc to cancel" });
+      const safeRunId = sanitizeFilePart(run.id);
+      const finalPath = path.join(process.cwd(), `citrx-${safeRunId}-summary.${format}`);
+      const sig = controller.signal;
+
       setTimeout(() => {
-        void exportAccessLogContext({
-          run,
-          accessQueryCache,
-          filter,
-          sortKey,
-          sortDirection,
-          total: globalTotal,
-          format
-        })
-          .then(({ file, lines }) => {
-            setExportNotice({ file, lines, format });
-            setMessage(`Export OK: ${lines} rows saved`);
-          })
-          .catch((error) => {
-            setMessage(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
-          })
-          .finally(() => {
+        void (async () => {
+          try {
+            const { orderedRowNumbers, total } = await orderedRowsForSummaryExport(
+              run,
+              accessQueryCache,
+              filter,
+              sortKey,
+              sortDirection,
+              sig
+            );
+            await streamExportToFile(undefined, { run, orderedRowNumbers }, format, finalPath, {
+              signal: sig,
+              onProgress: (done) => {
+                setMessage(
+                  `Exporting ${format.toUpperCase()}… ${done.toLocaleString()} / ${total.toLocaleString()}`
+                );
+              }
+            });
+            setExportNotice({ file: finalPath, lines: total, format });
+            setMessage(`Export OK: ${total.toLocaleString()} rows saved`);
+          } catch (err) {
+            const isAbort = err instanceof DOMException && err.name === "AbortError";
+            setMessage(
+              isAbort
+                ? "Export cancelled"
+                : `Export failed: ${err instanceof Error ? err.message : String(err)}`
+            );
+          } finally {
             setExportLoading(false);
-          });
+            setActiveAbort((prev) => (prev?.controller === controller ? undefined : prev));
+          }
+        })();
       }, 0);
       return;
     }
@@ -447,17 +472,12 @@ function CitrxExplorer({ run }: { run: CitrxRun }) {
     const safeRunId = sanitizeFilePart(run.id);
     const safeId = sanitizeFilePart(incident?.id ?? "incident");
     const finalPath = path.join(process.cwd(), `citrx-${safeRunId}-${safeId}.${format}`);
-    const tmpPath = path.join(
-      path.dirname(finalPath),
-      `.${path.basename(finalPath)}.tmp-${process.pid}`
-    );
-    const stream = createWriteStream(tmpPath);
     const sig = controller.signal;
 
     setTimeout(() => {
       void (async () => {
         try {
-          await streamSerializeExport(incident, { run, orderedRowNumbers }, format, stream, {
+          await streamExportToFile(incident, { run, orderedRowNumbers }, format, finalPath, {
             signal: sig,
             onProgress: (done, total) => {
               setMessage(
@@ -465,18 +485,9 @@ function CitrxExplorer({ run }: { run: CitrxRun }) {
               );
             }
           });
-          stream.end();
-          await finished(stream);
-          await unlink(finalPath).catch((e: NodeJS.ErrnoException) => {
-            if (e.code !== "ENOENT") throw e;
-          });
-          await rename(tmpPath, finalPath);
           setExportNotice({ file: finalPath, lines: orderedRowNumbers.length, format });
           setMessage(`Export OK: ${orderedRowNumbers.length.toLocaleString()} rows saved`);
         } catch (err) {
-          stream.destroy();
-          await finished(stream).catch(() => {});
-          await unlink(tmpPath).catch(() => {});
           const isAbort = err instanceof DOMException && err.name === "AbortError";
           if (!isAbort) {
             setMessage(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -485,7 +496,7 @@ function CitrxExplorer({ run }: { run: CitrxRun }) {
           }
         } finally {
           setExportLoading(false);
-          setActiveAbort(undefined);
+          setActiveAbort((prev) => (prev?.controller === controller ? undefined : prev));
         }
       })();
     }, 0);
@@ -554,7 +565,7 @@ function CitrxExplorer({ run }: { run: CitrxRun }) {
           ? "exportMenu"
           : sortMenu
             ? "sortMenu"
-              : (screen as HelpContext);
+            : (screen as HelpContext);
       setHelpOverlay({ context, tab: "keys", scroll: 0 });
       setMessage("Help: Tab switch tab | Esc/h close");
       return;
@@ -645,8 +656,7 @@ function CitrxExplorer({ run }: { run: CitrxRun }) {
 
     if ((inputValue === "b" || key.backspace || key.escape) && screen === "incident") {
       if (key.escape && incidentBuilding) {
-        // Cancel incident build via its own abort (not activeAbort)
-        // useIncidentQuery manages its own AbortController internally
+        return;
       }
       setScreen("summary");
       setMessage("Back to summary");
@@ -750,60 +760,60 @@ function CitrxExplorer({ run }: { run: CitrxRun }) {
             totalLines: detailLines.length
           })
         : screen === "summary"
-            ? React.createElement(SummaryScreen, {
+          ? React.createElement(SummaryScreen, {
+              report: run.report,
+              incidents,
+              incidentIndex,
+              focus: summaryFocus,
+              totalLines: globalTotal,
+              pageLines: summaryPageLines,
+              pageStart: computedSummaryPageStart,
+              lineIndex: summaryLineIndex,
+              filter,
+              sortKey,
+              sortDirection,
+              selectedLineKeys,
+              columns,
+              loading: summaryLoading
+            })
+          : screen === "tops"
+            ? React.createElement(TopValuesScreen, {
+                run,
+                accessQueryCache,
                 report: run.report,
-                incidents,
-                incidentIndex,
-                focus: summaryFocus,
-                totalLines: globalTotal,
-                pageLines: summaryPageLines,
-                pageStart: computedSummaryPageStart,
-                lineIndex: summaryLineIndex,
+                incident: topScope === "summary" ? undefined : incident,
+                scope: topScope,
+                filter,
+                focus: topFocus,
+                selectedIndexes: topIndexes,
+                onApplyFilter: (nextFilter: string) => {
+                  setIndexLoading(true);
+                  setFilter(nextFilter);
+                  setSelection(() => new Map());
+                  setLineIndex(0);
+                  setSummaryLineIndex(0);
+                  setSummaryFocus("accesses");
+                  setScreen(topScope === "summary" ? "summary" : "incident");
+                  setMessage(`Filter applied: ${nextFilter}`);
+                },
+                setActiveAbort,
+                columns
+              })
+            : React.createElement(IncidentScreen, {
+                report: run.report,
+                incident,
+                incidentTotal,
+                pageLines,
+                pageStart,
+                lineIndex,
                 filter,
                 sortKey,
                 sortDirection,
                 selectedLineKeys,
                 columns,
-                loading: summaryLoading
+                loading: indexLoading || pageLoading || exportLoading,
+                loadingMessage: exportLoading ? message : "Loading page…"
               })
-            : screen === "tops"
-              ? React.createElement(TopValuesScreen, {
-                  run,
-                  accessQueryCache,
-                  report: run.report,
-                  incident: topScope === "summary" ? undefined : incident,
-                  scope: topScope,
-                  filter,
-                  focus: topFocus,
-                  selectedIndexes: topIndexes,
-                  onApplyFilter: (nextFilter: string) => {
-                    setIndexLoading(true);
-                    setFilter(nextFilter);
-                    setSelection(() => new Map());
-                    setLineIndex(0);
-                    setSummaryLineIndex(0);
-                    setSummaryFocus("accesses");
-                    setScreen(topScope === "summary" ? "summary" : "incident");
-                    setMessage(`Filter applied: ${nextFilter}`);
-                  },
-                  setActiveAbort,
-                  columns
-                })
-              : React.createElement(IncidentScreen, {
-                  report: run.report,
-                  incident,
-                  incidentTotal,
-                  pageLines,
-                  pageStart,
-                  lineIndex,
-                  filter,
-                  sortKey,
-                  sortDirection,
-                  selectedLineKeys,
-                  columns,
-                  loading: indexLoading || pageLoading || exportLoading,
-                  loadingMessage: exportLoading ? message : "Loading page…"
-                })
     ),
     sortMenu ? React.createElement(SortMenuOverlay, { sortMenu, columns, rows }) : null,
     exportMenu ? React.createElement(ExportMenuOverlay, { exportMenu, columns, rows }) : null,

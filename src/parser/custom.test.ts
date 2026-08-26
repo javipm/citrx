@@ -244,7 +244,244 @@ describe("loadCustomParsers", () => {
       const configFile = join(directory, "formats.json");
       await writeFile(configFile, "{not valid json");
 
-      await expect(loadCustomParsers(configFile)).rejects.toThrow();
+      await expect(loadCustomParsers(configFile)).rejects.toThrow(
+        /Invalid JSON in custom format config/
+      );
+    });
+  });
+
+  it("rejects an unanchored pattern", async () => {
+    await withTempDir(async (directory) => {
+      const configFile = join(directory, "formats.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          formats: [
+            {
+              name: "unanchored",
+              pattern: "(?<ip>\\S+) (?<timestamp>.+) (?<status>\\d{3})",
+              fields: {
+                ip: "ip",
+                timestamp: "timestamp",
+                method: "method",
+                target: "target",
+                protocol: "protocol",
+                status: "status"
+              }
+            }
+          ]
+        })
+      );
+
+      await expect(loadCustomParsers(configFile)).rejects.toThrow(/anchored/);
+    });
+  });
+
+  it("rejects a field mapping to a missing named group", async () => {
+    await withTempDir(async (directory) => {
+      const configFile = join(directory, "formats.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          formats: [
+            {
+              name: "missing-group",
+              pattern: "^(?<ip>\\S+)\\|(?<timestamp>[^|]+)\\|(?<status>\\d{3})$",
+              fields: {
+                ip: "ip",
+                timestamp: "timestamp",
+                method: "method",
+                target: "target",
+                protocol: "protocol",
+                status: "status"
+              }
+            }
+          ]
+        })
+      );
+
+      await expect(loadCustomParsers(configFile)).rejects.toThrow(/named group "method"/);
+    });
+  });
+
+  it("rejects numeric capture indices as field mappings", async () => {
+    await withTempDir(async (directory) => {
+      const configFile = join(directory, "formats.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          formats: [
+            {
+              name: "numeric",
+              pattern: "^(\\S+)\\|([^|]+)\\|(GET)\\|(/\\S+)\\|(HTTP/\\S+)\\|(\\d{3})$",
+              fields: {
+                ip: "1",
+                timestamp: "2",
+                method: "3",
+                target: "4",
+                protocol: "5",
+                status: "6"
+              }
+            }
+          ]
+        })
+      );
+
+      await expect(loadCustomParsers(configFile)).rejects.toThrow(/named group names/);
+    });
+  });
+
+  it("rejects a pattern whose final $ is escaped", async () => {
+    await withTempDir(async (directory) => {
+      const configFile = join(directory, "formats.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          formats: [
+            {
+              name: "escaped-dollar",
+              pattern:
+                "^(?<ip>\\S+)\\|(?<timestamp>[^|]+)\\|(?<method>\\S+)\\|(?<target>\\S+)\\|(?<protocol>HTTP/[^|]+)\\|(?<status>\\d{3})\\$",
+              fields: {
+                ip: "ip",
+                timestamp: "timestamp",
+                method: "method",
+                target: "target",
+                protocol: "protocol",
+                status: "status"
+              }
+            }
+          ]
+        })
+      );
+
+      await expect(loadCustomParsers(configFile)).rejects.toThrow(/anchored/);
+    });
+  });
+
+  it("rejects nested optional quantifiers such as (a?)+", async () => {
+    await withTempDir(async (directory) => {
+      const configFile = join(directory, "formats.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          formats: [
+            {
+              name: "nested-optional",
+              pattern:
+                "^(?<ip>a?)+(?<timestamp>x)\\|(?<method>GET)\\|(?<target>/)\\|(?<protocol>HTTP/1.1)\\|(?<status>200)$",
+              fields: {
+                ip: "ip",
+                timestamp: "timestamp",
+                method: "method",
+                target: "target",
+                protocol: "protocol",
+                status: "status"
+              }
+            }
+          ]
+        })
+      );
+
+      await expect(loadCustomParsers(configFile)).rejects.toThrow(/nested quantifiers/);
+    });
+  });
+
+  it("rejects nested ranged quantifiers such as (a{1,3})+", async () => {
+    await withTempDir(async (directory) => {
+      const configFile = join(directory, "formats.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          formats: [
+            {
+              name: "nested-range",
+              pattern:
+                "^(?<ip>a{1,3})+(?<timestamp>x)\\|(?<method>GET)\\|(?<target>/)\\|(?<protocol>HTTP/1.1)\\|(?<status>200)$",
+              fields: {
+                ip: "ip",
+                timestamp: "timestamp",
+                method: "method",
+                target: "target",
+                protocol: "protocol",
+                status: "status"
+              }
+            }
+          ]
+        })
+      );
+
+      await expect(loadCustomParsers(configFile)).rejects.toThrow(/nested quantifiers/);
+    });
+  });
+
+  it("rejects nested quantifiers that can backtrack catastrophically", async () => {
+    await withTempDir(async (directory) => {
+      const configFile = join(directory, "formats.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          formats: [
+            {
+              name: "redos",
+              pattern:
+                "^(?<ip>\\S+)\\|(?<timestamp>(.+)+)\\|(?<method>\\S+)\\|(?<target>\\S+)\\|(?<protocol>HTTP/[^|]+)\\|(?<status>\\d{3})$",
+              fields: {
+                ip: "ip",
+                timestamp: "timestamp",
+                method: "method",
+                target: "target",
+                protocol: "protocol",
+                status: "status"
+              }
+            }
+          ]
+        })
+      );
+
+      await expect(loadCustomParsers(configFile)).rejects.toThrow(/nested quantifiers/);
+    });
+  });
+
+  it("parses optional host, requestTime, upstreamTime, and forwardedFor fields", async () => {
+    await withTempDir(async (directory) => {
+      const configFile = join(directory, "formats.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          formats: [
+            {
+              name: "nginx-extra",
+              pattern:
+                "^(?<ip>\\S+)\\|(?<timestamp>[^|]+)\\|(?<method>\\S+)\\|(?<target>\\S+)\\|(?<protocol>HTTP/[^|]+)\\|(?<status>\\d{3})\\|(?<host>[^|]+)\\|(?<requestTime>[^|]+)\\|(?<upstreamTime>[^|]+)\\|(?<forwardedFor>[^|]+)$",
+              fields: {
+                ip: "ip",
+                timestamp: "timestamp",
+                method: "method",
+                target: "target",
+                protocol: "protocol",
+                status: "status",
+                host: "host",
+                requestTime: "requestTime",
+                upstreamTime: "upstreamTime",
+                forwardedFor: "forwardedFor"
+              }
+            }
+          ]
+        })
+      );
+
+      const parsers = await loadCustomParsers(configFile);
+      expect(
+        parsers[0]!.parse(
+          "198.51.100.3|25/May/2026:03:12:49 +0200|GET|/x|HTTP/1.1|200|shop.test|0.012|0.010|203.0.113.1"
+        )
+      ).toMatchObject({
+        host: "shop.test",
+        requestTime: 0.012,
+        upstreamTime: 0.01,
+        forwardedFor: "203.0.113.1"
+      });
     });
   });
 
@@ -262,6 +499,85 @@ describe("loadCustomParsers", () => {
       const missingFile = join(directory, "does-not-exist.json");
 
       await expect(loadCustomParsers(missingFile)).rejects.toThrow(/ENOENT/);
+    });
+  });
+
+  it("rejects false anchors from top-level alternation", async () => {
+    await withTempDir(async (directory) => {
+      const configFile = join(directory, "formats.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          formats: [
+            {
+              name: "false-anchor",
+              pattern: "^(?<ip>foo)|evil$",
+              fields: {
+                ip: "ip",
+                timestamp: "timestamp",
+                method: "method",
+                target: "target",
+                protocol: "protocol",
+                status: "status"
+              }
+            }
+          ]
+        })
+      );
+
+      await expect(loadCustomParsers(configFile)).rejects.toThrow(/top-level alternation/);
+    });
+  });
+
+  it("rejects quantified overlapping alternation that can backtrack catastrophically", async () => {
+    await withTempDir(async (directory) => {
+      const configFile = join(directory, "formats.json");
+      await writeFile(
+        configFile,
+        JSON.stringify({
+          formats: [
+            {
+              name: "overlap",
+              pattern:
+                "^(?<ip>a|aa)+(?<timestamp>x)\\|(?<method>GET)\\|(?<target>/)\\|(?<protocol>HTTP/1.1)\\|(?<status>200)$",
+              fields: {
+                ip: "ip",
+                timestamp: "timestamp",
+                method: "method",
+                target: "target",
+                protocol: "protocol",
+                status: "status"
+              }
+            }
+          ]
+        })
+      );
+
+      await expect(loadCustomParsers(configFile)).rejects.toThrow(
+        /quantified overlapping alternation|nested quantifiers/
+      );
+    });
+  });
+
+  it("rejects duplicate format names", async () => {
+    await withTempDir(async (directory) => {
+      const configFile = join(directory, "formats.json");
+      const format = {
+        name: "pipe",
+        pattern:
+          "^(?<ip>\\S+)\\|(?<timestamp>[^|]+)\\|(?<method>\\S+)\\|(?<target>\\S+)\\|(?<protocol>HTTP/[^|]+)\\|(?<status>\\d{3})$",
+        fields: {
+          ip: "ip",
+          timestamp: "timestamp",
+          method: "method",
+          target: "target",
+          protocol: "protocol",
+          status: "status"
+        }
+      };
+      await writeFile(configFile, JSON.stringify({ formats: [format, { ...format }] }));
+
+      await expect(loadCustomParsers(configFile)).rejects.toThrow(/duplicate format name "pipe"/);
     });
   });
 });

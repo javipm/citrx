@@ -98,6 +98,38 @@ describe("behavior tracker", () => {
     );
   });
 
+  it("counts distinct overflow RPS seconds regardless of timestamp order", () => {
+    const tracker = new BehaviorTracker({ maxGlobalRpsSeconds: 2, maxOverflowRpsSeconds: 8 });
+    tracker.observe(entry({ timestamp: ts(10) }));
+    tracker.observe(entry({ timestamp: ts(11) }));
+    const overflow = [30, 20, 40, 20, 30, 40, 20];
+    for (const second of overflow) {
+      tracker.observe(entry({ timestamp: ts(second) }));
+      tracker.observe(entry({ timestamp: ts(second) }));
+    }
+
+    const result = tracker.finalize();
+    expect(tracker.droppedRpsSeconds).toBe(3);
+    expect(result.timeStats.peakGlobalRps).toBeGreaterThanOrEqual(2);
+  });
+
+  it("computes p95 from sparse occupied seconds over a long idle gap", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(entry({ timestamp: ts(0), ip: "203.0.113.1" }));
+
+    for (let second = 10_000_000; second < 10_000_010; second += 1) {
+      for (let index = 0; index < 100; index += 1) {
+        tracker.observe(entry({ timestamp: ts(second), ip: `203.0.113.${index}` }));
+      }
+    }
+
+    const result = tracker.finalize();
+    expect(result.timeStats.globalRpsP95).toBe(0);
+    expect(result.incidents).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "ddos_global_rps_spike" })])
+    );
+  });
+
   it("requires ten consecutive global spike buckets and fills zeros for p95", () => {
     const tracker = new BehaviorTracker();
     tracker.observe(entry({ timestamp: ts(0), ip: "203.0.113.1" }));
@@ -826,6 +858,10 @@ function entry(overrides: Partial<AccessLogEntry> = {}): AccessLogEntry {
     bytes: 123,
     referer: null,
     userAgent: "Mozilla/5.0",
+    host: null,
+    requestTime: null,
+    upstreamTime: null,
+    forwardedFor: null,
     ...overrides
   };
 }
