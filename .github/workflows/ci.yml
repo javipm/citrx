@@ -52,11 +52,20 @@ jobs:
           git checkout --detach FETCH_HEAD
 
       - name: Test
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           source scripts/ci-setup-node.sh "${{ matrix.node }}"
           pnpm install --frozen-lockfile
           pnpm test
+
+      - name: Test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          . ./scripts/ci-setup-node.ps1 -NodeVersion "${{ matrix.node }}"
+          pnpm.cmd install --frozen-lockfile
+          pnpm.cmd test
 
   package:
     needs: test

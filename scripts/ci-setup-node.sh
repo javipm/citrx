@@ -13,10 +13,6 @@ case "$(uname -s)" in
     platform="linux"
     archive_ext="tar.gz"
     ;;
-  MINGW* | MSYS* | CYGWIN*)
-    platform="win"
-    archive_ext="zip"
-    ;;
   *)
     echo "Unsupported CI platform: $(uname -s)" >&2
     exit 1
@@ -62,11 +58,7 @@ fi
 
 tar -xf "${install_root}/${archive}" -C "$install_root"
 
-if [[ "$platform" == "win" ]]; then
-  node_bin="$node_root"
-else
-  node_bin="${node_root}/bin"
-fi
+node_bin="${node_root}/bin"
 
 export PATH="${node_bin}:${PATH}"
 node --version
