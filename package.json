@@ -1,6 +1,6 @@
 {
   "name": "citrx",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "CLI for local-first Apache/Nginx access log analysis.",
   "type": "module",
   "packageManager": "pnpm@11.1.0",
