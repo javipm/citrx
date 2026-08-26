@@ -42,6 +42,7 @@ curl --fail --silent --show-error --location "${download_base}/${archive}" --out
 curl --fail --silent --show-error --location "${download_base}/SHASUMS256.txt" --output "${install_root}/SHASUMS256.txt"
 
 expected_checksum="$(awk -v archive="$archive" '$2 == archive { print $1 }' "${install_root}/SHASUMS256.txt")"
+expected_checksum="${expected_checksum//$'\r'/}"
 if [[ -z "$expected_checksum" ]]; then
   echo "Missing checksum for ${archive}" >&2
   exit 1
@@ -52,6 +53,7 @@ if command -v sha256sum >/dev/null 2>&1; then
 else
   actual_checksum="$(shasum -a 256 "${install_root}/${archive}" | awk '{ print $1 }')"
 fi
+actual_checksum="${actual_checksum//$'\r'/}"
 
 if [[ "$actual_checksum" != "$expected_checksum" ]]; then
   echo "Checksum mismatch for ${archive}" >&2
