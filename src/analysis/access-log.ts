@@ -18,7 +18,10 @@ import { FINGERPRINT_PATHS } from "../rules/data/scanner-fingerprint-paths.js";
 import { SCANNER_UA_PATTERNS } from "../rules/data/scanner-uas.js";
 import {
   buildAggregateIncidents,
+  demoteSoftServedRecon,
+  demoteVerifiedCrawlerPayloads,
   detectRequestHits,
+  isHighValueSensitivePath,
   mergeRuleHit,
   parseTargetUrl,
   pruneNoise,
@@ -40,12 +43,15 @@ import { BehaviorTracker, extractSubnetPrefix } from "./behavior.js";
 import { requestParamLabels, userAgentLabel } from "./query-params.js";
 import { accessLogTimestampToEpochSeconds } from "./timestamp.js";
 import {
+  admitHeavyHitter,
   MAX_AGGREGATION_KEYS,
   MAX_GLOBAL_PATH_IP_ENTRIES,
   MAX_GLOBAL_PATH_VARIANT_ENTRIES,
   MAX_PATH_STATS,
   MAX_PATH_UNIQUE_IPS,
   MAX_QUERY_VARIANTS,
+  MIN_PATH_IPS_GUARANTEED,
+  MIN_PATH_VARIANTS_GUARANTEED,
   addCappedSet,
   incrementCapped,
   rememberDroppedKey
@@ -105,6 +111,11 @@ interface Counters {
   droppedQueryVariantSet: Set<string>;
   pathIpEntries: number;
   pathVariantEntries: number;
+  /** Times a top-N counter had to evict to admit a busier key. */
+  aggregationEvictions: number;
+  pathStatsEvictions: number;
+  /** How often each 2xx body size is served on non-sensitive paths. */
+  servedBodySizes: Map<number, number>;
 }
 
 interface MutableIncidentMatches {
@@ -123,8 +134,31 @@ const MIN_SAMPLE_LINES = 1;
 const MIN_PARSE_RATIO = 0.8;
 const MAX_SAMPLE_LINES = 200;
 const MAX_INCIDENT_SAMPLE_LINES = 200;
+const MAX_SERVED_BODY_SIZES = 65_536;
+const GENERIC_BODY_MIN_OCCURRENCES = 3;
 const PROGRESS_YIELD_INTERVAL = 5000;
 const FINALIZATION_YIELD_INTERVAL = 5000;
+
+/**
+ * Thrown when one input does not look like an access log. Directory inputs
+ * routinely mix access logs with `error_log`, `xferlog`, `.statbuf` and OS
+ * junk, so a single unparseable file must not abort the whole run — the loop
+ * records it as skipped and only fails when no input validated at all.
+ */
+export class NotAnAccessLogError extends Error {
+  constructor(
+    readonly label: string,
+    readonly detail: string
+  ) {
+    super(
+      `Input does not look like an Apache/Nginx access log: ${label} ` +
+        `(${detail}). ` +
+        "If this is a custom access-log format, pass --format custom:<name> " +
+        "and --format-config <path>."
+    );
+    this.name = "NotAnAccessLogError";
+  }
+}
 
 export async function analyzeAccessLogs(
   files: string[],
@@ -194,14 +228,18 @@ async function analyzeAccessLogSourcesWithWriter(
     droppedPathIpSet: new Set(),
     droppedQueryVariantSet: new Set(),
     pathIpEntries: 0,
-    pathVariantEntries: 0
+    pathVariantEntries: 0,
+    aggregationEvictions: 0,
+    pathStatsEvictions: 0,
+    servedBodySizes: new Map()
   };
   const inputFormats: AnalyzeReport["inputFormats"] = [];
+  const skippedInputs: AnalyzeReport["skippedInputs"] = [];
 
   for (const source of sources) {
     if (source.kind === "file") {
       for await (const textSource of openTextInputStreams(source.path)) {
-        await analyzeTextSource(
+        await analyzeOptionalTextSource(
           {
             kind: "stream",
             label: textSource.label,
@@ -210,12 +248,26 @@ async function analyzeAccessLogSourcesWithWriter(
           customParsers,
           counters,
           inputFormats,
+          skippedInputs,
           options
         );
       }
     } else {
-      await analyzeTextSource(source, customParsers, counters, inputFormats, options);
+      await analyzeOptionalTextSource(
+        source,
+        customParsers,
+        counters,
+        inputFormats,
+        skippedInputs,
+        options
+      );
     }
+  }
+
+  // Every discovered input failed validation: this is a real configuration
+  // error, so surface the first one rather than reporting an empty analysis.
+  if (counters.files === 0 && skippedInputs.length > 0) {
+    throw new NotAnAccessLogError(skippedInputs[0].file, skippedInputs[0].reason);
   }
 
   await yieldForFinalization(counters, options);
@@ -223,6 +275,12 @@ async function analyzeAccessLogSourcesWithWriter(
   await yieldForFinalization(counters, options);
   // Drop low-signal rule incidents (single 404 probes, isolated rare methods, etc.)
   pruneNoise(counters.ruleIncidents);
+  // Payloads fetched by real Googlebot/bingbot describe a poisoned URL, not an
+  // attacker, so they must not sit at the top of the report as critical hits.
+  demoteVerifiedCrawlerPayloads(counters.ruleIncidents);
+  // A sensitive path "served" at exactly the size of an ordinary page is the
+  // site's generic response, not a disclosure.
+  demoteSoftServedRecon(counters.ruleIncidents, counters.servedBodySizes);
   await yieldForFinalization(counters, options);
   // Compute once — reused for both incidents list and incidentMatches.
   const aggregateIncidents = buildAggregateIncidents(counters.pathStats.values());
@@ -251,6 +309,7 @@ async function analyzeAccessLogSourcesWithWriter(
     generatedAt: new Date().toISOString(),
     inputs: sources.map((source) => (source.kind === "file" ? source.path : source.label)),
     inputFormats,
+    skippedInputs,
     summary: {
       files: counters.files,
       totalLines: counters.totalLines,
@@ -258,8 +317,8 @@ async function analyzeAccessLogSourcesWithWriter(
       filteredLines: counters.filteredLines,
       invalidLines: counters.invalidLines,
       totalBytes: counters.totalBytes,
-      droppedAggregationKeys: counters.droppedAggregationKeySet.size,
-      droppedPathStats: counters.droppedPathSet.size,
+      droppedAggregationKeys: counters.aggregationEvictions,
+      droppedPathStats: counters.droppedPathSet.size + counters.pathStatsEvictions,
       droppedPathIps: counters.droppedPathIpSet.size,
       droppedQueryVariants: counters.droppedQueryVariantSet.size,
       droppedRpsSeconds: counters.behavior.droppedRpsSeconds
@@ -339,6 +398,29 @@ function detectOrValidate(
     : detectParser(sampleLines, customParsers);
 }
 
+/**
+ * Analyzes one input, recording it as skipped instead of throwing when it does
+ * not validate as an access log. The caller fails the run only if nothing
+ * validated, so a single explicit non-log input still errors out.
+ */
+async function analyzeOptionalTextSource(
+  source: Extract<AnalyzeInputSource, { kind: "stream" }>,
+  customParsers: AccessLogParser[],
+  counters: Counters,
+  inputFormats: AnalyzeReport["inputFormats"],
+  skippedInputs: AnalyzeReport["skippedInputs"],
+  options: AnalyzeOptions
+): Promise<void> {
+  try {
+    await analyzeTextSource(source, customParsers, counters, inputFormats, options);
+  } catch (error) {
+    if (!(error instanceof NotAnAccessLogError)) {
+      throw error;
+    }
+    skippedInputs.push({ file: error.label, reason: error.detail });
+  }
+}
+
 async function analyzeTextSource(
   source: Extract<AnalyzeInputSource, { kind: "stream" }>,
   customParsers: AccessLogParser[],
@@ -349,11 +431,9 @@ async function analyzeTextSource(
   const selection = await selectParserForStream(source, options.format, customParsers);
 
   if (selection.sampledLines < MIN_SAMPLE_LINES || selection.parseRatio < MIN_PARSE_RATIO) {
-    throw new Error(
-      `Input does not look like an Apache/Nginx access log: ${selection.label} ` +
-        `(${selection.parsedLines}/${selection.sampledLines} sampled lines parsed). ` +
-        "If this is a custom access-log format, pass --format custom:<name> " +
-        "and --format-config <path>."
+    throw new NotAnAccessLogError(
+      selection.label,
+      `${selection.parsedLines}/${selection.sampledLines} sampled lines parsed`
     );
   }
 
@@ -500,6 +580,7 @@ function analyzeLine(
   for (const paramValue of params.values) {
     countOrDrop(counters, counters.paramValues, paramValue);
   }
+  observeServedBodySize(counters, entry);
   updatePathStats(counters.pathStats, counters, entry, epochSecond, targetUrl);
 
   for (const hit of detectRequestHits(entry)) {
@@ -521,8 +602,8 @@ function increment(map: Map<string, number>, key: string): void {
 }
 
 function countOrDrop(counters: Counters, map: Map<string, number>, key: string): void {
-  if (!incrementCapped(map, key, MAX_AGGREGATION_KEYS)) {
-    rememberDroppedKey(counters.droppedAggregationKeySet, key);
+  if (admitHeavyHitter(map, key, MAX_AGGREGATION_KEYS)) {
+    counters.aggregationEvictions += 1;
   }
 }
 
@@ -821,6 +902,78 @@ function redactRawLine(line: string): string {
   return redactSecretPairs(line);
 }
 
+/**
+ * Records the body sizes the site serves on ordinary paths. A sensitive path
+ * that comes back at one of these sizes is being answered with the generic
+ * page, not with its own content.
+ */
+function observeServedBodySize(counters: Counters, entry: AccessLogEntry): void {
+  if (entry.status < 200 || entry.status >= 300) {
+    return;
+  }
+
+  const bytes = entry.bytes ?? 0;
+
+  if (bytes <= 0 || isHighValueSensitivePath(entry.path)) {
+    return;
+  }
+
+  const seen = counters.servedBodySizes.get(bytes);
+
+  if (seen !== undefined) {
+    counters.servedBodySizes.set(bytes, seen + 1);
+    return;
+  }
+
+  // Only repeated sizes can ever read as boilerplate, so on pressure drop the
+  // long tail of one- and two-off sizes instead of refusing new keys: a first
+  // occurrence arriving late would otherwise never get the chance to repeat.
+  if (counters.servedBodySizes.size >= MAX_SERVED_BODY_SIZES) {
+    pruneRareBodySizes(counters.servedBodySizes);
+
+    if (counters.servedBodySizes.size >= MAX_SERVED_BODY_SIZES) {
+      return;
+    }
+  }
+
+  counters.servedBodySizes.set(bytes, 1);
+}
+
+/**
+ * Drops the least-requested paths so a busier one can be tracked, and reports
+ * the request count the freed slot was worth. Returns null when nothing could
+ * be freed, which only happens on an empty map.
+ */
+function evictLeastSeenPathStats(statsByPath: Map<string, PathStats>): number | null {
+  let lowest = Number.POSITIVE_INFINITY;
+
+  for (const stats of statsByPath.values()) {
+    if (stats.count < lowest) {
+      lowest = stats.count;
+    }
+  }
+
+  if (!Number.isFinite(lowest)) {
+    return null;
+  }
+
+  for (const [path, stats] of statsByPath) {
+    if (stats.count === lowest) {
+      statsByPath.delete(path);
+    }
+  }
+
+  return statsByPath.size < MAX_PATH_STATS ? lowest : null;
+}
+
+function pruneRareBodySizes(sizes: Map<number, number>): void {
+  for (const [size, count] of sizes) {
+    if (count < GENERIC_BODY_MIN_OCCURRENCES) {
+      sizes.delete(size);
+    }
+  }
+}
+
 function updatePathStats(
   statsByPath: Map<string, PathStats>,
   counters: Counters,
@@ -831,14 +984,30 @@ function updatePathStats(
   let stats = statsByPath.get(entry.path);
 
   if (!stats) {
+    let seedCount = 0;
+
     if (statsByPath.size >= MAX_PATH_STATS) {
-      rememberDroppedKey(counters.droppedPathSet, entry.path);
-      return false;
+      // Same reasoning as the top-N counters: refusing late arrivals hides the
+      // busiest paths on a long log. Free a slot by dropping the least-seen
+      // paths instead, and keep the new one.
+      const floor = evictLeastSeenPathStats(statsByPath);
+
+      if (floor === null) {
+        rememberDroppedKey(counters.droppedPathSet, entry.path);
+        return false;
+      }
+
+      // Seed at the evicted floor so the new path is not itself the minimum on
+      // the next sweep — otherwise a genuinely busy path that starts late is
+      // evicted again before it can ever climb. The seed inflates `count` by at
+      // most that floor, which only ever deflates the ratios computed from it.
+      seedCount = floor;
+      counters.pathStatsEvictions += 1;
     }
 
     stats = {
       path: entry.path,
-      count: 0,
+      count: seedCount,
       bytes: 0,
       ipCounts: new Map(),
       queryVariants: new Set(),
@@ -911,9 +1080,15 @@ function observePathIp(stats: PathStats, counters: Counters, ip: string): void {
     return;
   }
 
+  const atOwnCap = stats.ipCounts.size >= MAX_PATH_UNIQUE_IPS;
   const atCap =
-    stats.ipCounts.size >= MAX_PATH_UNIQUE_IPS ||
-    counters.pathIpEntries >= MAX_GLOBAL_PATH_IP_ENTRIES;
+    atOwnCap ||
+    (counters.pathIpEntries >= MAX_GLOBAL_PATH_IP_ENTRIES &&
+      stats.ipCounts.size >= MIN_PATH_IPS_GUARANTEED);
+
+  if (atOwnCap) {
+    stats.uniqueIpsAtOwnCap = true;
+  }
 
   if (!atCap && incrementCapped(stats.ipCounts, ip, MAX_PATH_UNIQUE_IPS)) {
     counters.pathIpEntries += 1;
@@ -936,9 +1111,15 @@ function observePathQueryVariant(stats: PathStats, counters: Counters, signature
     return;
   }
 
+  const atOwnCap = stats.queryVariants.size >= MAX_QUERY_VARIANTS;
   const atCap =
-    stats.queryVariants.size >= MAX_QUERY_VARIANTS ||
-    counters.pathVariantEntries >= MAX_GLOBAL_PATH_VARIANT_ENTRIES;
+    atOwnCap ||
+    (counters.pathVariantEntries >= MAX_GLOBAL_PATH_VARIANT_ENTRIES &&
+      stats.queryVariants.size >= MIN_PATH_VARIANTS_GUARANTEED);
+
+  if (atOwnCap) {
+    stats.queryVariantsAtOwnCap = true;
+  }
 
   if (!atCap && addCappedSet(stats.queryVariants, signature, MAX_QUERY_VARIANTS)) {
     counters.pathVariantEntries += 1;

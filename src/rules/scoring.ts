@@ -11,7 +11,11 @@ const PERSISTENCE_EXCLUDED_ID_PREFIXES = [
   "ai_scraper_known:",
   "abusive_crawl:",
   "query_explosion:",
-  "post_hotspot:"
+  "post_hotspot:",
+  // Bot-level roll-ups, not per-IP findings: they span the whole window a
+  // crawler was seen by construction, so persistence says nothing extra.
+  "fake_ai_bot:",
+  "fake_bot_campaign:"
 ];
 
 export function applyScoringMultipliers(incidents: Incident[]): Incident[] {

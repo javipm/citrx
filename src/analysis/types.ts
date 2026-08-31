@@ -202,6 +202,14 @@ export interface InputFormatSummary {
   sampleParseRatio: number;
 }
 
+/** An input that was discovered but did not validate as an access log. */
+export interface SkippedInputSummary {
+  /** Path or stream label of the skipped input. */
+  file: string;
+  /** Human-readable reason the input was skipped. */
+  reason: string;
+}
+
 /** Describes where log data should be read from — a file on disk or a live stream. */
 export type AnalyzeInputSource =
   | {
@@ -228,6 +236,11 @@ export interface AnalyzeReport {
   inputs: string[];
   /** Per-file format detection summaries. */
   inputFormats: InputFormatSummary[];
+  /**
+   * Discovered inputs that were not access logs and were skipped. Empty when a
+   * single explicit input was given (that case fails instead of skipping).
+   */
+  skippedInputs: SkippedInputSummary[];
   /** Aggregate line and byte counts for the run. */
   summary: AnalyzeSummary;
   /** Top client IPs by request volume. */

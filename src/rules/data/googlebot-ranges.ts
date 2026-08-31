@@ -1,5 +1,5 @@
 // Snapshot from https://developers.google.com/static/crawling/ipranges/common-crawlers.json
-// Updated: 2026-07-07
+// Updated: 2026-08-30
 // Re-run scripts/update-bot-ranges.ts to refresh.
 export const GOOGLEBOT_RANGES = {
   ipv4: [

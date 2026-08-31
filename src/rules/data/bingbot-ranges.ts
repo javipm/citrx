@@ -1,5 +1,5 @@
 // Snapshot from https://www.bing.com/toolbox/bingbot.json
-// Updated: 2026-07-07
+// Updated: 2026-08-30
 // Re-run scripts/update-bot-ranges.ts to refresh.
 export const BINGBOT_RANGES = {
   ipv4: [

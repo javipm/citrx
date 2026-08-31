@@ -167,6 +167,14 @@ async function runRootAnalysis(
       })
     );
 
+    if (report.skippedInputs.length > 0 && runtime.env.CITRX_QUIET !== "1") {
+      for (const skipped of report.skippedInputs) {
+        runtime.stderr.write(
+          `${APP_NAME}: skipped non-access-log input ${skipped.file} (${skipped.reason})\n`
+        );
+      }
+    }
+
     const run: CitrxRun = {
       id: workspace.id,
       createdAt: report.generatedAt,

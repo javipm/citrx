@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { AccessLogEntry } from "../parser/access-log.js";
+import type { Incident } from "../analysis/types.js";
+import type { RuleHit } from "./local.js";
 import {
   buildAggregateIncidents,
+  demoteSoftServedRecon,
+  demoteVerifiedCrawlerPayloads,
   detectRequestHits,
   mergeRuleHit,
   parseTargetUrl,
@@ -10,6 +14,19 @@ import {
   querySignature,
   redactTarget
 } from "./local.js";
+
+function reconHit(sample: string): RuleHit {
+  return {
+    ruleId: "recon_sensitive_file",
+    category: "recon",
+    kind: "compromise",
+    severity: "medium",
+    score: 60,
+    title: "Sensitive file probe",
+    description: "Probe for a sensitive file.",
+    sample
+  };
+}
 
 function entry(target: string, overrides: Partial<AccessLogEntry> = {}): AccessLogEntry {
   const path = target.split("?")[0] ?? target;
@@ -167,6 +184,442 @@ describe("local rules", () => {
         expect.objectContaining({ id: "abusive_crawl:/hot", kind: "noise" }),
         expect.objectContaining({ id: "post_hotspot:/login" })
       ])
+    );
+  });
+
+  // The Googlebot address below is deliberately literal: the whole point is
+  // that it falls inside Google's published ranges. Every other address in
+  // these tests uses RFC 5737 documentation space.
+  it("demotes an attack payload fetched by verified Googlebot", () => {
+    const incidents = new Map<string, Incident>([
+      [
+        "command_injection:66.249.70.165",
+        {
+          id: "command_injection:66.249.70.165",
+          category: "command_injection",
+          kind: "compromise",
+          severity: "critical",
+          score: 100,
+          title: "Command injection payload",
+          description: "…",
+          evidence: [
+            { key: "ip", value: "66.249.70.165" },
+            { key: "count", value: 1 },
+            { key: "status2xx", value: 1 }
+          ],
+          samples: [],
+          successful: true
+        }
+      ],
+      [
+        "command_injection:198.51.100.201",
+        {
+          id: "command_injection:198.51.100.201",
+          category: "command_injection",
+          kind: "compromise",
+          severity: "critical",
+          score: 100,
+          title: "Command injection payload",
+          description: "…",
+          evidence: [
+            { key: "ip", value: "198.51.100.201" },
+            { key: "count", value: 1 },
+            { key: "status2xx", value: 1 }
+          ],
+          samples: [],
+          successful: true
+        }
+      ]
+    ]);
+
+    demoteVerifiedCrawlerPayloads(incidents);
+
+    const crawler = incidents.get("command_injection:66.249.70.165");
+    expect(crawler?.kind).toBe("noise");
+    expect(crawler?.severity).toBe("low");
+    expect(crawler?.successful).toBe(false);
+
+    // An unrelated IP sending the same payload stays a critical finding.
+    const attacker = incidents.get("command_injection:198.51.100.201");
+    expect(attacker?.kind).toBe("compromise");
+    expect(attacker?.severity).toBe("critical");
+  });
+
+  it("escalates a served high-value file even when almost every probe failed", () => {
+    const incidents = new Map<string, Incident>();
+    // 231 failed probes and a single 200 on phpinfo.php: a 0.4% success ratio,
+    // far under the ratio gate, but that one response is the disclosure.
+    for (let index = 0; index < 231; index += 1) {
+      mergeRuleHit(
+        incidents,
+        reconHit(`/.env.${index}`),
+        entry(`/.env.${index}`, { ip: "192.0.2.10", status: 404, bytes: 0 })
+      );
+    }
+    mergeRuleHit(
+      incidents,
+      reconHit("/phpinfo.php"),
+      entry("/phpinfo.php", { ip: "192.0.2.10", status: 200, bytes: 12_447 })
+    );
+
+    const incident = incidents.get("recon_sensitive_file:192.0.2.10");
+    expect(incident?.severity).toBe("high");
+    expect(incident?.successful).toBe(true);
+    expect(incident?.evidence.find((item) => item.key === "servedSensitivePath")?.value).toBe(
+      "/phpinfo.php"
+    );
+  });
+
+  it("withdraws the escalation when the served body is the site's generic page", () => {
+    const incidents = new Map<string, Incident>();
+    for (let index = 0; index < 100; index += 1) {
+      mergeRuleHit(
+        incidents,
+        reconHit(`/.env.${index}`),
+        entry(`/.env.${index}`, { ip: "192.0.2.10", status: 404, bytes: 3419 })
+      );
+    }
+    mergeRuleHit(
+      incidents,
+      reconHit("/phpinfo.php"),
+      entry("/phpinfo.php", { ip: "192.0.2.10", status: 200, bytes: 12_447 })
+    );
+
+    expect(incidents.get("recon_sensitive_file:192.0.2.10")?.severity).toBe("high");
+
+    // The same byte count is what the site serves for its homepage.
+    demoteSoftServedRecon(incidents, new Map([[12_447, 5]]));
+
+    const incident = incidents.get("recon_sensitive_file:192.0.2.10");
+    expect(incident?.severity).not.toBe("high");
+    expect(incident?.successful).toBe(false);
+    expect(
+      incident?.evidence.find((item) => item.key === "servedBodyMatchesGenericPage")?.value
+    ).toBe(true);
+  });
+
+  it("keeps the escalation when the served size is not boilerplate", () => {
+    const incidents = new Map<string, Incident>();
+    for (let index = 0; index < 100; index += 1) {
+      mergeRuleHit(
+        incidents,
+        reconHit(`/.env.${index}`),
+        entry(`/.env.${index}`, { ip: "203.0.113.66", status: 404, bytes: 3419 })
+      );
+    }
+    mergeRuleHit(
+      incidents,
+      reconHit("/.env"),
+      entry("/.env", { ip: "203.0.113.66", status: 200, bytes: 1340 })
+    );
+
+    // 1340 is served twice elsewhere — under the boilerplate threshold.
+    demoteSoftServedRecon(incidents, new Map([[1340, 2]]));
+
+    expect(incidents.get("recon_sensitive_file:203.0.113.66")?.severity).toBe("high");
+  });
+
+  it("does not escalate an empty response on a sensitive path", () => {
+    const incidents = new Map<string, Incident>();
+    for (let index = 0; index < 50; index += 1) {
+      mergeRuleHit(
+        incidents,
+        reconHit(`/.env.${index}`),
+        entry(`/.env.${index}`, { ip: "192.0.2.11", status: 404, bytes: 0 })
+      );
+    }
+    // 200 with a zero-byte body is a stub, not a leak.
+    mergeRuleHit(
+      incidents,
+      reconHit("/phpinfo.php"),
+      entry("/phpinfo.php", { ip: "192.0.2.11", status: 200, bytes: 0 })
+    );
+
+    expect(incidents.get("recon_sensitive_file:192.0.2.11")?.severity).not.toBe("high");
+  });
+
+  it("reports distributed credential stuffing on an auth endpoint", () => {
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/wp-login.php",
+        count: 404,
+        bytes: 100_000,
+        // One request per IP: the shape used to stay under per-IP rate limits.
+        ipCounts: ipCounts(400, 400),
+        queryVariants: new Set(),
+        postCount: 403,
+        firstSeen: 1_780_000_000,
+        lastSeen: 1_780_000_120,
+        status2xx: 133,
+        status3xx: 0,
+        status4xx: 271,
+        status5xx: 0,
+        maxRequestsPerMinute: 237,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "auth_abuse:/wp-login.php",
+          kind: "compromise",
+          title: "Distributed credential stuffing"
+        })
+      ])
+    );
+    // The plain POST count is redundant once the auth rule describes the path.
+    expect(incidents.map((incident) => incident.id)).not.toContain("post_hotspot:/wp-login.php");
+  });
+
+  it("leaves a busy but mostly successful login endpoint alone", () => {
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/login",
+        count: 400,
+        bytes: 100_000,
+        ipCounts: ipCounts(200, 400),
+        queryVariants: new Set(),
+        postCount: 400,
+        firstSeen: 1_780_000_000,
+        lastSeen: 1_780_000_600,
+        status2xx: 360,
+        status3xx: 0,
+        status4xx: 40,
+        status5xx: 0,
+        maxRequestsPerMinute: 60,
+        samples: []
+      }
+    ]);
+
+    expect(incidents.map((incident) => incident.id)).not.toContain("auth_abuse:/login");
+  });
+
+  it("does not let a filled query-variant cap hide a large saturation", () => {
+    // A path with 90 000 requests and a distinct query string on nearly every
+    // one. Only 256 variants fit in the bounded set, so queryVariants/count is
+    // 0.003 — far below every ratio threshold — even though the real ratio is
+    // ~1.0. The cap flag has to stop that ratio from vetoing the finding.
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/en/20-category",
+        count: 90_000,
+        bytes: 4_000_000_000,
+        ipCounts: ipCounts(64, 90_000),
+        queryVariants: new Set(Array.from({ length: 256 }, (_, index) => `?q=${index}`)),
+        queryVariantCount: 256,
+        queryVariantsIsLowerBound: true,
+        queryVariantsAtOwnCap: true,
+        uniqueIpCount: 2257,
+        uniqueIpsIsLowerBound: true,
+        uniqueIpsAtOwnCap: true,
+        postCount: 0,
+        firstSeen: 1_780_000_000,
+        lastSeen: 1_780_200_000,
+        status2xx: 89_500,
+        status3xx: 400,
+        status4xx: 100,
+        status5xx: 0,
+        maxRequestsPerMinute: 80,
+        maxServedPerMinute: 80,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "abusive_crawl:/en/20-category",
+          kind: "saturation"
+        })
+      ])
+    );
+  });
+
+  it("does not read a trickle of errors on a busy path as server distress", () => {
+    // 130 errors in 83 323 requests is 0.16%: the background rate any busy URL
+    // accumulates, not a backend failing under load.
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/admin7788/index.php",
+        count: 83_323,
+        bytes: 297_382_141,
+        ipCounts: ipCounts(13, 83_323),
+        queryVariants: new Set(Array.from({ length: 256 }, (_, index) => `?token=${index}`)),
+        queryVariantCount: 256,
+        queryVariantsIsLowerBound: true,
+        queryVariantsAtOwnCap: true,
+        postCount: 0,
+        firstSeen: 1_780_000_000,
+        lastSeen: 1_782_000_000,
+        status2xx: 83_140,
+        status3xx: 53,
+        status4xx: 0,
+        status5xx: 130,
+        maxRequestsPerMinute: 61,
+        maxServedPerMinute: 61,
+        samples: []
+      }
+    ]);
+
+    const incident = incidents.find((item) => item.id === "abusive_crawl:/admin7788/index.php");
+    expect(incident?.severity).not.toBe("critical");
+  });
+
+  it("still reports distress when errors dominate the path", () => {
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/api/search",
+        count: 12_000,
+        bytes: 50_000_000,
+        ipCounts: ipCounts(30, 12_000),
+        queryVariants: new Set(Array.from({ length: 6_000 }, (_, index) => `?q=term${index}`)),
+        postCount: 0,
+        firstSeen: 1_780_000_000,
+        lastSeen: 1_780_002_000,
+        status2xx: 2_000,
+        status3xx: 0,
+        status4xx: 0,
+        // 83% of requests failing: the backend is genuinely falling over.
+        status5xx: 10_000,
+        maxRequestsPerMinute: 400,
+        maxServedPerMinute: 400,
+        samples: []
+      }
+    ]);
+
+    const incident = incidents.find((item) => item.id === "abusive_crawl:/api/search");
+    expect(incident?.severity).toBe("critical");
+  });
+
+  it("trusts a high observed ratio even when the counter filled", () => {
+    // Truncation can only push a ratio down, so an observed 0.99 needs no
+    // corroboration: the served peak here (42/min) is deliberately below the
+    // corroboration threshold to prove the ratio alone carries the decision.
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/facet-category",
+        count: 2957,
+        bytes: 14_409_529,
+        ipCounts: ipCounts(35, 2957),
+        queryVariants: new Set(Array.from({ length: 256 }, (_, index) => `?q=${index}`)),
+        queryVariantCount: 2934,
+        queryVariantsIsLowerBound: true,
+        queryVariantsAtOwnCap: true,
+        postCount: 0,
+        firstSeen: 1_780_000_000,
+        lastSeen: 1_780_010_800,
+        status2xx: 356,
+        status3xx: 0,
+        status4xx: 2601,
+        status5xx: 0,
+        maxRequestsPerMinute: 140,
+        maxServedPerMinute: 42,
+        samples: []
+      }
+    ]);
+
+    expect(incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "abusive_crawl:/facet-category", kind: "saturation" })
+      ])
+    );
+  });
+
+  it("needs corroboration when a filled counter leaves the ratio collapsed", () => {
+    // Same shape, but the observed ratio is low *and* the counter filled, so it
+    // proves nothing. Without a served peak the path must not be promoted.
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/en/6-other-category",
+        count: 8124,
+        bytes: 2_042_649_965,
+        // Mirrors the real shape: a wide audience where no single client
+        // repeats enough to count as crawl pressure.
+        ipCounts: new Map(
+          Array.from({ length: 64 }, (_, index) => [`198.51.100.${index}`, 4] as const)
+        ),
+        queryVariants: new Set(Array.from({ length: 256 }, (_, index) => `?q=${index}`)),
+        queryVariantCount: 256,
+        queryVariantsIsLowerBound: true,
+        queryVariantsAtOwnCap: true,
+        uniqueIpCount: 959,
+        uniqueIpsIsLowerBound: true,
+        postCount: 0,
+        firstSeen: 1_780_000_000,
+        lastSeen: 1_780_600_000,
+        status2xx: 6960,
+        status3xx: 0,
+        status4xx: 0,
+        status5xx: 1164,
+        maxRequestsPerMinute: 12,
+        maxServedPerMinute: 12,
+        samples: []
+      }
+    ]);
+
+    expect(incidents.filter((incident) => incident.kind === "saturation")).toEqual([]);
+  });
+
+  it("still rejects a low-churn path whose counters never filled", () => {
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/estable",
+        count: 90_000,
+        bytes: 4_000_000_000,
+        ipCounts: ipCounts(3, 90_000),
+        queryVariants: new Set(["?page=1", "?page=2"]),
+        postCount: 0,
+        firstSeen: 1_780_000_000,
+        lastSeen: 1_780_200_000,
+        status2xx: 89_500,
+        status3xx: 400,
+        status4xx: 100,
+        status5xx: 0,
+        maxRequestsPerMinute: 80,
+        maxServedPerMinute: 80,
+        samples: []
+      }
+    ]);
+
+    const saturation = incidents.filter((incident) => incident.kind === "saturation");
+    expect(saturation).toEqual([]);
+  });
+
+  it("names the IPs responsible for a saturated path", () => {
+    const ipCountsMap = new Map<string, number>([
+      ["203.0.113.201", 2810],
+      ["203.0.113.202", 14]
+    ]);
+    const incidents = buildAggregateIncidents([
+      {
+        path: "/facet-category",
+        count: 2957,
+        bytes: 14_409_529,
+        ipCounts: ipCountsMap,
+        // 35 distinct IPs seen overall; only the two heaviest were still
+        // storable, which is exactly why the evidence must name them.
+        uniqueIpCount: 35,
+        uniqueIpsIsLowerBound: true,
+        queryVariants: new Set(Array.from({ length: 2934 }, (_, index) => `?q=${index}`)),
+        postCount: 0,
+        firstSeen: 1_780_000_000,
+        lastSeen: 1_780_010_000,
+        status2xx: 356,
+        status4xx: 2601,
+        status3xx: 0,
+        status5xx: 0,
+        maxRequestsPerMinute: 140,
+        maxServedPerMinute: 42,
+        samples: []
+      }
+    ]);
+
+    const incident = incidents.find((item) => item.id === "abusive_crawl:/facet-category");
+    const topIps = incident?.evidence.find((item) => item.key === "topIps");
+    expect(String(topIps?.value)).toContain("203.0.113.201 (2810)");
+    expect(incident?.evidence.find((item) => item.key === "topIpShare")?.value).toBeGreaterThan(
+      0.9
     );
   });
 
@@ -330,7 +783,7 @@ describe("local rules", () => {
   it("flags high-peak blocked query churn when it still serves some expensive responses", () => {
     const incidents = buildAggregateIncidents([
       {
-        path: "/cabello",
+        path: "/facet-category",
         count: 2_957,
         bytes: 80_000_000,
         ipCounts: ipCounts(35, 2_957),
@@ -350,7 +803,7 @@ describe("local rules", () => {
 
     expect(incidents).toEqual([
       expect.objectContaining({
-        id: "abusive_crawl:/cabello",
+        id: "abusive_crawl:/facet-category",
         kind: "saturation",
         severity: "high",
         score: 75,

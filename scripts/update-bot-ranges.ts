@@ -12,6 +12,34 @@ const SOURCES = [
     url: "https://www.bing.com/toolbox/bingbot.json",
     out: "src/rules/data/bingbot-ranges.ts",
     constName: "BINGBOT_RANGES"
+  },
+  // AI crawlers that publish their ranges in the same `prefixes` shape. Only
+  // these can be verified by IP; the rest of AI_BOT_PATTERNS is self-declared
+  // and citrx says so rather than implying it checked.
+  {
+    url: "https://openai.com/gptbot.json",
+    out: "src/rules/data/openai-gptbot-ranges.ts",
+    constName: "OPENAI_GPTBOT_RANGES"
+  },
+  {
+    url: "https://openai.com/searchbot.json",
+    out: "src/rules/data/openai-searchbot-ranges.ts",
+    constName: "OPENAI_SEARCHBOT_RANGES"
+  },
+  {
+    url: "https://openai.com/chatgpt-user.json",
+    out: "src/rules/data/openai-chatgpt-user-ranges.ts",
+    constName: "OPENAI_CHATGPT_USER_RANGES"
+  },
+  {
+    url: "https://www.perplexity.ai/perplexitybot.json",
+    out: "src/rules/data/perplexitybot-ranges.ts",
+    constName: "PERPLEXITYBOT_RANGES"
+  },
+  {
+    url: "https://www.perplexity.ai/perplexity-user.json",
+    out: "src/rules/data/perplexity-user-ranges.ts",
+    constName: "PERPLEXITY_USER_RANGES"
   }
 ] as const;
 

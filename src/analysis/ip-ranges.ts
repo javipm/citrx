@@ -188,3 +188,32 @@ export function expandIPv6(ip: string): string | null {
 
   return groups.map((group) => Number.parseInt(group, 16).toString(16)).join(":");
 }
+
+/**
+ * Ranges that never identify a remote client in an access log: loopback,
+ * RFC1918 private space, link-local, IPv6 unique-local and the unspecified
+ * address. When these appear as the client IP the webserver is logging its own
+ * hop — a reverse proxy, load balancer, health check or monitoring agent —
+ * rather than whoever made the request.
+ */
+const NON_ROUTABLE_CLIENT_RANGES = prepareRanges({
+  ipv4: [
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "0.0.0.0/8"
+  ],
+  ipv6: ["::1/128", "fe80::/10", "fc00::/7"]
+});
+
+/**
+ * True when the address cannot belong to a remote client. Per-IP behavior rules
+ * skip these: attributing behavior to a proxy hop either invents an attacker
+ * (a "fake Googlebot" that is really the server's own monitoring) or collapses
+ * every real client into one bogus key.
+ */
+export function isNonRoutableClientIp(ip: string): boolean {
+  return ipInPreparedRanges(ip, NON_ROUTABLE_CLIENT_RANGES);
+}

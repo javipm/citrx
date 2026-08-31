@@ -1,6 +1,10 @@
 import type { AccessLogEntry } from "../parser/access-log.js";
 import type { Incident, IncidentKind, IncidentSeverity } from "../analysis/types.js";
+import { ipInPreparedRanges, prepareRanges } from "../analysis/ip-ranges.js";
 import { redactSecretPairs } from "../utils/redact.js";
+import { extractSubnetPrefix } from "../utils/subnet.js";
+import { BINGBOT_RANGES } from "./data/bingbot-ranges.js";
+import { GOOGLEBOT_RANGES } from "./data/googlebot-ranges.js";
 
 export interface RuleHit {
   ruleId: string;
@@ -32,6 +36,10 @@ interface RuleOutcomeStats {
   status5xx: number;
   status404: number;
   topPaths: Set<string>;
+  /** A high-value sensitive path that actually returned content, if any. */
+  servedSensitivePath?: string;
+  /** Response size of that hit, so an operator can rule out a soft-404 page. */
+  servedSensitiveBytes?: number;
 }
 
 export interface PathStats {
@@ -48,12 +56,25 @@ export interface PathStats {
   /** True when at least one distinct IP could not be stored or fingerprinted. */
   uniqueIpsIsLowerBound?: boolean;
   /**
+   * True when this path filled its own per-path IP cap. Distinct from
+   * `uniqueIpsIsLowerBound`, which is also set when the shared global budget ran
+   * out — that can happen to a path with only a handful of IPs, so it proves
+   * nothing about this path's cardinality. Reaching the per-path cap does.
+   */
+  uniqueIpsAtOwnCap?: boolean;
+  /**
    * Distinguished query variants: stored keys plus dropped keys still fingerprintable.
    * Never higher than true cardinality; never substituted with `count`.
    */
   queryVariantCount?: number;
   /** True when at least one distinct query variant could not be stored or fingerprinted. */
   queryVariantsIsLowerBound?: boolean;
+  /**
+   * True when this path filled its own per-path query-variant cap. See
+   * `uniqueIpsAtOwnCap` for why this is tracked separately from the lower-bound
+   * flag.
+   */
+  queryVariantsAtOwnCap?: boolean;
   postCount: number;
   /** Epoch seconds of first/last entry for this path (null if not tracked). */
   firstSeen: number | null;
@@ -270,6 +291,11 @@ const CRAWL_SATURATION_SUSTAINED_QUERY_MIN_VARIANTS = 1_000;
 const CRAWL_SATURATION_SUSTAINED_QUERY_MIN_RATIO = 0.5;
 const CRAWL_SATURATION_SUSTAINED_QUERY_MIN_DISTRIBUTED_IPS = 200;
 const CRAWL_SATURATION_SUSTAINED_QUERY_MIN_CONCENTRATED_PEAK = 50;
+/**
+ * Volume a path must reach before an abstained ratio counts, when the abstention
+ * is due to the shared budget rather than the path's own cap.
+ */
+const CRAWL_BUDGET_STARVED_MIN_REQUESTS = 100_000;
 const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REQUESTS = 5_000;
 const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REPEATED_IPS = 10;
 const CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_SHARE = 0.75;
@@ -279,11 +305,53 @@ const CRAWL_SATURATION_BLOCKED_QUERY_MIN_REQUESTS = 2_500;
 const CRAWL_SATURATION_BLOCKED_QUERY_MIN_SERVED = 100;
 const CRAWL_SATURATION_BLOCKED_QUERY_MIN_PEAK_REQUESTS_PER_MINUTE = 120;
 const CRAWL_SATURATION_MIN_5XX_DISTRESS = 100;
+/**
+ * Server distress is a *rate*, not a tally. An absolute count alone is crossed
+ * by any high-volume path — on a million-request URL a hundred errors is
+ * background noise — so the busiest paths were the ones it mislabelled. Both
+ * the floor above and this share must hold.
+ */
+const CRAWL_SATURATION_MIN_5XX_SHARE = 0.02;
+/**
+ * Authentication endpoints across the stacks citrx targets. Matching is on the
+ * path only — an attacker controls the query string, not the route.
+ */
+const AUTH_PATH_RE =
+  /(?:^|\/)(?:wp-login\.php|xmlrpc\.php|wp-json\/wp\/v2\/users|login|signin|sign-in|log-in|connexion|acceder|authenticate|auth|session|customer\/account\/login(?:post)?|administrator\/index\.php|user\/login|admin\/login|api\/login|api\/auth(?:\/[a-z-]+)?|oauth\/token)\/?$/i;
+
+/** Times a body size must recur on ordinary paths before it reads as boilerplate. */
+const GENERIC_BODY_MIN_OCCURRENCES = 3;
+
+const AUTH_MIN_ATTEMPTS = 50;
+/** Failure share expected of an attack; real logins are mostly 2xx/3xx. */
+const AUTH_MIN_FAILURE_SHARE = 0.4;
+/** Distinct sources that make a burst credential-stuffing rather than one user. */
+const AUTH_DISTRIBUTED_MIN_IPS = 25;
+/** Attempts per minute that separate an automated run from human logins. */
+const AUTH_MIN_PEAK_PER_MINUTE = 20;
+/** Share of attempts from one IP that makes it a single-source brute force. */
+const AUTH_CONCENTRATED_MIN_SHARE = 0.5;
+
 const POST_HOTSPOT_MIN_REQUESTS = 200;
 const QUERY_EXPLOSION_MIN_REQUESTS = 500;
 const QUERY_EXPLOSION_MIN_VARIANTS = 150;
 const QUERY_EXPLOSION_MIN_VARIANT_RATIO = 0.5;
 const TOP_PATHS_LIMIT = 10;
+/** True when a served response on this path would itself be the disclosure. */
+export function isHighValueSensitivePath(path: string): boolean {
+  return HIGH_VALUE_SENSITIVE_RE.test(path);
+}
+
+/**
+ * Recon targets where a single served response is already the disclosure. There
+ * is no benign reason for any of these to return content: `phpinfo` dumps the
+ * full environment, `.env` and `wp-config` backups carry credentials, `.git`
+ * metadata exposes source, `server-status`/`actuator/env` expose internals, and
+ * a database dump is the database. Success ratio is the wrong test here — one
+ * hit out of hundreds of failures is still a leak.
+ */
+const HIGH_VALUE_SENSITIVE_RE =
+  /(?:^|\/)(?:phpinfo\.php|info\.php|\.env(?:\.[a-z]+)?|\.git\/(?:config|HEAD|index)|wp-config\.php(?:\.[a-z]+)?|configuration\.php\.bak|\.aws\/credentials|\.ssh\/id_[a-z]+|server-status|server-info|actuator\/env|\.docker\/config\.json|sftp-config\.json|[^/]*\.(?:sql|sql\.gz|dump|bak)) *$/i;
 
 /**
  * Cheap substring fast-path — if none match, skip all regex evaluation.
@@ -494,6 +562,49 @@ function isLowSignalAggregatePath(path: string): boolean {
   return STATIC_ASSET_RE.test(path) || CRAWLER_INFRA_RE.test(path);
 }
 
+const TOP_PATH_IPS = 5;
+
+/**
+ * Heaviest IPs recorded for this path. `ipCounts` is capped, so this is the
+ * heaviest of the *sampled* IPs — enough to attribute the load, not a proof of
+ * global ranking.
+ */
+function topPathIps(stats: PathStats): [string, number][] {
+  return [...stats.ipCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, TOP_PATH_IPS);
+}
+
+/**
+ * Heaviest /24 (IPv4) or /48 (IPv6) among the sampled IPs. A single subnet
+ * accounting for most of a path's load is the signature of one actor renting a
+ * contiguous block, which reads very differently from genuinely spread traffic.
+ */
+function topPathSubnet(stats: PathStats): { prefix: string; ips: number; count: number } | null {
+  const bySubnet = new Map<string, { ips: number; count: number }>();
+
+  for (const [ip, count] of stats.ipCounts) {
+    const prefix = extractSubnetPrefix(ip);
+    if (!prefix) {
+      continue;
+    }
+    const current = bySubnet.get(prefix) ?? { ips: 0, count: 0 };
+    current.ips += 1;
+    current.count += count;
+    bySubnet.set(prefix, current);
+  }
+
+  let best: { prefix: string; ips: number; count: number } | null = null;
+  for (const [prefix, value] of bySubnet) {
+    if (!best || value.count > best.count) {
+      best = { prefix, ips: value.ips, count: value.count };
+    }
+  }
+
+  // A subnet holding a single IP says nothing beyond what topIps already shows.
+  return best && best.ips > 1 ? best : null;
+}
+
 /** Distinct IPs observed for this path, including fingerprintable dropped keys. */
 function observedUniqueIps(stats: PathStats): number {
   const stored = stats.ipCounts.size;
@@ -548,7 +659,7 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
         durationMinutes !== null ? Math.round(stats.count / durationMinutes) : null;
 
       // Server distress: 5xx under load escalates severity.
-      const hasServerDistress = stats.status5xx >= CRAWL_SATURATION_MIN_5XX_DISTRESS;
+      const hasServerDistress = hasFiveXxDistress(stats);
 
       let kind: "saturation" | "noise";
       let severity: "critical" | "high" | "medium";
@@ -587,6 +698,28 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
         { key: "queryVariantRatio", value: crawlSignal.queryVariantRatio },
         { key: "bytes", value: stats.bytes }
       ];
+
+      // Without the offending IPs an operator cannot tell a genuine distributed
+      // crawl from one client generating most of the load, and cannot act
+      // (block/rate-limit) on the finding at all.
+      const topIps = topPathIps(stats);
+      if (topIps.length > 0) {
+        evidence.push({
+          key: "topIps",
+          value: topIps.map(([ip, count]) => `${ip} (${count})`).join(" | ")
+        });
+        evidence.push({
+          key: "topIpShare",
+          value: roundRatio(topIps[0][1] / stats.count)
+        });
+      }
+
+      const topSubnet = topPathSubnet(stats);
+      if (topSubnet) {
+        evidence.push({ key: "topSubnet", value: topSubnet.prefix });
+        evidence.push({ key: "topSubnetIps", value: topSubnet.ips });
+        evidence.push({ key: "topSubnetShare", value: roundRatio(topSubnet.count / stats.count) });
+      }
 
       if (uniqueIpsAreLowerBound(stats)) {
         evidence.push({ key: "uniqueIpsLowerBound", value: true });
@@ -653,7 +786,14 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
       });
     }
 
-    if (stats.postCount >= POST_HOTSPOT_MIN_REQUESTS) {
+    const authAbuse = authAbuseIncident(stats);
+    if (authAbuse) {
+      incidents.push(authAbuse);
+    }
+
+    // A plain POST count on a login endpoint is not actionable on its own, so
+    // suppress it once the auth rule has described the same path in full.
+    if (stats.postCount >= POST_HOTSPOT_MIN_REQUESTS && !authAbuse) {
       incidents.push({
         id: `post_hotspot:${stats.path}`,
         category: "post_hotspot",
@@ -674,11 +814,113 @@ export function buildAggregateIncidents(pathStats: Iterable<PathStats>): Inciden
   return incidents;
 }
 
-function highVolumeCrawlSignal(stats: PathStats): {
+/**
+ * Crawl-pressure signal for one path. The `*IsUsable` flags say whether the
+ * matching ratio was computed from a full sample: once a bounded-memory cap is
+ * full the ratio understates reality and must not be used to reject a path.
+ */
+interface CrawlSignal {
   repeatedIps: number;
   repeatedRequestShare: number;
   queryVariantRatio: number;
-} | null {
+  queryVariantRatioIsUsable: boolean;
+  repeatedShareIsUsable: boolean;
+  /** Corroborating pressure used when a truncated ratio cannot decide. */
+  hasServedPeak: boolean;
+}
+
+/**
+ * Credential stuffing and login brute force. Both shapes hit an auth endpoint
+ * hard and fail most of the time; they differ only in whether the attempts come
+ * from one source or are spread across many to dodge per-IP rate limits, so
+ * they share a rule and are distinguished in the evidence.
+ */
+function authAbuseIncident(stats: PathStats): Incident | null {
+  if (!AUTH_PATH_RE.test(stats.path)) {
+    return null;
+  }
+
+  // POSTs are the attempts; a login page also serves GETs, which are not.
+  const attempts = stats.postCount > 0 ? stats.postCount : stats.count;
+
+  if (attempts < AUTH_MIN_ATTEMPTS) {
+    return null;
+  }
+
+  const failures = stats.status4xx;
+  const failureShare = roundRatio(failures / stats.count);
+  const peakPerMinute = stats.maxRequestsPerMinute ?? 0;
+
+  if (failureShare < AUTH_MIN_FAILURE_SHARE || peakPerMinute < AUTH_MIN_PEAK_PER_MINUTE) {
+    return null;
+  }
+
+  const uniqueIps = observedUniqueIps(stats);
+  const topIps = topPathIps(stats);
+  const topIpShare = topIps.length > 0 ? roundRatio(topIps[0][1] / stats.count) : 0;
+  const distributed = uniqueIps >= AUTH_DISTRIBUTED_MIN_IPS;
+  const concentrated = topIpShare >= AUTH_CONCENTRATED_MIN_SHARE;
+
+  if (!distributed && !concentrated) {
+    return null;
+  }
+
+  const evidence: Incident["evidence"] = [
+    { key: "path", value: stats.path },
+    { key: "attempts", value: attempts },
+    { key: "requests", value: stats.count },
+    { key: "uniqueIps", value: uniqueIps },
+    { key: "failureShare", value: failureShare },
+    { key: "status4xx", value: failures },
+    { key: "status2xx", value: stats.status2xx },
+    { key: "maxRequestsPerMinute", value: peakPerMinute }
+  ];
+
+  if (topIps.length > 0) {
+    evidence.push({
+      key: "topIps",
+      value: topIps.map(([ip, count]) => `${ip} (${count})`).join(" | ")
+    });
+    evidence.push({ key: "topIpShare", value: topIpShare });
+  }
+
+  const topSubnet = topPathSubnet(stats);
+  if (topSubnet) {
+    evidence.push({ key: "topSubnet", value: topSubnet.prefix });
+    evidence.push({ key: "topSubnetIps", value: topSubnet.ips });
+  }
+
+  if (stats.firstSeen !== null) {
+    evidence.push({ key: "firstSeen", value: epochToIso(stats.firstSeen) });
+  }
+  if (stats.lastSeen !== null) {
+    evidence.push({ key: "lastSeen", value: epochToIso(stats.lastSeen) });
+  }
+
+  if (uniqueIpsAreLowerBound(stats)) {
+    evidence.push({ key: "uniqueIpsLowerBound", value: true });
+  }
+
+  return {
+    id: `auth_abuse:${stats.path}`,
+    category: "auth_abuse",
+    kind: "compromise",
+    severity: "high",
+    score: distributed ? 85 : 80,
+    title: distributed ? "Distributed credential stuffing" : "Login brute force",
+    description: distributed
+      ? "An authentication endpoint received a burst of mostly failing attempts spread across many source IPs, the shape used to evade per-IP rate limits."
+      : "An authentication endpoint received a burst of mostly failing attempts concentrated on one source IP.",
+    evidence,
+    samples: stats.samples.slice(0, 3)
+    // Deliberately no `successful` flag: WordPress, PrestaShop and most
+    // frameworks answer a *failed* login with 200 and the form again, so a 2xx
+    // here is not evidence the credentials worked. The raw counts are in the
+    // evidence for an operator to judge.
+  };
+}
+
+function highVolumeCrawlSignal(stats: PathStats): CrawlSignal | null {
   if (
     isLowSignalEntryPath(stats.path) ||
     isIndexEntrypointWithoutAppSignal(stats) ||
@@ -701,30 +943,65 @@ function highVolumeCrawlSignal(stats: PathStats): {
   const queryVariants = observedQueryVariants(stats);
   const repeatedRequestShare = roundRatio(repeatedRequests / stats.count);
   const queryVariantRatio = stats.count > 0 ? roundRatio(queryVariants / stats.count) : 0;
+  // Both ratios divide a bounded-memory numerator by the full request count, so
+  // they collapse toward zero exactly when a path is busy enough to fill its
+  // caps. Once a cap is full the true ratio is unknowable and can only be
+  // higher than observed, so the ratio must not veto — the absolute minimums
+  // below still have to be met.
+  // A ratio is only usable when its numerator was counted in full. That fails
+  // both when the path fills its own cap and when the shared budget ran out
+  // before this path was ever seen — the second case is how a path that starts
+  // late in a long log ends up with a numerator of nearly zero.
+  const queryVariantRatioIsUsable = !queryVariantsAreLowerBound(stats);
+  const repeatedShareIsUsable = !uniqueIpsAreLowerBound(stats);
+  // Abstaining is not the same as passing. A full variant cap only proves there
+  // were at least `MAX_QUERY_VARIANTS` of them, which on a busy page is a low
+  // bar, so the abstaining branch needs a corroborating pressure signal: a real
+  // served-per-minute peak. Without it, an ordinary popular page with a wide
+  // audience would read as churn purely because its counter filled.
+  // When a path filled its own cap we know its cardinality is genuinely high, so
+  // a served-rate peak is corroboration enough. When instead the shared budget
+  // ran out before this path was seen, we know nothing about it at all — so it
+  // must additionally be a heavy hitter before an abstained ratio is allowed to
+  // pass, otherwise every busy-but-ordinary endpoint would qualify.
+  const servedPeak =
+    (stats.maxServedPerMinute ?? 0) >= CRAWL_SATURATION_SUSTAINED_QUERY_MIN_CONCENTRATED_PEAK;
+  const filledOwnCaps = stats.queryVariantsAtOwnCap === true || stats.uniqueIpsAtOwnCap === true;
+  const hasServedPeak =
+    servedPeak && (filledOwnCaps || stats.count >= CRAWL_BUDGET_STARVED_MIN_REQUESTS);
   const hasQueryChurn =
     uniqueIps >= CRAWL_MIN_UNIQUE_IPS &&
     queryVariants >= CRAWL_MIN_QUERY_VARIANTS &&
-    queryVariantRatio >= CRAWL_MIN_QUERY_VARIANT_RATIO;
+    ratioMeets(
+      queryVariantRatio,
+      CRAWL_MIN_QUERY_VARIANT_RATIO,
+      queryVariantRatioIsUsable,
+      hasServedPeak
+    );
   const hasRepeatPressure =
     repeatedIps >= CRAWL_MIN_REPEATED_IPS &&
-    repeatedRequestShare >= CRAWL_MIN_REPEATED_REQUEST_SHARE;
+    ratioMeets(
+      repeatedRequestShare,
+      CRAWL_MIN_REPEATED_REQUEST_SHARE,
+      repeatedShareIsUsable,
+      hasServedPeak
+    );
 
   return hasQueryChurn || hasRepeatPressure
     ? {
         repeatedIps,
         repeatedRequestShare,
-        queryVariantRatio
+        queryVariantRatio,
+        queryVariantRatioIsUsable,
+        repeatedShareIsUsable,
+        hasServedPeak
       }
     : null;
 }
 
 function materialPathSaturationSignal(
   stats: PathStats,
-  crawlSignal: {
-    repeatedIps: number;
-    repeatedRequestShare: number;
-    queryVariantRatio: number;
-  }
+  crawlSignal: CrawlSignal
 ): "query_churn" | "repeat_pressure" | null {
   // Saturation normally uses requests that hit real backend processing:
   //   2xx — content actually delivered.
@@ -739,7 +1016,7 @@ function materialPathSaturationSignal(
   // High signal quality (very high query-variant churn or many repeat IPs) allows
   // saturation at lower served volume — exhaustive scraping at 1 000+ hits is
   // actionable regardless of whether total volume reaches 10 000.
-  const highQuerySignal = crawlSignal.queryVariantRatio >= CRAWL_SATURATION_HIGH_SIGNAL_QUERY_RATIO;
+  const highQuerySignal = queryRatioAtLeast(crawlSignal, CRAWL_SATURATION_HIGH_SIGNAL_QUERY_RATIO);
   const highRepeatSignal = crawlSignal.repeatedIps >= CRAWL_SATURATION_HIGH_SIGNAL_REPEATED_IPS;
   const minServed =
     highQuerySignal || highRepeatSignal
@@ -758,8 +1035,8 @@ function materialPathSaturationSignal(
     return null;
   }
 
-  if (stats.status5xx >= CRAWL_SATURATION_MIN_5XX_DISTRESS) {
-    return crawlSignal.queryVariantRatio >= CRAWL_SATURATION_MIN_QUERY_VARIANT_RATIO
+  if (hasFiveXxDistress(stats)) {
+    return queryRatioAtLeast(crawlSignal, CRAWL_SATURATION_MIN_QUERY_VARIANT_RATIO)
       ? "query_churn"
       : "repeat_pressure";
   }
@@ -784,26 +1061,69 @@ function materialPathSaturationSignal(
   // Distributed query churn: many unique non-tracking query variants from spread IPs.
   const hasMaterialQueryChurn =
     observedQueryVariants(stats) >= CRAWL_SATURATION_MIN_QUERY_VARIANTS &&
-    crawlSignal.queryVariantRatio >= CRAWL_SATURATION_MIN_QUERY_VARIANT_RATIO;
+    queryRatioAtLeast(crawlSignal, CRAWL_SATURATION_MIN_QUERY_VARIANT_RATIO);
 
   // Concentrated repeat pressure: small set of IPs accounts for the majority of load.
   // Labelled separately from distributed churn — the attack profile differs.
   const hasMaterialRepeatPressure =
     crawlSignal.repeatedIps >= CRAWL_SATURATION_MIN_REPEATED_IPS &&
-    crawlSignal.repeatedRequestShare >= CRAWL_SATURATION_MIN_REPEATED_REQUEST_SHARE;
+    repeatShareAtLeast(crawlSignal, CRAWL_SATURATION_MIN_REPEATED_REQUEST_SHARE);
 
   if (hasMaterialQueryChurn) return "query_churn";
   if (hasMaterialRepeatPressure) return "repeat_pressure";
   return null;
 }
 
+/**
+ * Ratio gate that accounts for bounded-memory truncation.
+ *
+ * These ratios divide a capped numerator by the full request count, and
+ * truncation can only push the result *down*, never up. So:
+ *
+ * - at or above the minimum, the observation stands on its own — a capped
+ *   counter could not have inflated it;
+ * - below the minimum with a counter that never filled, the low ratio is real;
+ * - below the minimum with a filled counter, the true ratio is unknowable, and
+ *   a corroborating pressure signal decides instead of a number we know to be
+ *   wrong.
+ *
+ * The third case is the one that mattered: it is exactly the busiest paths that
+ * fill their caps, so comparing the collapsed ratio hid the largest events.
+ */
+function ratioMeets(
+  observed: number,
+  minimum: number,
+  isUsable: boolean,
+  corroborated: boolean
+): boolean {
+  if (observed >= minimum) {
+    return true;
+  }
+
+  return !isUsable && corroborated;
+}
+
+function queryRatioAtLeast(signal: CrawlSignal, minimum: number): boolean {
+  return ratioMeets(
+    signal.queryVariantRatio,
+    minimum,
+    signal.queryVariantRatioIsUsable,
+    signal.hasServedPeak
+  );
+}
+
+function repeatShareAtLeast(signal: CrawlSignal, minimum: number): boolean {
+  return ratioMeets(
+    signal.repeatedRequestShare,
+    minimum,
+    signal.repeatedShareIsUsable,
+    signal.hasServedPeak
+  );
+}
+
 function hasBlockedQueryPressureSaturation(
   stats: PathStats,
-  crawlSignal: {
-    repeatedIps: number;
-    repeatedRequestShare: number;
-    queryVariantRatio: number;
-  },
+  crawlSignal: CrawlSignal,
   servedCount: number,
   maxRequestsPerMinute: number
 ): boolean {
@@ -811,7 +1131,7 @@ function hasBlockedQueryPressureSaturation(
     stats.count >= CRAWL_SATURATION_BLOCKED_QUERY_MIN_REQUESTS &&
     servedCount >= CRAWL_SATURATION_BLOCKED_QUERY_MIN_SERVED &&
     observedQueryVariants(stats) >= CRAWL_SATURATION_MIN_QUERY_VARIANTS &&
-    crawlSignal.queryVariantRatio >= CRAWL_SATURATION_HIGH_SIGNAL_QUERY_RATIO &&
+    queryRatioAtLeast(crawlSignal, CRAWL_SATURATION_HIGH_SIGNAL_QUERY_RATIO) &&
     maxRequestsPerMinute >= CRAWL_SATURATION_BLOCKED_QUERY_MIN_PEAK_REQUESTS_PER_MINUTE &&
     stats.status4xx > servedCount * CRAWL_SATURATION_MAX_BLOCKED_RATIO &&
     stats.status3xx <= servedCount
@@ -830,24 +1150,29 @@ function isIndexEntrypointWithoutAppSignal(stats: PathStats): boolean {
 
 function hasSustainedQuerySaturation(
   stats: PathStats,
-  crawlSignal: {
-    repeatedIps: number;
-    repeatedRequestShare: number;
-    queryVariantRatio: number;
-  },
+  crawlSignal: CrawlSignal,
   servedCount: number,
   maxServedPerMinute: number
 ): boolean {
   if (
     servedCount < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_REQUESTS ||
     observedQueryVariants(stats) < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_VARIANTS ||
-    crawlSignal.queryVariantRatio < CRAWL_SATURATION_SUSTAINED_QUERY_MIN_RATIO ||
+    !queryRatioAtLeast(crawlSignal, CRAWL_SATURATION_SUSTAINED_QUERY_MIN_RATIO) ||
     blockedDominates(stats, servedCount)
   ) {
     return false;
   }
 
-  if (observedUniqueIps(stats) >= CRAWL_SATURATION_SUSTAINED_QUERY_MIN_DISTRIBUTED_IPS) {
+  // Spread across many IPs normally stands in for the churn ratio. When the
+  // ratio had to abstain because the variant cap filled, that shortcut would
+  // admit any high-volume page with a wide audience, so a real served-rate peak
+  // is required instead — otherwise ordinary faceted browsing spread over days
+  // reads as saturation.
+  if (
+    (crawlSignal.queryVariantRatioIsUsable ||
+      crawlSignal.queryVariantRatio >= CRAWL_SATURATION_SUSTAINED_QUERY_MIN_RATIO) &&
+    observedUniqueIps(stats) >= CRAWL_SATURATION_SUSTAINED_QUERY_MIN_DISTRIBUTED_IPS
+  ) {
     return true;
   }
 
@@ -856,20 +1181,29 @@ function hasSustainedQuerySaturation(
 
 function hasSustainedRepeatSaturation(
   stats: PathStats,
-  crawlSignal: {
-    repeatedIps: number;
-    repeatedRequestShare: number;
-    queryVariantRatio: number;
-  },
+  crawlSignal: CrawlSignal,
   servedCount: number,
   maxServedPerMinute: number
 ): boolean {
   return (
     servedCount >= CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REQUESTS &&
     crawlSignal.repeatedIps >= CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_REPEATED_IPS &&
-    crawlSignal.repeatedRequestShare >= CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_SHARE &&
+    repeatShareAtLeast(crawlSignal, CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_SHARE) &&
     maxServedPerMinute >= CRAWL_SATURATION_SUSTAINED_REPEAT_MIN_PEAK &&
     !blockedDominates(stats, servedCount)
+  );
+}
+
+/**
+ * True when errors are frequent enough on this path to mean the backend is
+ * failing under the load, rather than the ordinary trickle of errors any busy
+ * URL accumulates.
+ */
+function hasFiveXxDistress(stats: PathStats): boolean {
+  return (
+    stats.status5xx >= CRAWL_SATURATION_MIN_5XX_DISTRESS &&
+    stats.count > 0 &&
+    stats.status5xx / stats.count >= CRAWL_SATURATION_MIN_5XX_SHARE
   );
 }
 
@@ -901,6 +1235,7 @@ export function mergeRuleHit(
     const stats = readOutcomeStats(existing.evidence);
     applyStatus(stats, entry.status);
     addTopPath(stats, entry.path);
+    applyServedSensitivePath(stats, entry);
     applyOutcomeScore(existing, hit, stats, ip);
 
     if (existing.samples.length < 5 && !existing.samples.includes(hit.sample)) {
@@ -913,6 +1248,7 @@ export function mergeRuleHit(
   const stats = createOutcomeStats();
   applyStatus(stats, entry.status);
   addTopPath(stats, entry.path);
+  applyServedSensitivePath(stats, entry);
 
   const incident: Incident = {
     id,
@@ -941,6 +1277,28 @@ function createOutcomeStats(): RuleOutcomeStats {
     status404: 0,
     topPaths: new Set()
   };
+}
+
+/**
+ * Remembers the first high-value path that was actually served. Kept as a
+ * single path rather than a set: one is enough to escalate, and it keeps the
+ * evidence round-trip cheap.
+ */
+function applyServedSensitivePath(stats: RuleOutcomeStats, entry: AccessLogEntry): void {
+  if (stats.servedSensitivePath !== undefined) {
+    return;
+  }
+
+  if (entry.status < 200 || entry.status >= 300) {
+    return;
+  }
+
+  if (!HIGH_VALUE_SENSITIVE_RE.test(entry.path)) {
+    return;
+  }
+
+  stats.servedSensitivePath = entry.path;
+  stats.servedSensitiveBytes = entry.bytes ?? 0;
 }
 
 function addTopPath(stats: RuleOutcomeStats, path: string): void {
@@ -973,6 +1331,8 @@ function readOutcomeStats(evidence: Incident["evidence"]): RuleOutcomeStats {
     typeof topPathsRaw === "string" && topPathsRaw.length > 0 ? topPathsRaw.split(" | ") : []
   );
 
+  const servedSensitivePath = evidence.find((item) => item.key === "servedSensitivePath")?.value;
+
   return {
     count: numberEvidence(evidence, "count"),
     status2xx: numberEvidence(evidence, "status2xx"),
@@ -980,7 +1340,9 @@ function readOutcomeStats(evidence: Incident["evidence"]): RuleOutcomeStats {
     status4xx: numberEvidence(evidence, "status4xx"),
     status5xx: numberEvidence(evidence, "status5xx"),
     status404: numberEvidence(evidence, "status404"),
-    topPaths
+    topPaths,
+    servedSensitivePath: typeof servedSensitivePath === "string" ? servedSensitivePath : undefined,
+    servedSensitiveBytes: numberEvidence(evidence, "servedSensitiveBytes")
   };
 }
 
@@ -1030,7 +1392,12 @@ function outcomeFor(
     // hundreds is almost always a fluke (robots.txt, security.txt, redirects to
     // a default page, etc.) and shouldn't escalate.
     const successRatio = stats.count > 0 ? stats.status2xx / stats.count : 0;
-    const meaningfulSuccess = stats.status2xx >= 2 || successRatio >= 0.1;
+    // A served high-value target escalates on its own. The ratio test below
+    // exists to filter flukes on ordinary probes, but applying it here buries
+    // the one response that matters under the hundreds that failed.
+    const servedHighValueTarget =
+      stats.servedSensitivePath !== undefined && (stats.servedSensitiveBytes ?? 0) > 0;
+    const meaningfulSuccess = servedHighValueTarget || stats.status2xx >= 2 || successRatio >= 0.1;
     if (meaningfulSuccess) {
       return { label: "file_served", severity: "high", score: 80, successful: true };
     }
@@ -1110,6 +1477,10 @@ function buildRuleEvidence(
   if (stats.status404 > 0) {
     evidence.push({ key: "status404", value: stats.status404 });
   }
+  if (stats.servedSensitivePath !== undefined) {
+    evidence.push({ key: "servedSensitivePath", value: stats.servedSensitivePath });
+    evidence.push({ key: "servedSensitiveBytes", value: stats.servedSensitiveBytes ?? 0 });
+  }
 
   return evidence;
 }
@@ -1120,6 +1491,103 @@ function buildRuleEvidence(
  * sustained activity (count >= 3) or fan-out (paths > 1).
  * Drops single 404 probes — these are constant on the internet and not actionable.
  */
+const SEARCH_ENGINE_RANGES = [prepareRanges(GOOGLEBOT_RANGES), prepareRanges(BINGBOT_RANGES)];
+
+function isVerifiedSearchEngineIp(ip: string): boolean {
+  return SEARCH_ENGINE_RANGES.some((ranges) => ipInPreparedRanges(ip, ranges));
+}
+
+/**
+ * Demotes payload and recon findings whose source is an IP that genuinely
+ * belongs to Google or Microsoft. A crawler requesting an attack payload is
+ * re-fetching a URL it found linked or previously indexed, so the log records a
+ * poisoned URL rather than an attacker — reporting it as a critical, successful
+ * compromise points the operator at the wrong problem entirely. The finding is
+ * kept, because a poisoned indexed URL is worth cleaning up, but it moves to
+ * noise and says why.
+ */
+export function demoteVerifiedCrawlerPayloads(incidents: Map<string, Incident>): void {
+  for (const incident of incidents.values()) {
+    // Incident ids are `<ruleId>:<ip>`; IPv6 addresses contain colons of their
+    // own, so only the first segment is the rule.
+    const ruleId = incident.id.split(":")[0] ?? "";
+
+    if (!isPayloadRule(ruleId) && !isReconRule(ruleId)) {
+      continue;
+    }
+
+    const ip = incident.evidence.find((item) => item.key === "ip")?.value;
+
+    if (typeof ip !== "string" || !isVerifiedSearchEngineIp(ip)) {
+      continue;
+    }
+
+    incident.kind = "noise";
+    incident.severity = "low";
+    incident.score = Math.min(incident.score, 30);
+    incident.successful = false;
+    incident.description =
+      "Requested by a verified search-engine crawler, so this is an indexed or linked URL carrying the payload rather than an attack from this IP.";
+    incident.evidence.push({ key: "verifiedCrawler", value: true });
+  }
+}
+
+/**
+ * Withdraws the high-value escalation when the "served" body is just the site's
+ * generic page. Many sites answer an unknown path with 200 and the homepage or
+ * a soft-404 template, so a sensitive path returning content is only a leak if
+ * the content is distinctive — a real `phpinfo` dump does not weigh exactly
+ * what the homepage weighs.
+ *
+ * The size table is capped, but truncation only ever omits a size, so a size
+ * that IS present having been served repeatedly is sound evidence; a size that
+ * is absent is simply left alone. Truncation can therefore cost a demotion,
+ * never invent one.
+ */
+export function demoteSoftServedRecon(
+  incidents: Map<string, Incident>,
+  servedBodySizes: ReadonlyMap<number, number>
+): void {
+  for (const incident of incidents.values()) {
+    if (!isReconRule(incident.id.split(":")[0] ?? "")) {
+      continue;
+    }
+
+    const bytes = incident.evidence.find((item) => item.key === "servedSensitiveBytes")?.value;
+
+    // One coincidental match is not a pattern; a generic page is served often.
+    if (
+      typeof bytes !== "number" ||
+      (servedBodySizes.get(bytes) ?? 0) < GENERIC_BODY_MIN_OCCURRENCES
+    ) {
+      continue;
+    }
+
+    const stats = readOutcomeStats(incident.evidence);
+    // Re-score as if the high-value hit had not been served. Anything that
+    // still qualifies on its own (repeat successes, a real success ratio)
+    // keeps its severity.
+    stats.servedSensitivePath = undefined;
+    stats.servedSensitiveBytes = undefined;
+    const outcome = outcomeFor("recon_sensitive_file", stats);
+
+    incident.severity = outcome.severity ?? incident.severity;
+    incident.score = outcome.score ?? incident.score;
+    incident.successful = outcome.successful ?? false;
+    incident.kind = actionableCompromiseKind(
+      { ruleId: "recon_sensitive_file" } as RuleHit,
+      outcome.label
+    )
+      ? "compromise"
+      : "noise";
+    const outcomeEvidence = incident.evidence.find((item) => item.key === "outcome");
+    if (outcomeEvidence) {
+      outcomeEvidence.value = outcome.label;
+    }
+    incident.evidence.push({ key: "servedBodyMatchesGenericPage", value: true });
+  }
+}
+
 export function pruneNoise(incidents: Map<string, Incident>): void {
   for (const [id, incident] of incidents) {
     const count = Number(incident.evidence.find((item) => item.key === "count")?.value ?? 0);

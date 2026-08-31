@@ -5,6 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-08-31
+
+Findings from auditing citrx against independent blind analyses of seven real
+access-log corpora: seven analysts examined the same logs with only shell tools
+and no knowledge of citrx, and every divergence was investigated.
+
+### Fixed
+
+- **Heavy hitters were dropped by the bounded-memory counters.** Top-N counting,
+  per-path stats and the shared per-path IP/query-variant budgets all admitted
+  keys first-come-first-served, so anything that only started appearing late in
+  a long log was invisible regardless of volume. On a 3.9M-line corpus the single
+  busiest path — 38% of all traffic — was missing from the report entirely.
+  Counters now retain heavy hitters (space-saving admission) and every path is
+  guaranteed a minimum sample of the shared budgets.
+- **Ratios computed from truncated counters rejected the largest events.** Query
+  and repeat-pressure ratios divided a capped numerator by the full request
+  count, collapsing toward zero exactly when a path was busy enough to fill its
+  caps. A ratio at or above its minimum is now trusted on its own (truncation can
+  only push it down); below it, a filled counter defers to a corroborating
+  pressure signal instead of a number known to be wrong.
+- Directory inputs no longer abort the whole run when they contain a file that
+  is not an access log (`error_log`, `xferlog`, OS junk). Such inputs are skipped
+  with a warning and reported in `skippedInputs`; the run fails only when no
+  input is an access log.
+- Loopback and private addresses are excluded from per-IP behavior rules: a
+  proxy hop was being reported as a critical Googlebot impersonation.
+- Attack payloads requested from verified Googlebot/Bingbot IPs are demoted to
+  noise — they describe a poisoned indexed URL, not an attack from that IP.
+- Server distress is measured as a share of a path's requests rather than an
+  absolute error count, which any high-volume path crosses.
+- Aggregate bot roll-ups no longer receive the persistence score bonus.
+
+### Added
+
+- `auth_abuse:` — credential stuffing and login brute force on authentication
+  endpoints, distinguishing distributed from single-source attempts. Previously
+  only a raw POST count was reported for these paths.
+- `ddos_sustained_ip_flood:` — one IP sustaining a high per-minute rate against
+  very few URLs, catching floods paced below the per-second burst threshold.
+- `server_capacity_distress` — site-wide 503/504/507/508 responses, the clearest
+  evidence load actually degraded the site, previously invisible when spread
+  across many clients.
+- `fake_bot_campaign:` — collapses a coordinated impersonation campaign into one
+  incident instead of dozens of near-identical per-IP rows.
+- `fake_ai_bot:` — AI-crawler user-agents sent from outside the ranges their
+  operators publish (OpenAI GPTBot / OAI-SearchBot, Perplexity PerplexityBot).
+  `ai_scraper_known:` now reports `ipVerifiable`, so a self-declared crawler is
+  never presented as verified.
+- Saturation and auth incidents name the source IPs and heaviest subnet
+  (`topIps`, `topIpShare`, `topSubnet`), and error storms name the failing paths
+  (`topErrorPaths`).
+- Recon escalates when a high-value target (`phpinfo.php`, `.env`,
+  `.git/config`, a database dump…) actually returns content, regardless of
+  success ratio — withdrawn when the response weighs exactly what the site
+  serves on ordinary paths.
+
+### Changed
+
+- AI crawlers reach SATURATION on sustained path fan-out, bot-induced 5xx, or a
+  dominant share of total traffic. Requiring path fan-out vetoed the worst real
+  cases: a crawler hammering one faceted URL never accrues it, yet accounted for
+  91% of one site's traffic while being reported as low-severity noise.
+- Counts for keys admitted after a counter filled are upper bounds rather than
+  exact. Peak memory rises on very large corpora as a result.
+
 ## [0.5.1] - 2026-07-07
 
 ### Fixed

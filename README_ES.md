@@ -110,7 +110,7 @@ El flujo es deliberadamente offline-first:
 |                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 🌊 **Streaming**                | Parsing línea a línea con memoria acotada. Logs de varios GB no se cargan enteros en RAM. Los mapas top guardan 20k claves; path stats 8k rutas, 64 IPs/ruta, 256 query variants/ruta, más presupuestos globales (claves **distintas** extra se descartan, no se estiman). Los contadores de descarte son cota inferior (`>=8192`) cuando el set de huellas está lleno. El histograma RPS guarda 100k segundos ocupados más un set acotado de segundos omitidos distintos. La truncación se muestra en terminal/Markdown/HTML/TUI. |
-| 🧭 **Autodetección de formato** | Muestrea cada entrada, elige `apache_common` o combined (`apache_combined`; Nginx combined usa el mismo regex) y falla pronto si no es un log de acceso.                                                                                                                                                                                                                                                                                                                                                                           |
+| 🧭 **Autodetección de formato** | Muestrea cada entrada, elige `apache_common` o combined (`apache_combined`; Nginx combined usa el mismo regex) omite con un aviso los ficheros que no son logs de acceso hallados dentro de un directorio (`error_log`, `xferlog`, basura del SO) y solo falla si ninguna entrada es un log de acceso.                                                                                                                                                                                                                             |
 | 🧩 **Formatos personalizados**  | Config JSON declarativa con un regex + campos nombrados, validada con `zod`.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 🛡️ **~30 reglas de detección**  | SQLi/XSS/LFI/SSRF/inyección de comandos, recon, bots falsos, escáneres, ráfagas DDoS, crawlers de IA, hotspots de POST, tormentas de errores.                                                                                                                                                                                                                                                                                                                                                                                      |
 | 🖥️ **TUI completa**             | Pestañas de incidentes, tabla de logs indexada, carga de filas bajo demanda, top values, detalle de petición, exportaciones.                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -513,6 +513,7 @@ Cada incidente lleva un `kind` que determina su panel en la TUI:
 | `command_injection:`    | `command_injection` | compromise | metacaracteres de shell + indicadores de comando       |
 | `recon_sensitive_file:` | `recon`             | compromise | sondeos de `.env`, `.git`, backups, dumps              |
 | `rare_method:`          | `http_anomaly`      | noise      | métodos poco comunes (`CONNECT`, `TRACE`, `OPTIONS`)   |
+| `auth_abuse:`           | `auth_abuse`        | compromise | credential stuffing / fuerza bruta en un login         |
 
 Los incidentes de payload se agrupan **por IP atacante** (un incidente por IP).
 Puntuación por resultado de respuesta:
@@ -520,9 +521,25 @@ Puntuación por resultado de respuesta:
 - cualquier `2xx` → SECURITY, `critical/100` + `2XX_HIT` (el payload llegó)
 - cualquier `5xx` → SECURITY, `critical/90`
 - solo bloqueadas/redirigidas → ruido en OTHER (contexto, no impacto probado)
+- pedidas desde una IP **verificada** de Googlebot/Bingbot → ruido en OTHER: el
+  crawler está recuperando una URL indexada envenenada, así que el hallazgo es
+  sobre la URL, no sobre la IP
+
+`auth_abuse:` salta cuando un endpoint de login recibe una ráfaga de intentos
+mayoritariamente fallidos, repartidos entre muchas IPs (credential stuffing) o
+concentrados en una (fuerza bruta). No marca `2XX_HIT` a propósito: la mayoría
+de frameworks responden 200 a un login fallido.
 
 `recon_sensitive_file` requiere ≥2 respuestas correctas o un 10% de ratio de
-éxito para no marcar escáneres 404 normales.
+éxito para no marcar escáneres 404 normales — **salvo** cuando un objetivo de
+alto valor (`phpinfo.php`, `.env`, `.git/config`, `wp-config.php.bak`,
+`server-status`, un volcado `.sql`…) devuelve contenido de verdad, que escala por
+sí solo: un acierto entre cientos de fallos sigue siendo una fuga.
+
+Ese escalado se retira (`servedBodyMatchesGenericPage`) cuando la respuesta pesa
+exactamente lo que el sitio sirve en rutas normales: muchos sitios responden 200
+con la home ante cualquier ruta desconocida, y un volcado real de `phpinfo` no
+pesa lo que pesa la home.
 
 </details>
 
@@ -540,28 +557,53 @@ Puntuación por resultado de respuesta:
 | `ddos_distributed_subnet:`  | `ddos`             | saturation       | IPv4 `/24` o IPv6 `/48` sobre umbrales de RPS + IPs únicas   |
 | `http_4xx_storm:`           | `http_anomaly`     | noise            | una IP, muchas 4xx en buckets de minuto adyacentes           |
 | `http_5xx_storm:`           | `http_anomaly`     | saturation       | una IP, muchas 5xx en buckets de minuto adyacentes           |
+| `ddos_sustained_ip_flood:`  | `ddos`             | saturation       | una IP a alto ritmo por minuto contra muy pocas URLs         |
+| `server_capacity_distress`  | `http_anomaly`     | saturation       | 503/504/507/508 en todo el sitio: se agotó la capacidad      |
 
 </details>
 
 <details>
 <summary><strong>Reglas de bots y escáneres</strong></summary>
 
-| Prefijo ID                  | Categoría          | Kind             | Significado                                                   |
-| --------------------------- | ------------------ | ---------------- | ------------------------------------------------------------- |
-| `ai_scraper_known:`         | `ai_scraper`       | saturation/noise | UA conocido de crawler/asistente de IA, agrupado por bot      |
-| `scanner_ua_known:`         | `scanner`          | compromise       | UA conocido de escáner/herramienta ofensiva                   |
-| `scanner_signature_paths:`  | `scanner`          | compromise       | una IP toca muchas rutas de fingerprint                       |
-| `single_ip_path_explosion:` | `abusive_crawling` | saturation       | una IP > 10 rutas únicas/minuto sostenido                     |
-| `ua_rotation_same_ip:`      | `http_anomaly`     | noise            | una IP, muchos UAs **y** pico RPS ≥ 5                         |
-| `fake_bot_googlebot:`       | `fake_bot`         | compromise       | dice ser Googlebot pero la IP está fuera de rangos publicados |
-| `fake_bot_bingbot:`         | `fake_bot`         | compromise       | dice ser bingbot pero la IP está fuera de rangos de Bing      |
+| Prefijo ID                  | Categoría          | Kind             | Significado                                                                                                       |
+| --------------------------- | ------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ai_scraper_known:`         | `ai_scraper`       | saturation/noise | UA conocido de crawler/asistente de IA, agrupado por bot                                                          |
+| `scanner_ua_known:`         | `scanner`          | compromise       | UA conocido de escáner/herramienta ofensiva                                                                       |
+| `scanner_signature_paths:`  | `scanner`          | compromise       | una IP toca muchas rutas de fingerprint                                                                           |
+| `single_ip_path_explosion:` | `abusive_crawling` | saturation       | una IP > 10 rutas únicas/minuto sostenido                                                                         |
+| `ua_rotation_same_ip:`      | `http_anomaly`     | noise            | una IP, muchos UAs **y** pico RPS ≥ 5                                                                             |
+| `fake_bot_googlebot:`       | `fake_bot`         | compromise       | dice ser Googlebot pero la IP está fuera de rangos publicados                                                     |
+| `fake_bot_bingbot:`         | `fake_bot`         | compromise       | dice ser bingbot pero la IP está fuera de rangos de Bing                                                          |
+| `fake_bot_campaign:`        | `fake_bot`         | compromise       | muchas IPs con el mismo UA falsificado de Googlebot/bingbot (sustituye las filas por IP a partir de `5` orígenes) |
+| `fake_ai_bot:`              | `fake_bot`         | compromise       | UA de crawler de IA enviado desde fuera de los rangos que publica su operador                                     |
+
+La evidencia de `abusive_crawl:` y `auth_abuse:` nombra las IPs de origen más
+pesadas (`topIps`, `topIpShare`) y la `/24`-`/48` más pesada (`topSubnet`,
+`topSubnetShare`), para poder distinguir una ruta saturada por un único cliente
+de tráfico realmente distribuido.
 
 Notas: `single_ip_path_explosion` exige **pathsPerMinute ≥ 10** (cargas de
-página con muchos assets no lo disparan). `abusive_crawl` entra en SATURATION
+página con muchos assets no lo disparan). El distress del servidor se mide como **proporción** de las peticiones de la
+ruta (≥2%, con un suelo de 100 errores), no como cuenta absoluta: en una URL con
+un millón de peticiones, cien 5xx son la tasa de fondo que acumula cualquier
+endpoint con tráfico, así que una cuenta a secas etiquetaba mal justo las rutas
+de mayor volumen. `abusive_crawl` entra en SATURATION
 con volumen real servido + un pico servido por minuto, o con query churn de pico
 alto que aún sirve algunas respuestas caras aunque la mayoría de intentos estén
 bloqueados. `fake_bot_*` exige ≥10 peticiones. Las IPs verificadas de
-Googlebot/Bingbot quedan excluidas de toda detección de bots/escáneres.
+Googlebot/Bingbot quedan excluidas de toda detección de bots/escáneres, y también
+las direcciones de loopback/privadas (`127.0.0.0/8`, RFC1918, link-local): esas
+identifican el salto de proxy del propio servidor, no a un cliente remoto.
+La identidad de un crawler de IA se verifica por IP **solo para los operadores
+que publican sus rangos** (GPTBot / OAI-SearchBot / ChatGPT-User de OpenAI,
+PerplexityBot / Perplexity-User de Perplexity). Todo incidente
+`ai_scraper_known:` lleva `ipVerifiable`, de modo que un UA autodeclarado sin
+rangos publicados nunca se presenta como verificado.
+
+`ai_scraper_known:` llega a SATURATION con cualquiera de estas señales por
+separado: fan-out de rutas sostenido, 5xx provocados por el bot, o una cuota
+dominante del tráfico total — un crawler que
+machaca una única URL facetada cuesta lo mismo se reparta o no entre rutas.
 
 Actualiza los snapshots de rangos IP de Googlebot/Bingbot con:
 

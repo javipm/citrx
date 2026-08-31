@@ -108,7 +108,7 @@ The workflow is deliberately offline-first:
 |                            |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 🌊 **Streaming**           | Bounded-memory, line-by-line parsing. Multi-GB logs never load fully into RAM. Top maps keep 20k keys; path stats 8k paths, 64 IPs/path, 256 query variants/path, plus global path-IP/variant budgets (further **distinct** keys are dropped, not estimated). Dropped-key counters are a lower bound (`>=8192`) once the fingerprint set is full. RPS histogram keeps 100k occupied seconds plus a bounded overflow set of distinct omitted seconds. Truncation is shown in terminal/Markdown/HTML/TUI. |
-| 🧭 **Format auto-detect**  | Samples each input, picks `apache_common` or combined (`apache_combined`; Nginx combined is the same regex), fails early on non-access-log input.                                                                                                                                                                                                                                                                                                                                                       |
+| 🧭 **Format auto-detect**  | Samples each input, picks `apache_common` or combined (`apache_combined`; Nginx combined is the same regex), skips non-access-log files found inside a directory (`error_log`, `xferlog`, OS junk) with a warning, and fails only when no input is an access log.                                                                                                                                                                                                                                       |
 | 🧩 **Custom formats**      | Declarative JSON config with one regex + named fields, validated with `zod`.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 🛡️ **~30 detection rules** | SQLi/XSS/LFI/SSRF/cmd-injection, recon, fake bots, scanners, DDoS bursts, AI crawlers, POST hotspots, error storms.                                                                                                                                                                                                                                                                                                                                                                                     |
 | 🖥️ **Full TUI**            | Incident tabs, indexed access-log table, on-demand row loading, top values, request detail, exports.                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -496,15 +496,16 @@ Every incident carries a `kind` that drives its TUI panel:
 <details>
 <summary><strong>Payload &amp; recon rules</strong></summary>
 
-| ID prefix               | Category            | Kind       | Meaning                                             |
-| ----------------------- | ------------------- | ---------- | --------------------------------------------------- |
-| `sqli:`                 | `sql_injection`     | compromise | `union select`, sleep/benchmark, encoded SQL        |
-| `xss:`                  | `xss`               | compromise | script/browser execution indicators                 |
-| `lfi_rfi:`              | `path_traversal`    | compromise | traversal, LFI/RFI, `php://filter`, sensitive paths |
-| `ssrf:`                 | `ssrf`              | compromise | localhost, metadata IPs/hosts, callback-like params |
-| `command_injection:`    | `command_injection` | compromise | shell metacharacters + command indicators           |
-| `recon_sensitive_file:` | `recon`             | compromise | probes for `.env`, `.git`, backups, dumps           |
-| `rare_method:`          | `http_anomaly`      | noise      | uncommon methods (`CONNECT`, `TRACE`, `OPTIONS`)    |
+| ID prefix               | Category            | Kind       | Meaning                                               |
+| ----------------------- | ------------------- | ---------- | ----------------------------------------------------- |
+| `sqli:`                 | `sql_injection`     | compromise | `union select`, sleep/benchmark, encoded SQL          |
+| `xss:`                  | `xss`               | compromise | script/browser execution indicators                   |
+| `lfi_rfi:`              | `path_traversal`    | compromise | traversal, LFI/RFI, `php://filter`, sensitive paths   |
+| `ssrf:`                 | `ssrf`              | compromise | localhost, metadata IPs/hosts, callback-like params   |
+| `command_injection:`    | `command_injection` | compromise | shell metacharacters + command indicators             |
+| `recon_sensitive_file:` | `recon`             | compromise | probes for `.env`, `.git`, backups, dumps             |
+| `rare_method:`          | `http_anomaly`      | noise      | uncommon methods (`CONNECT`, `TRACE`, `OPTIONS`)      |
+| `auth_abuse:`           | `auth_abuse`        | compromise | credential stuffing / brute force on a login endpoint |
 
 Payload incidents are grouped **by attacker IP** (one incident per IP). Scoring
 by response outcome:
@@ -512,9 +513,24 @@ by response outcome:
 - any `2xx` → SECURITY, `critical/100` + `2XX_HIT` (payload landed)
 - any `5xx` → SECURITY, `critical/90`
 - only blocked/redirected → OTHER noise (context, not proven impact)
+- requested from a **verified** Googlebot/Bingbot IP → OTHER noise: the crawler is
+  re-fetching a poisoned indexed URL, so the finding is about the URL, not the IP
+
+`auth_abuse:` fires on a login endpoint receiving a burst of mostly-failing
+attempts, either spread across many IPs (credential stuffing) or concentrated on
+one (brute force). It deliberately sets no `2XX_HIT`: most frameworks answer a
+failed login with 200.
 
 `recon_sensitive_file` needs ≥2 successful responses or a 10% success ratio to
-avoid flagging ordinary 404 scanners.
+avoid flagging ordinary 404 scanners — **except** when a high-value target
+(`phpinfo.php`, `.env`, `.git/config`, `wp-config.php.bak`, `server-status`, a
+`.sql` dump…) actually returns content, which escalates on its own: one hit out
+of hundreds of failures is still a leak.
+
+That escalation is withdrawn (`servedBodyMatchesGenericPage`) when the response
+weighs exactly what the site serves on ordinary paths — many sites answer any
+unknown path with 200 and the homepage, and a real `phpinfo` dump does not weigh
+what the homepage weighs.
 
 </details>
 
@@ -532,28 +548,50 @@ avoid flagging ordinary 404 scanners.
 | `ddos_distributed_subnet:`  | `ddos`             | saturation       | IPv4 `/24` or IPv6 `/48` over RPS + unique-IP thresholds              |
 | `http_4xx_storm:`           | `http_anomaly`     | noise            | one IP, many 4xx in adjacent minute buckets                           |
 | `http_5xx_storm:`           | `http_anomaly`     | saturation       | one IP, many 5xx in adjacent minute buckets                           |
+| `ddos_sustained_ip_flood:`  | `ddos`             | saturation       | one IP at a high per-minute rate against very few URLs                |
+| `server_capacity_distress`  | `http_anomaly`     | saturation       | site-wide 503/504/507/508 responses: capacity ran out under load      |
 
 </details>
 
 <details>
 <summary><strong>Bot &amp; scanner rules</strong></summary>
 
-| ID prefix                   | Category           | Kind             | Meaning                                             |
-| --------------------------- | ------------------ | ---------------- | --------------------------------------------------- |
-| `ai_scraper_known:`         | `ai_scraper`       | saturation/noise | known AI crawler/assistant UA, grouped by bot       |
-| `scanner_ua_known:`         | `scanner`          | compromise       | known scanner/offensive tooling UA                  |
-| `scanner_signature_paths:`  | `scanner`          | compromise       | one IP touches many fingerprint paths               |
-| `single_ip_path_explosion:` | `abusive_crawling` | saturation       | one IP > 10 unique paths/minute sustained           |
-| `ua_rotation_same_ip:`      | `http_anomaly`     | noise            | one IP, many UAs **and** peak RPS ≥ 5               |
-| `fake_bot_googlebot:`       | `fake_bot`         | compromise       | claims Googlebot but IP outside published ranges    |
-| `fake_bot_bingbot:`         | `fake_bot`         | compromise       | claims bingbot but IP outside published Bing ranges |
+| ID prefix                   | Category           | Kind             | Meaning                                                                                            |
+| --------------------------- | ------------------ | ---------------- | -------------------------------------------------------------------------------------------------- |
+| `ai_scraper_known:`         | `ai_scraper`       | saturation/noise | known AI crawler/assistant UA, grouped by bot                                                      |
+| `scanner_ua_known:`         | `scanner`          | compromise       | known scanner/offensive tooling UA                                                                 |
+| `scanner_signature_paths:`  | `scanner`          | compromise       | one IP touches many fingerprint paths                                                              |
+| `single_ip_path_explosion:` | `abusive_crawling` | saturation       | one IP > 10 unique paths/minute sustained                                                          |
+| `ua_rotation_same_ip:`      | `http_anomaly`     | noise            | one IP, many UAs **and** peak RPS ≥ 5                                                              |
+| `fake_bot_googlebot:`       | `fake_bot`         | compromise       | claims Googlebot but IP outside published ranges                                                   |
+| `fake_bot_bingbot:`         | `fake_bot`         | compromise       | claims bingbot but IP outside published Bing ranges                                                |
+| `fake_bot_campaign:`        | `fake_bot`         | compromise       | many IPs sending the same forged Googlebot/bingbot UA (replaces the per-IP rows above `5` sources) |
+| `fake_ai_bot:`              | `fake_bot`         | compromise       | AI-crawler UA sent from outside the ranges its operator publishes                                  |
+
+`abusive_crawl:` and `auth_abuse:` evidence names the heaviest source IPs
+(`topIps`, `topIpShare`) and the heaviest `/24`-`/48` (`topSubnet`,
+`topSubnetShare`), so a path saturated by one client is distinguishable from
+genuinely distributed traffic.
 
 Notes: `single_ip_path_explosion` needs **pathsPerMinute ≥ 10** (asset-heavy page
-loads don't trigger it). `abusive_crawl` enters SATURATION with real served
+loads don't trigger it). Server distress is measured as a **share** of a path's requests (≥2%, with a
+floor of 100 errors), not as an absolute count: on a million-request URL a
+hundred 5xx is the background rate every busy endpoint accumulates, so a tally
+alone mislabelled exactly the highest-volume paths. `abusive_crawl` enters SATURATION with real served
 volume + a served-per-minute peak, or with high-peak query churn that still serves
 some expensive responses even when most attempts are blocked. `fake_bot_*` needs
 ≥10 requests. Verified Googlebot/Bingbot IPs are excluded from all bot/scanner
-detections.
+detections, and so are loopback/private addresses (`127.0.0.0/8`, RFC1918,
+link-local): those identify the server's own proxy hop, not a remote client.
+AI-crawler identity is checked by IP **only for operators that publish their
+ranges** (OpenAI's GPTBot / OAI-SearchBot / ChatGPT-User, Perplexity's
+PerplexityBot / Perplexity-User). Every `ai_scraper_known:` incident carries
+`ipVerifiable`, so a self-declared UA with no published ranges is never
+presented as verified.
+
+`ai_scraper_known:` reaches SATURATION on any one of sustained path fan-out,
+bot-induced 5xx, or taking a dominant share of total traffic — a crawler hammering a single faceted URL costs the same whether or not
+it spreads across paths.
 
 Refresh the bundled Googlebot/Bingbot IP-range snapshots with:
 

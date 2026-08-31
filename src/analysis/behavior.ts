@@ -1,12 +1,16 @@
 import type { AccessLogEntry } from "../parser/access-log.js";
+import { AI_BOT_RANGES } from "../rules/data/ai-bot-ranges.js";
 import { AI_BOT_PATTERNS } from "../rules/data/ai-bots.js";
 import { BINGBOT_RANGES } from "../rules/data/bingbot-ranges.js";
 import { FINGERPRINT_PATHS } from "../rules/data/scanner-fingerprint-paths.js";
 import { GOOGLEBOT_RANGES } from "../rules/data/googlebot-ranges.js";
 import { SCANNER_UA_PATTERNS } from "../rules/data/scanner-uas.js";
 import type { AiBotStats, Incident, IncidentKind, IpBehaviorStats, TimeStats } from "./types.js";
-import { expandIPv6, ipInPreparedRanges, prepareRanges } from "./ip-ranges.js";
+import { ipInPreparedRanges, isNonRoutableClientIp, prepareRanges } from "./ip-ranges.js";
+import { extractSubnetPrefix } from "../utils/subnet.js";
 import { accessLogTimestampToEpochSeconds } from "./timestamp.js";
+
+export { extractSubnetPrefix };
 import { MAX_GLOBAL_RPS_SECONDS, MAX_OVERFLOW_RPS_SECONDS } from "./capped-counter.js";
 
 export const MAX_TRACKED_IPS = 100_000;
@@ -17,9 +21,17 @@ const UA_SENTINEL_LIMIT = 9;
 const TOP_IP_LIMIT = 100;
 const SINGLE_IP_RPS_THRESHOLD = 50;
 const SINGLE_IP_BURST_SECONDS = 3;
+/**
+ * Floods commonly pace below the per-second burst threshold. 600 requests in a
+ * minute is 10 rps sustained for the whole minute — far above any single
+ * browser session, but only when aimed at a handful of URLs.
+ */
+const SUSTAINED_FLOOD_MIN_PER_MINUTE = 600;
+const SUSTAINED_FLOOD_MIN_REQUESTS_PER_PATH = 50;
 const GLOBAL_SPIKE_ABSOLUTE_RPS = 100;
 const GLOBAL_SPIKE_MULTIPLIER = 5;
 const GLOBAL_SPIKE_SECONDS = 10;
+const ERROR_PATH_LIMIT = 32;
 const FOUR_XX_STORM_THRESHOLD = 200;
 const FOUR_XX_BUCKET_SECONDS = 60;
 const FIVE_XX_STORM_THRESHOLD = 200;
@@ -32,6 +44,28 @@ const AI_BOT_MEDIUM_REQUESTS = 500;
 const AI_BOT_HIGH_PATH_MINUTES = 3;
 const AI_BOT_MIN_PEAK_SERVED_PER_MINUTE = 120;
 const AI_BOT_MIN_5XX_DISTRESS = 100;
+/** Same reasoning as the path rules: distress is a rate, not a tally. */
+const AI_BOT_MIN_5XX_SHARE = 0.02;
+/**
+ * A crawler taking this share of all traffic is a capacity problem regardless
+ * of how it spreads across URLs. The absolute floor keeps tiny logs, where one
+ * bot trivially dominates, out of the high band.
+ */
+const AI_BOT_DOMINANT_TRAFFIC_SHARE = 0.2;
+const AI_BOT_DOMINANT_MIN_REQUESTS = 1_000;
+/** Share is only meaningful once the log itself is big enough to have a shape. */
+const AI_BOT_DOMINANT_MIN_TOTAL_REQUESTS = 10_000;
+/** Some responses must actually be served; a bot blocked outright costs little. */
+const AI_BOT_DOMINANT_MIN_SERVED = 200;
+/**
+ * 503 Service Unavailable, 507 Insufficient Storage, 508 Resource Limit
+ * Reached and 504 Gateway Timeout are emitted when the server or its upstream
+ * ran out of capacity, as opposed to 500, which is usually an application bug.
+ */
+const CAPACITY_ERROR_STATUSES = new Set([503, 504, 507, 508, 529]);
+const SERVER_DISTRESS_MIN_ERRORS = 500;
+const SERVER_DISTRESS_MIN_SHARE = 0.01;
+const SERVER_DISTRESS_CRITICAL_SHARE = 0.05;
 const FINGERPRINT_BUCKET_SECONDS = 60;
 const FINGERPRINT_PATH_THRESHOLD = 20;
 const SINGLE_IP_PATH_EXPLOSION_THRESHOLD = 500;
@@ -57,6 +91,10 @@ const STALE_SUBNET_EVICTION_BATCH = 5_000;
 /** Fake-bot threshold: 1-2 requests from a misconfigured bot or a typo'd UA aren't actionable.
  *  Real impersonation campaigns probe at scale. */
 const FAKE_BOT_MIN_REQUESTS = 10;
+/** Distinct forging IPs above which the per-IP incidents become one campaign. */
+const FAKE_BOT_CAMPAIGN_MIN_IPS = 5;
+/** Below this, an out-of-range hit is a stale snapshot or a one-off, not a campaign. */
+const FAKE_AI_BOT_MIN_REQUESTS = 20;
 
 interface BehaviorTrackerOptions {
   maxTrackedIps?: number;
@@ -68,6 +106,14 @@ interface BehaviorTrackerOptions {
 interface IpBehaviorState {
   ip: string;
   totalRequests: number;
+  /** Paths that produced 4xx/5xx, so an error storm can name what is failing. */
+  status4xxPaths: Map<string, number>;
+  status5xxPaths: Map<string, number>;
+  /** Per-minute request counter; the peak separates a flood from a page load. */
+  currentMinute: number | null;
+  currentMinuteRequests: number;
+  maxRequestsPerMinute: number;
+  maxRequestsPerMinuteAt: number | null;
   firstSeen: number;
   lastSeen: number;
   currentSecond: number | null;
@@ -152,6 +198,9 @@ interface BotState {
   currentMinute: number | null;
   currentMinuteServed: number;
   maxServedPerMinute: number;
+  /** Requests from IPs outside the operator's published ranges, when published. */
+  unverifiedRequests: number;
+  unverifiedIps: Map<string, number>;
 }
 
 interface TopIpSnapshot {
@@ -208,12 +257,20 @@ export class BehaviorTracker {
   private readonly subnets = new Map<string, SubnetState>();
   private readonly googlebotRanges = prepareRanges(GOOGLEBOT_RANGES);
   private readonly bingbotRanges = prepareRanges(BINGBOT_RANGES);
+  private readonly aiBotRanges = new Map(
+    [...AI_BOT_RANGES].map(([name, ranges]) => [name, prepareRanges(ranges)])
+  );
   private readonly globalRpsBySecond = new Map<number, number>();
   private readonly topIps = new Map<string, TopIpSnapshot>();
   private readonly botRollup = new Map<string, BotState>();
   private firstSeen: number | null = null;
   private lastSeen: number | null = null;
   private streamNow: number | null = null;
+  private observedRequests = 0;
+  private globalStatus5xx = 0;
+  private readonly capacityErrorCounts = new Map<number, number>();
+  private capacityErrorFirstSeen: number | null = null;
+  private capacityErrorLastSeen: number | null = null;
   private peakGlobalRps = 0;
   private peakGlobalRpsAt: number | null = null;
   private invalidTimestampLines = 0;
@@ -266,6 +323,7 @@ export class BehaviorTracker {
     const timeStats = this.buildTimeStats();
     const incidents = [
       ...this.buildSingleIpBurstIncidents(),
+      ...this.buildSustainedIpFloodIncidents(),
       ...this.buildGlobalSpikeIncidents(timeStats.globalRpsP95),
       ...this.build4xxStormIncidents(),
       ...this.buildAiScraperIncidents(),
@@ -276,7 +334,9 @@ export class BehaviorTracker {
       ...this.buildHeadFloodIncidents(),
       ...this.buildSubnetDdosIncidents(),
       ...this.buildFakeBotIncidents(),
-      ...this.build5xxStormIncidents()
+      ...this.buildFakeAiBotIncidents(),
+      ...this.build5xxStormIncidents(),
+      ...this.buildServerDistressIncidents()
     ].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
 
     return {
@@ -352,6 +412,12 @@ export class BehaviorTracker {
     const state: IpBehaviorState = {
       ip,
       totalRequests: 0,
+      status4xxPaths: new Map(),
+      status5xxPaths: new Map(),
+      currentMinute: null,
+      currentMinuteRequests: 0,
+      maxRequestsPerMinute: 0,
+      maxRequestsPerMinuteAt: null,
       firstSeen: epochSecond,
       lastSeen: epochSecond,
       currentSecond: null,
@@ -487,6 +553,8 @@ export class BehaviorTracker {
 
   private observeIp(state: IpBehaviorState, entry: AccessLogEntry, epochSecond: number): void {
     state.totalRequests += 1;
+    this.observedRequests += 1;
+    this.observeIpMinute(state, epochSecond);
     state.firstSeen = Math.min(state.firstSeen, epochSecond);
     state.lastSeen = Math.max(state.lastSeen, epochSecond);
     incrementMap(state.methods, entry.method);
@@ -503,10 +571,25 @@ export class BehaviorTracker {
 
     if (entry.status >= 400 && entry.status <= 499) {
       state.status4xxCount += 1;
+      recordErrorPath(state.status4xxPaths, entry.path);
       this.observe4xx(state, epochSecond);
     } else if (entry.status >= 500 && entry.status <= 599) {
       state.status5xxCount += 1;
+      this.globalStatus5xx += 1;
+      recordErrorPath(state.status5xxPaths, entry.path);
       this.observe5xx(state, epochSecond);
+
+      // Capacity-class errors say the server ran out of a resource rather than
+      // hitting an application bug, so they are the clearest evidence that load
+      // actually degraded the site.
+      if (CAPACITY_ERROR_STATUSES.has(entry.status)) {
+        this.capacityErrorCounts.set(
+          entry.status,
+          (this.capacityErrorCounts.get(entry.status) ?? 0) + 1
+        );
+        this.capacityErrorFirstSeen = this.capacityErrorFirstSeen ?? epochSecond;
+        this.capacityErrorLastSeen = epochSecond;
+      }
     }
 
     this.observeIpRps(state, epochSecond);
@@ -677,10 +760,13 @@ export class BehaviorTracker {
       status5xx: 0,
       currentMinute: null,
       currentMinuteServed: 0,
-      maxServedPerMinute: 0
+      maxServedPerMinute: 0,
+      unverifiedRequests: 0,
+      unverifiedIps: new Map<string, number>()
     };
 
     bot.requests += 1;
+    this.observeBotVerification(bot, ip);
     bot.firstSeen = Math.min(bot.firstSeen, epochSecond);
     bot.lastSeen = Math.max(bot.lastSeen, epochSecond);
     bot.requestedRobotsTxt = bot.requestedRobotsTxt || entry.path === "/robots.txt";
@@ -985,6 +1071,83 @@ export class BehaviorTracker {
     return sparseRpsP95(this.globalRpsBySecond, this.firstSeen, this.lastSeen);
   }
 
+  private observeIpMinute(state: IpBehaviorState, epochSecond: number): void {
+    const minute = Math.floor(epochSecond / 60);
+
+    if (state.currentMinute !== minute) {
+      state.currentMinute = minute;
+      state.currentMinuteRequests = 0;
+    }
+
+    state.currentMinuteRequests += 1;
+
+    if (state.currentMinuteRequests > state.maxRequestsPerMinute) {
+      state.maxRequestsPerMinute = state.currentMinuteRequests;
+      state.maxRequestsPerMinuteAt = minute * 60;
+    }
+  }
+
+  /**
+   * Sustained flood from one IP. The per-second burst rule only fires above
+   * `SINGLE_IP_RPS_THRESHOLD`, which a real L7 flood often stays just under —
+   * pacing at 30-45 rps for tens of seconds is both effective and invisible to
+   * it. The discriminator against a browser is repetition: a page load fans out
+   * across many distinct URLs, a flood hammers a handful, so a high per-minute
+   * rate only counts when requests far outnumber the paths touched.
+   */
+  private buildSustainedIpFloodIncidents(): Incident[] {
+    const incidents: Incident[] = [];
+
+    for (const state of this.ips.values()) {
+      if (state.maxRequestsPerMinute < SUSTAINED_FLOOD_MIN_PER_MINUTE) {
+        continue;
+      }
+
+      if (this.skipPerIpBehavior(state.ip)) continue;
+
+      const pathsTouched = Math.max(1, state.paths.size);
+      const requestsPerPath = state.totalRequests / pathsTouched;
+
+      if (requestsPerPath < SUSTAINED_FLOOD_MIN_REQUESTS_PER_PATH) {
+        continue;
+      }
+
+      // Already reported at higher severity by the per-second burst rule.
+      if (state.longestBurstLen >= SINGLE_IP_BURST_SECONDS) {
+        continue;
+      }
+
+      incidents.push({
+        id: `ddos_sustained_ip_flood:${state.ip}`,
+        category: "ddos",
+        kind: "saturation",
+        severity: "high",
+        score: 85,
+        title: "Sustained single IP flood",
+        description:
+          "One IP sustained a high request rate against very few URLs, the shape of an application-layer flood rather than page loads.",
+        evidence: [
+          { key: "ip", value: state.ip },
+          { key: "requests", value: state.totalRequests },
+          { key: "maxRequestsPerMinute", value: state.maxRequestsPerMinute },
+          {
+            key: "maxRequestsPerMinuteAt",
+            value:
+              state.maxRequestsPerMinuteAt === null ? "" : formatEpoch(state.maxRequestsPerMinuteAt)
+          },
+          { key: "peakRps", value: state.peakRps },
+          { key: "pathsTouched", value: state.paths.size },
+          { key: "requestsPerPath", value: roundRatio(requestsPerPath) },
+          { key: "firstSeen", value: formatEpoch(state.firstSeen) },
+          { key: "lastSeen", value: formatEpoch(state.lastSeen) }
+        ],
+        samples: [...state.paths].slice(0, 3)
+      });
+    }
+
+    return incidents;
+  }
+
   private buildSingleIpBurstIncidents(): Incident[] {
     const incidents: Incident[] = [];
 
@@ -993,7 +1156,7 @@ export class BehaviorTracker {
         continue;
       }
 
-      if (this.isLegitimateBot(state.ip)) continue;
+      if (this.skipPerIpBehavior(state.ip)) continue;
 
       incidents.push({
         id: `ddos_rps_burst_single_ip:${state.ip}`,
@@ -1095,7 +1258,7 @@ export class BehaviorTracker {
         continue;
       }
 
-      if (this.isLegitimateBot(state.ip)) continue;
+      if (this.skipPerIpBehavior(state.ip)) continue;
 
       incidents.push({
         id: `http_4xx_storm:${state.ip}`,
@@ -1114,13 +1277,75 @@ export class BehaviorTracker {
           {
             key: "windowEnd",
             value: formatEpoch((state.max4xxBucket + 1) * FOUR_XX_BUCKET_SECONDS - 1)
-          }
+          },
+          { key: "topErrorPaths", value: formatTopErrorPaths(state.status4xxPaths) }
         ],
         samples: []
       });
     }
 
     return incidents;
+  }
+
+  /**
+   * Site-wide capacity failure. The per-IP 5xx storm rule needs one client to
+   * produce a burst of errors, so a site collapsing under load spread across
+   * thousands of clients — the common shape when a crawler saturates it —
+   * produced no incident at all despite being the clearest distress signal in
+   * the log.
+   */
+  private buildServerDistressIncidents(): Incident[] {
+    const capacityErrors = [...this.capacityErrorCounts.values()].reduce(
+      (total, count) => total + count,
+      0
+    );
+
+    if (capacityErrors < SERVER_DISTRESS_MIN_ERRORS || this.observedRequests === 0) {
+      return [];
+    }
+
+    const share = capacityErrors / this.observedRequests;
+
+    if (share < SERVER_DISTRESS_MIN_SHARE) {
+      return [];
+    }
+
+    const critical = share >= SERVER_DISTRESS_CRITICAL_SHARE;
+    const breakdown = [...this.capacityErrorCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([status, count]) => `${status}=${count}`)
+      .join(" | ");
+
+    return [
+      {
+        id: "server_capacity_distress",
+        category: "http_anomaly",
+        kind: "saturation",
+        severity: critical ? "critical" : "high",
+        score: critical ? 90 : 75,
+        title: "Server capacity errors under load",
+        description:
+          "The server returned resource-limit or gateway-timeout responses, meaning requests were refused because capacity ran out rather than because of an application bug.",
+        evidence: [
+          { key: "capacityErrors", value: capacityErrors },
+          { key: "statusBreakdown", value: breakdown },
+          { key: "totalRequests", value: this.observedRequests },
+          { key: "errorShare", value: roundRatio(share) },
+          { key: "status5xxTotal", value: this.globalStatus5xx },
+          {
+            key: "firstSeen",
+            value:
+              this.capacityErrorFirstSeen === null ? "" : formatEpoch(this.capacityErrorFirstSeen)
+          },
+          {
+            key: "lastSeen",
+            value:
+              this.capacityErrorLastSeen === null ? "" : formatEpoch(this.capacityErrorLastSeen)
+          }
+        ],
+        samples: []
+      }
+    ];
   }
 
   private build5xxStormIncidents(): Incident[] {
@@ -1131,7 +1356,7 @@ export class BehaviorTracker {
         continue;
       }
 
-      if (this.isLegitimateBot(state.ip)) continue;
+      if (this.skipPerIpBehavior(state.ip)) continue;
 
       incidents.push({
         id: `http_5xx_storm:${state.ip}`,
@@ -1149,7 +1374,8 @@ export class BehaviorTracker {
           {
             key: "windowEnd",
             value: formatEpoch((state.max5xxBucket + 1) * FIVE_XX_BUCKET_SECONDS - 1)
-          }
+          },
+          { key: "topErrorPaths", value: formatTopErrorPaths(state.status5xxPaths) }
         ],
         samples: []
       });
@@ -1160,6 +1386,10 @@ export class BehaviorTracker {
 
   private buildFakeBotIncidents(): Incident[] {
     const incidents: Incident[] = [];
+    const campaigns = new Map<
+      "Googlebot" | "bingbot",
+      { requests: number; sources: [string, number][]; userAgent: string }
+    >();
 
     for (const state of this.ips.values()) {
       // Single-request impersonations are noise (misconfigured bots, tests, malformed UAs).
@@ -1167,7 +1397,14 @@ export class BehaviorTracker {
         continue;
       }
 
+      // A proxy hop carries whatever user-agent it forwarded, so "Googlebot
+      // from 127.0.0.1" is the server relaying a request, not impersonation.
+      if (isNonRoutableClientIp(state.ip)) {
+        continue;
+      }
+
       if (state.claimedGooglebot && !ipInPreparedRanges(state.ip, this.googlebotRanges)) {
+        this.recordFakeBot(campaigns, "Googlebot", state);
         incidents.push(
           fakeBotIncident({
             id: `fake_bot_googlebot:${state.ip}`,
@@ -1181,6 +1418,7 @@ export class BehaviorTracker {
       }
 
       if (state.claimedBingbot && !ipInPreparedRanges(state.ip, this.bingbotRanges)) {
+        this.recordFakeBot(campaigns, "bingbot", state);
         incidents.push(
           fakeBotIncident({
             id: `fake_bot_bingbot:${state.ip}`,
@@ -1194,7 +1432,95 @@ export class BehaviorTracker {
       }
     }
 
-    return incidents;
+    return this.rollUpFakeBotCampaigns(incidents, campaigns);
+  }
+
+  private recordFakeBot(
+    campaigns: Map<
+      "Googlebot" | "bingbot",
+      { requests: number; sources: [string, number][]; userAgent: string }
+    >,
+    claimedBot: "Googlebot" | "bingbot",
+    state: IpBehaviorState
+  ): void {
+    const campaign = campaigns.get(claimedBot) ?? {
+      requests: 0,
+      sources: [],
+      userAgent: state.claimedBotUserAgent ?? ""
+    };
+    campaign.requests += state.totalRequests;
+    campaign.sources.push([state.ip, state.totalRequests]);
+    campaigns.set(claimedBot, campaign);
+  }
+
+  /**
+   * Collapses a coordinated impersonation campaign into one incident. Dozens of
+   * IPs sending the identical forged user-agent is a single actor, and listing
+   * them one per incident buries every other finding in the report while
+   * understating the campaign: each IP on its own looks like a minor probe.
+   * Below the threshold the per-IP incidents are kept as they are.
+   */
+  private rollUpFakeBotCampaigns(
+    incidents: Incident[],
+    campaigns: Map<
+      "Googlebot" | "bingbot",
+      { requests: number; sources: [string, number][]; userAgent: string }
+    >
+  ): Incident[] {
+    const rolledUp = new Set<"Googlebot" | "bingbot">();
+    const campaignIncidents: Incident[] = [];
+
+    for (const [claimedBot, campaign] of campaigns) {
+      if (campaign.sources.length < FAKE_BOT_CAMPAIGN_MIN_IPS) {
+        continue;
+      }
+
+      rolledUp.add(claimedBot);
+      const sources = [...campaign.sources].sort((a, b) => b[1] - a[1]);
+      const subnets = new Set<string>();
+      for (const [ip] of sources) {
+        const prefix = extractSubnetPrefix(ip);
+        if (prefix) subnets.add(prefix);
+      }
+
+      campaignIncidents.push({
+        id: `fake_bot_campaign:${claimedBot}`,
+        category: "fake_bot",
+        kind: "compromise",
+        severity: "critical",
+        score: 90,
+        title: `Coordinated fake ${claimedBot} campaign`,
+        description:
+          "Many distinct IPs sent the same forged search-engine user-agent, which is one actor spreading a crawl across addresses rather than isolated misconfigured clients.",
+        evidence: [
+          { key: "claimedBot", value: claimedBot },
+          { key: "sourceIps", value: sources.length },
+          { key: "requests", value: campaign.requests },
+          { key: "subnets", value: subnets.size },
+          { key: "userAgent", value: campaign.userAgent },
+          {
+            key: "topIps",
+            value: sources
+              .slice(0, 5)
+              .map(([ip, count]) => `${ip} (${count})`)
+              .join(" | ")
+          }
+        ],
+        samples: []
+      });
+    }
+
+    if (rolledUp.size === 0) {
+      return incidents;
+    }
+
+    const kept = incidents.filter((incident) => {
+      if (rolledUp.has("Googlebot") && incident.id.startsWith("fake_bot_googlebot:")) return false;
+      if (rolledUp.has("bingbot") && incident.id.startsWith("fake_bot_bingbot:")) return false;
+      return true;
+    });
+
+    return [...kept, ...campaignIncidents];
   }
 
   private buildAiBotStats(): AiBotStats[] {
@@ -1211,15 +1537,114 @@ export class BehaviorTracker {
       }));
   }
 
+  /**
+   * Checks a declared AI crawler against its operator's published ranges. Only
+   * some operators publish them; for the rest the user-agent is unprovable from
+   * an access log and nothing is recorded, so absence of a finding never means
+   * "verified".
+   */
+  private observeBotVerification(bot: BotState, ip: string): void {
+    const ranges = this.aiBotRanges.get(bot.botName);
+
+    if (!ranges || ipInPreparedRanges(ip, ranges)) {
+      return;
+    }
+
+    bot.unverifiedRequests += 1;
+    const current = bot.unverifiedIps.get(ip);
+
+    if (current !== undefined) {
+      bot.unverifiedIps.set(ip, current + 1);
+      return;
+    }
+
+    if (bot.unverifiedIps.size < BOT_IP_SENTINEL_LIMIT) {
+      bot.unverifiedIps.set(ip, 1);
+    }
+  }
+
+  /**
+   * Impersonation of an AI crawler whose operator publishes its ranges. Sending
+   * a well-known crawler's user-agent from outside its network is a deliberate
+   * attempt to inherit the allowances sites grant that crawler.
+   */
+  private buildFakeAiBotIncidents(): Incident[] {
+    const incidents: Incident[] = [];
+
+    for (const bot of this.botRollup.values()) {
+      if (!this.aiBotRanges.has(bot.botName) || bot.unverifiedRequests < FAKE_AI_BOT_MIN_REQUESTS) {
+        continue;
+      }
+
+      const sources = [...bot.unverifiedIps.entries()].sort((a, b) => b[1] - a[1]);
+
+      incidents.push({
+        id: `fake_ai_bot:${bot.botName}`,
+        category: "fake_bot",
+        kind: "compromise",
+        severity: "high",
+        score: 85,
+        title: `Fake ${bot.botName} impersonation`,
+        description:
+          "Requests carried this AI crawler's user-agent from IPs outside the ranges its operator publishes, so the crawler identity is forged.",
+        evidence: [
+          { key: "botName", value: bot.botName },
+          { key: "unverifiedRequests", value: bot.unverifiedRequests },
+          { key: "totalRequests", value: bot.requests },
+          { key: "unverifiedIps", value: sources.length },
+          {
+            key: "topIps",
+            value: sources
+              .slice(0, 5)
+              .map(([ip, count]) => `${ip} (${count})`)
+              .join(" | ")
+          },
+          { key: "firstSeen", value: formatEpoch(bot.firstSeen) },
+          { key: "lastSeen", value: formatEpoch(bot.lastSeen) }
+        ],
+        samples: []
+      });
+    }
+
+    return incidents;
+  }
+
+  private static botCausedDistress(bot: BotState): boolean {
+    return (
+      bot.status5xx >= AI_BOT_MIN_5XX_DISTRESS &&
+      bot.requests > 0 &&
+      bot.status5xx / bot.requests >= AI_BOT_MIN_5XX_SHARE
+    );
+  }
+
   private buildAiScraperIncidents(): Incident[] {
+    const totalRequests = this.observedRequests;
+
     return [...this.botRollup.values()].map((bot) => {
       // Only sustained high-volume AI scraping counts as saturation. Low-volume
       // bot traffic is informational — kind: "noise" so it stays out of the
       // saturation panel.
-      const high =
+      // Each of these is independently sufficient. Requiring path diversity on
+      // top of the others used to veto the worst real cases: a crawler that
+      // hammers one faceted URL with a fresh query string every request never
+      // accrues "high path minutes", yet costs the backend the same per request
+      // and can account for most of a site's traffic.
+      const pathDiversityPressure =
         bot.highPathMinuteCount >= AI_BOT_HIGH_PATH_MINUTES &&
         (bot.maxServedPerMinute >= AI_BOT_MIN_PEAK_SERVED_PER_MINUTE ||
-          bot.status5xx >= AI_BOT_MIN_5XX_DISTRESS);
+          BehaviorTracker.botCausedDistress(bot));
+      const distressPressure = BehaviorTracker.botCausedDistress(bot);
+      const trafficShare = totalRequests > 0 ? bot.requests / totalRequests : 0;
+      const dominatesTraffic =
+        totalRequests >= AI_BOT_DOMINANT_MIN_TOTAL_REQUESTS &&
+        bot.requests >= AI_BOT_DOMINANT_MIN_REQUESTS &&
+        bot.status2xx >= AI_BOT_DOMINANT_MIN_SERVED &&
+        trafficShare >= AI_BOT_DOMINANT_TRAFFIC_SHARE;
+
+      // A served-rate peak on its own is deliberately *not* enough: on a large
+      // busy site any popular crawler touches it for a minute without that
+      // being saturation. It counts only together with path fan-out.
+      const high = pathDiversityPressure || distressPressure || dominatesTraffic;
       const medium = bot.requests >= AI_BOT_MEDIUM_REQUESTS;
       const kind: IncidentKind = high ? "saturation" : "noise";
 
@@ -1240,6 +1665,8 @@ export class BehaviorTracker {
           { key: "maxPathsPerMinute", value: bot.maxPathsPerMinute },
           { key: "maxServedPerMinute", value: bot.maxServedPerMinute },
           { key: "highPathMinutes", value: bot.highPathMinuteCount },
+          { key: "trafficShare", value: roundRatio(trafficShare) },
+          { key: "ipVerifiable", value: this.aiBotRanges.has(bot.botName) },
           { key: "status2xx", value: bot.status2xx },
           { key: "status3xx", value: bot.status3xx },
           { key: "status4xx", value: bot.status4xx },
@@ -1260,7 +1687,7 @@ export class BehaviorTracker {
         continue;
       }
 
-      if (this.isLegitimateBot(state.ip)) continue;
+      if (this.skipPerIpBehavior(state.ip)) continue;
 
       incidents.push({
         id: `scanner_ua_known:${state.scannerMatch}:${state.ip}`,
@@ -1295,7 +1722,7 @@ export class BehaviorTracker {
         continue;
       }
 
-      if (this.isLegitimateBot(state.ip)) continue;
+      if (this.skipPerIpBehavior(state.ip)) continue;
 
       incidents.push({
         id: `scanner_signature_paths:${state.ip}`,
@@ -1329,6 +1756,16 @@ export class BehaviorTracker {
     );
   }
 
+  /**
+   * Per-IP incidents are skipped for verified search-engine crawlers and for
+   * addresses that cannot be a remote client. A loopback or RFC1918 source is
+   * the server's own proxy hop: attributing behavior to it produces findings
+   * about the server rather than about any attacker.
+   */
+  private skipPerIpBehavior(ip: string): boolean {
+    return this.isLegitimateBot(ip) || isNonRoutableClientIp(ip);
+  }
+
   private buildSingleIpPathExplosionIncidents(): Incident[] {
     const incidents: Incident[] = [];
 
@@ -1338,7 +1775,7 @@ export class BehaviorTracker {
       }
 
       // Skip verified Googlebot/Bingbot — legitimate crawlers touch many paths.
-      if (this.isLegitimateBot(state.ip)) {
+      if (this.skipPerIpBehavior(state.ip)) {
         continue;
       }
 
@@ -1388,7 +1825,7 @@ export class BehaviorTracker {
         continue;
       }
 
-      if (this.isLegitimateBot(state.ip)) continue;
+      if (this.skipPerIpBehavior(state.ip)) continue;
 
       incidents.push({
         id: `ua_rotation_same_ip:${state.ip}`,
@@ -1420,7 +1857,7 @@ export class BehaviorTracker {
         continue;
       }
 
-      if (this.isLegitimateBot(state.ip)) continue;
+      if (this.skipPerIpBehavior(state.ip)) continue;
 
       const headRatio = state.headCount / state.totalRequests;
 
@@ -1554,25 +1991,30 @@ function matchUserAgent(
   return patterns.find((pattern) => pattern.regex.test(userAgent))?.name ?? null;
 }
 
-export function extractSubnetPrefix(ip: string): string | null {
-  if (ip.includes(":")) {
-    const expanded = expandIPv6(ip);
+/**
+ * Tracks which paths an IP is erroring on, bounded to a handful of entries. An
+ * error storm without the failing URL says the server is unhappy but not what
+ * broke, which is the one thing the operator needs to act.
+ */
+function recordErrorPath(paths: Map<string, number>, path: string): void {
+  const current = paths.get(path);
 
-    if (!expanded) {
-      return null;
-    }
-
-    const groups = expanded.split(":");
-    return `${groups.slice(0, 3).join(":")}::/48`;
+  if (current !== undefined) {
+    paths.set(path, current + 1);
+    return;
   }
 
-  const parts = ip.split(".");
-
-  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)) {
-    return null;
+  if (paths.size < ERROR_PATH_LIMIT) {
+    paths.set(path, 1);
   }
+}
 
-  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+function formatTopErrorPaths(paths: Map<string, number>): string {
+  return [...paths.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 3)
+    .map(([path, count]) => `${path} (${count})`)
+    .join(" | ");
 }
 
 function formatEpoch(epochSecond: number): string {

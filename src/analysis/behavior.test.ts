@@ -232,11 +232,19 @@ describe("behavior tracker", () => {
     );
   });
 
-  it("keeps high-total AI crawlers as noise without bursty path fan-out", () => {
+  it("keeps high-total AI crawlers as noise when they are a small share of traffic", () => {
     const tracker = new BehaviorTracker();
 
+    // 5001 bot requests spread thinly against a much larger human baseline:
+    // high absolute volume, but no path fan-out, no served burst and only ~9%
+    // of traffic, so it stays informational.
     for (let index = 0; index < 5001; index += 1) {
       tracker.observe(entry({ userAgent: "ClaudeBot/1.0", timestamp: ts(index) }));
+    }
+    for (let index = 0; index < 50_000; index += 1) {
+      tracker.observe(
+        entry({ ip: `10.1.${index % 250}.${(index % 250) + 1}`, timestamp: ts(index) })
+      );
     }
 
     expect(tracker.finalize().incidents).toEqual(
@@ -245,6 +253,38 @@ describe("behavior tracker", () => {
           id: "ai_scraper_known:ClaudeBot",
           kind: "noise",
           severity: "low"
+        })
+      ])
+    );
+  });
+
+  it("raises AI crawlers that dominate total traffic without path fan-out", () => {
+    const tracker = new BehaviorTracker();
+
+    // One faceted URL hammered with a fresh query string each time: no path
+    // fan-out at all, but the crawler is the overwhelming majority of traffic.
+    for (let index = 0; index < 5001; index += 1) {
+      tracker.observe(
+        entry({
+          userAgent: "ClaudeBot/1.0",
+          path: "/category",
+          target: `/category?q=${index}`,
+          timestamp: ts(index)
+        })
+      );
+    }
+    for (let index = 0; index < 8000; index += 1) {
+      tracker.observe(
+        entry({ ip: `10.2.${index % 250}.${(index % 250) + 1}`, timestamp: ts(index) })
+      );
+    }
+
+    expect(tracker.finalize().incidents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "ai_scraper_known:ClaudeBot",
+          kind: "saturation",
+          severity: "high"
         })
       ])
     );
@@ -865,6 +905,183 @@ function entry(overrides: Partial<AccessLogEntry> = {}): AccessLogEntry {
     ...overrides
   };
 }
+
+describe("AI crawler IP verification", () => {
+  it("reports an AI crawler user-agent sent from outside its published ranges", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 30; index += 1) {
+      tracker.observe(
+        entry({ ip: "198.51.100.200", userAgent: "GPTBot/1.2", timestamp: ts(index) })
+      );
+    }
+
+    const incident = tracker.finalize().incidents.find((item) => item.id === "fake_ai_bot:GPTBot");
+    expect(incident?.severity).toBe("high");
+    expect(incident?.evidence.find((item) => item.key === "unverifiedRequests")?.value).toBe(30);
+  });
+
+  it("says nothing about a crawler whose operator publishes no ranges", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 30; index += 1) {
+      tracker.observe(
+        entry({ ip: "198.51.100.200", userAgent: "ClaudeBot/1.0", timestamp: ts(index) })
+      );
+    }
+
+    const result = tracker.finalize();
+    expect(result.incidents.map((item) => item.id)).not.toContain("fake_ai_bot:ClaudeBot");
+    // …but the report must not imply it was checked either.
+    const scraper = result.incidents.find((item) => item.id === "ai_scraper_known:ClaudeBot");
+    expect(scraper?.evidence.find((item) => item.key === "ipVerifiable")?.value).toBe(false);
+  });
+});
+
+describe("fake bot campaigns", () => {
+  it("rolls many forging IPs into one campaign incident", () => {
+    const tracker = new BehaviorTracker();
+    const ua = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+
+    for (let host = 1; host <= 10; host += 1) {
+      for (let index = 0; index < 12; index += 1) {
+        tracker.observe(entry({ ip: `198.51.100.${host}`, userAgent: ua, timestamp: ts(index) }));
+      }
+    }
+
+    const ids = tracker.finalize().incidents.map((incident) => incident.id);
+    expect(ids).toContain("fake_bot_campaign:Googlebot");
+    // The per-IP rows are replaced, not added to.
+    expect(ids.filter((id) => id.startsWith("fake_bot_googlebot:"))).toEqual([]);
+  });
+
+  it("keeps per-IP incidents when only a couple of IPs forge the user-agent", () => {
+    const tracker = new BehaviorTracker();
+    const ua = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+
+    for (let host = 1; host <= 2; host += 1) {
+      for (let index = 0; index < 12; index += 1) {
+        tracker.observe(entry({ ip: `192.0.2.${host}`, userAgent: ua, timestamp: ts(index) }));
+      }
+    }
+
+    const ids = tracker.finalize().incidents.map((incident) => incident.id);
+    expect(ids).not.toContain("fake_bot_campaign:Googlebot");
+    expect(ids).toContain("fake_bot_googlebot:192.0.2.1");
+  });
+});
+
+describe("non-routable client addresses", () => {
+  it("does not report a proxy hop as an impersonating bot", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 50; index += 1) {
+      tracker.observe(
+        entry({
+          ip: "127.0.0.1",
+          userAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+          timestamp: ts(index)
+        })
+      );
+    }
+
+    const ids = tracker.finalize().incidents.map((incident) => incident.id);
+    expect(ids).not.toContain("fake_bot_googlebot:127.0.0.1");
+  });
+
+  it("still reports impersonation from a routable address", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 50; index += 1) {
+      tracker.observe(
+        entry({
+          ip: "198.51.100.201",
+          userAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+          timestamp: ts(index)
+        })
+      );
+    }
+
+    const ids = tracker.finalize().incidents.map((incident) => incident.id);
+    expect(ids).toContain("fake_bot_googlebot:198.51.100.201");
+  });
+});
+
+describe("sustained single IP flood", () => {
+  it("reports a high per-minute rate aimed at one path", () => {
+    const tracker = new BehaviorTracker();
+
+    // 800 requests inside one minute at 40 rps: under the per-second burst
+    // threshold, so only the sustained rule can catch it.
+    for (let second = 0; second < 20; second += 1) {
+      for (let index = 0; index < 40; index += 1) {
+        tracker.observe(
+          entry({ ip: "198.51.100.202", path: "/", target: "/", timestamp: ts(second) })
+        );
+      }
+    }
+
+    const ids = tracker.finalize().incidents.map((incident) => incident.id);
+    expect(ids).toContain("ddos_sustained_ip_flood:198.51.100.202");
+  });
+
+  it("ignores the same rate spread across many distinct paths", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let second = 0; second < 20; second += 1) {
+      for (let index = 0; index < 40; index += 1) {
+        const path = `/asset-${second}-${index}`;
+        tracker.observe(entry({ ip: "203.0.113.99", path, target: path, timestamp: ts(second) }));
+      }
+    }
+
+    const ids = tracker.finalize().incidents.map((incident) => incident.id);
+    expect(ids).not.toContain("ddos_sustained_ip_flood:203.0.113.99");
+  });
+});
+
+describe("server capacity distress", () => {
+  it("reports capacity-class errors spread across many clients", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 2000; index += 1) {
+      tracker.observe(
+        entry({
+          ip: `198.51.${index % 250}.${(index % 250) + 1}`,
+          status: 508,
+          timestamp: ts(index)
+        })
+      );
+    }
+    for (let index = 0; index < 20_000; index += 1) {
+      tracker.observe(
+        entry({ ip: `203.0.${index % 250}.${(index % 250) + 1}`, timestamp: ts(index) })
+      );
+    }
+
+    const distress = tracker
+      .finalize()
+      .incidents.find((incident) => incident.id === "server_capacity_distress");
+    expect(distress).toBeDefined();
+    expect(distress?.kind).toBe("saturation");
+  });
+
+  it("stays silent when capacity errors are a negligible share", () => {
+    const tracker = new BehaviorTracker();
+
+    for (let index = 0; index < 20; index += 1) {
+      tracker.observe(entry({ ip: "198.51.100.5", status: 503, timestamp: ts(index) }));
+    }
+    for (let index = 0; index < 20_000; index += 1) {
+      tracker.observe(
+        entry({ ip: `203.0.${index % 250}.${(index % 250) + 1}`, timestamp: ts(index) })
+      );
+    }
+
+    const ids = tracker.finalize().incidents.map((incident) => incident.id);
+    expect(ids).not.toContain("server_capacity_distress");
+  });
+});
 
 function ts(secondOffset: number): string {
   const date = new Date(Date.parse("2026-05-25T00:00:00.000Z") + secondOffset * 1000);
