@@ -1507,6 +1507,36 @@ describe("payload signatures — Phase 1 (D1-D5)", () => {
   });
 
   describe("D5: command injection expanded binaries and %0a separator", () => {
+    it.each([
+      "/catalog?Eacute%3Btuis=Non_disponible%2FCat&order=product.reference.asc",
+      "/catalog?filter=%26amp%3Beacute%3B%3B-Available%2FCat",
+      "/catalog?filter=colour;blue&category=cat",
+      "/search?q=notes;documentation/cmd.exe",
+      "/search?q=notes;cat-food",
+      "/search?q=notes;php.html"
+    ])("does not interpret catalogue or document text as shell commands: %s", (target) => {
+      expect(
+        detectRequestHits(entry(target)).some((hit) => hit.ruleId === "command_injection")
+      ).toBe(false);
+    });
+
+    it.each([
+      "/run?q=;cat%20/etc/passwd",
+      "/run?q=%3B%20whoami",
+      "/run?q=|%09/usr/bin/id",
+      "/run?q=$(cat%20/etc/passwd)",
+      "/run?q=`whoami`",
+      "/run?q=;cat</etc/passwd",
+      "/run?q=;%20/usr/local/bin/python%20-c%20print(1)",
+      "/run?q=;powershell%20-Command%20Get-Process",
+      "/run?q=|cmd.exe%20/c%20dir",
+      "/run?q=;cat${IFS}/etc/passwd"
+    ])("still detects executable shell commands: %s", (target) => {
+      expect(detectRequestHits(entry(target))).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ruleId: "command_injection" })])
+      );
+    });
+
     it("detects base64 binary via pipe metachar", () => {
       const hits = detectRequestHits(entry("/ping?host=127.0.0.1|base64%20/etc/passwd"));
       expect(hits).toEqual(

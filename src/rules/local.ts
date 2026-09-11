@@ -217,10 +217,11 @@ const RULES: RuleDefinition[] = [
     title: "Command injection payload",
     description: "Request target contains shell metacharacters with command execution indicators.",
     patterns: [
-      // Classic metachar + known Unix binaries
-      /(?:;|%3b|\||%7c|`|%60|\$\(|%24%28).*(?:\bid\b|\bwhoami\b|\bcat\b|\bwget\b|\bcurl\b|\bbash\b|\bnc\b|\bsh\b|\bpython\b|\bperl\b|\bphp\b|\bping\b|\bnslookup\b|\bbase64\b|\bxxd\b|\bopenssl\b)/i,
+      // Require a command position and token boundary: HTML entities followed
+      // by catalogue text such as ";.../Cat" are not shell execution.
+      /(?:;|%3b|\||%7c|`|%60|\$\(|%24%28)\s*(?:\/(?:usr\/(?:local\/)?)?s?bin\/)?(?:id|whoami|cat|wget|curl|bash|nc|sh|python|perl|php|ping|nslookup|base64|xxd|openssl)(?=$|[\s;&|`$()<>])/i,
       // Windows/PowerShell variants
-      /(?:;|%3b|\||%7c|`|%60|\$\(|%24%28).*(?:powershell|cmd\.exe|wscript|cscript)/i,
+      /(?:;|%3b|\||%7c|`|%60|\$\(|%24%28)\s*(?:powershell|cmd\.exe|wscript|cscript)(?=$|[\s;&|`$()<>])/i,
       // $IFS and newline-based separator bypass.
       // normalizeForMatching() decodes %0a/%0d%0a to real \n/\r\n before RULES
       // run, so matching the literal "%0a" string here would be dead code —
