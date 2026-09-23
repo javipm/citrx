@@ -431,6 +431,11 @@ it only selects the visible page. Manual Space selection is also capped at
 ## 🔎 Filtering
 
 Filters work on the global access log, incident rows, and top-value drill-downs.
+The `url` column includes the request path and query string, with sensitive values
+redacted. Long URLs are truncated; press `Enter` to inspect the full request.
+Use `param:SubmitCurrency` to match that query parameter in the request URL.
+Plain text `SubmitCurrency` can also match other parts of the log line, such as the referer.
+
 Case-insensitive, with a small query language:
 
 - plain text searches across IP, time, method, path, target, status, bytes, UA, raw line

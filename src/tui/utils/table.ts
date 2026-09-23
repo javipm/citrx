@@ -38,7 +38,7 @@ export function accessTableHeader(columns: AccessTableColumns): string {
     ["meth", columns.method],
     ["st", columns.status, "right"],
     ["bytes", columns.bytes, "right"],
-    ["path", columns.path],
+    ["url", columns.path],
     ["ua", columns.ua]
   ]);
 }
@@ -56,7 +56,7 @@ export function accessTableRow(
     [line.method, columns.method],
     [String(line.status), columns.status, "right"],
     [String(line.bytes ?? "-"), columns.bytes, "right"],
-    [line.path, columns.path],
+    [line.target, columns.path],
     [userAgentLabel(line.userAgent), columns.ua]
   ]);
 }

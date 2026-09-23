@@ -438,8 +438,14 @@ exportación muestran progreso y `Esc` las cancela.
 ## 🔎 Filtrado
 
 Los filtros funcionan sobre el log global, las filas de incidente y los
-drill-downs de top values. Insensibles a mayúsculas, con un pequeño lenguaje de
-consulta:
+drill-downs de top values. La columna `url` incluye la ruta y los parámetros de
+la petición, con los valores sensibles ocultos. Las URL largas se recortan;
+pulsa `Enter` para inspeccionar la petición completa.
+Usa `param:SubmitCurrency` para buscar ese parámetro en la URL de la petición.
+El texto libre `SubmitCurrency` también puede coincidir en otras partes de la
+línea del log, como el referer.
+
+Insensibles a mayúsculas, con un pequeño lenguaje de consulta:
 
 - texto plano busca en IP, hora, método, ruta, target, estado, bytes, UA, línea cruda
 - términos adyacentes significan `AND`; explícitos `AND`, `OR`, `|`, paréntesis y `!`/`NOT`
