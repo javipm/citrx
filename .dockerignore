@@ -1,0 +1,34 @@
+# VCS / CI
+.git
+.github
+
+# Screenshots (not needed by the image)
+assets
+
+# Dependencies and build artifacts (rebuilt inside the image)
+node_modules
+.pnpm-store
+dist
+coverage
+.vitest
+*.tgz
+
+# Sensitive inputs and local fixtures — never bake into the image
+examples
+*.log
+*.gz
+*.zip
+*.tar.gz
+.citrx
+.env
+.env.*
+
+# Local agent docs, plans, and editor noise
+AGENTS.md
+CLAUDE.md
+PLAN.md
+.agents
+.claude
+.idea
+.vscode
+.DS_Store

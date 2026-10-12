@@ -151,6 +151,35 @@ npm i -g @javipm/citrx
 citrx /var/log/nginx/access.log
 ```
 
+### Docker
+
+Sin Node.js ni `npx` en tu equipo: solo necesitas Docker. Los logs se quedan
+en el equipo y el análisis se ejecuta en un contenedor aislado, como usuario
+sin privilegios.
+
+```bash
+# Construir la imagen
+docker build -t citrx .
+
+# TUI interactiva sobre una carpeta de logs montada (solo lectura)
+docker run --rm -it -v ./logs:/logs:ro citrx /logs
+
+# Un fichero, informe de terminal no interactivo
+docker run --rm -v ./logs:/logs:ro citrx /logs/access.log --no-interactive
+
+# Informe estructurado en un montaje de salida escribible
+docker run --rm -v ./logs:/logs:ro -v ./reports:/reports \
+  citrx /logs/access.log --html --out /reports/citrx.html
+
+# Leer desde stdin
+docker run --rm -i citrx - --no-interactive < access.log
+```
+
+> Monta los logs en solo lectura (`:ro`) siempre que sea posible. `--out`
+> debe apuntar a una ruta escribible dentro del contenedor (montaje `rw`).
+> Los códigos de salida (0/1/2) se propagan a través de `docker run`, así
+> que el control en CI funciona igual.
+
 ### Invocaciones habituales
 
 ```bash
